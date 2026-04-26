@@ -1,0 +1,55 @@
+{
+  "name": "@altude/solana-adapter",
+  "version": "0.1.0",
+  "description": "Bridge between the @altude/vault OWS vault and Gill / @solana/web3.js signer interfaces",
+  "keywords": [
+    "solana",
+    "altude",
+    "gill",
+    "ows",
+    "signer"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@altude/core": "workspace:*",
+    "@altude/vault": "workspace:*",
+    "@noble/curves": "^2.2.0",
+    "gill": "^0.8.0"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": "^1.95.0"
+  },
+  "peerDependenciesOptional": {
+    "@solana/web3.js": true
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
