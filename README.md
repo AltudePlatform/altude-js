@@ -114,6 +114,15 @@ pnpm typecheck
 - Node.js ≥ 18
 - pnpm ≥ 9
 
+## Releases
+
+- CI runs on every PR and push via `.github/workflows/ci.yml`.
+- Publishing is automated by `.github/workflows/release.yml` on every merge to `main`.
+- Configure npm credentials in a repository secret named `NPM_TOKEN` (used as `NODE_AUTH_TOKEN` by the release job).
+- Version bumps are handled with Changesets. Add a changeset in feature PRs (`pnpm changeset`) and the release workflow will:
+  - open/update a release PR with incremented versions and changelogs
+  - publish to npm and create release tags when that release PR is merged to `main`
+
 ## Architecture
 
 Built on:
