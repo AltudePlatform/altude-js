@@ -1,17 +1,20 @@
-name: CI
+name: Release
 
 on:
   push:
-    branches: [main, "copilot/**"]
-  pull_request:
     branches: [main]
 
 jobs:
-  build-test:
-    name: Build & Test
+  release:
+    name: Version & Publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -21,9 +24,13 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Typecheck
         run: pnpm typecheck
@@ -37,23 +44,13 @@ jobs:
           ALTUDE_API_KEY_DEVNET: ${{ secrets.ALTUDE_API_KEY_DEVNET }}
           ALTUDE_SCRYPT_N: '16384'
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
+      - name: Create release PR or publish
+        uses: changesets/action@v1
         with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        run: pnpm lint
+          version: pnpm version-packages
+          publish: pnpm release
+          commit: 'chore(release): version packages'
+          title: 'chore(release): version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
