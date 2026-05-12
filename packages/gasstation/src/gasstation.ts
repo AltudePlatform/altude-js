@@ -12,7 +12,6 @@
 import type { SolanaNetwork } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import type {
-  SendTransactionOptions,
   SendTransactionResponse,
   CreateAccountOptions,
   CreateAccountResponse,

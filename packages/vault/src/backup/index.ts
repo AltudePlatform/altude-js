@@ -27,9 +27,8 @@ export interface RestoreOptions {
  */
 export async function backupVault(vaultPath: string, options: BackupOptions): Promise<void> {
   const zlib = await import('node:zlib')
-  const tar = await importTar()
+  const tar = importTar()
   const fsp = await import('node:fs/promises')
-  const path = await import('node:path')
 
   const { outputPath, backupPassphrase, exclude = ['logs'] } = options
 
@@ -58,7 +57,7 @@ export async function backupVault(vaultPath: string, options: BackupOptions): Pr
 export async function restoreVault(vaultPath: string, options: RestoreOptions): Promise<void> {
   const zlib = await import('node:zlib')
   const fsp = await import('node:fs/promises')
-  const tar = await importTar()
+  const tar = importTar()
 
   const { inputPath, backupPassphrase } = options
 
@@ -84,7 +83,7 @@ export async function restoreVault(vaultPath: string, options: RestoreOptions): 
 // We implement a basic tar creator/extractor inline to avoid adding a
 // dependency. Only regular files are supported (sufficient for the OWS vault).
 
-const importTar = async () => ({
+const importTar = () => ({
   create: createTar,
   extract: extractTar,
 })

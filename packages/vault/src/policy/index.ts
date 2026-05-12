@@ -134,7 +134,7 @@ async function evaluateExecutablePolicy(
 
     child.on('close', (code) => {
       if (code !== 0) {
-        resolve({ allow: false, reason: `Policy executable exited with code ${code}: ${stderr}` })
+        resolve({ allow: false, reason: `Policy executable exited with code ${code?.toString() ?? 'null'}: ${stderr}` })
         return
       }
       try {

@@ -12,6 +12,7 @@
  */
 
 import type { CryptoEnvelope } from '@altude/core'
+import type * as NodeCrypto from 'node:crypto'
 
 // OWS-mandated scrypt parameters (production)
 const SCRYPT_N_PROD = 65536
@@ -36,7 +37,7 @@ export async function encryptWithPassphrase(
   plaintext: Uint8Array,
   passphrase: string,
 ): Promise<CryptoEnvelope> {
-  const crypto = await importNodeCrypto()
+  const crypto = importNodeCrypto()
 
   const salt = crypto.randomBytes(SALT_BYTES)
   const iv = crypto.randomBytes(IV_BYTES)
@@ -71,7 +72,7 @@ export async function decryptWithPassphrase(
   passphrase: string,
 ): Promise<Uint8Array> {
   const { invalidPassphrase } = await import('@altude/core')
-  const crypto = await importNodeCrypto()
+  const crypto = importNodeCrypto()
 
   if (envelope.kdf !== 'scrypt') {
     throw new Error(`Expected scrypt KDF, got ${envelope.kdf}`)
@@ -106,11 +107,11 @@ export async function decryptWithPassphrase(
  *   prk = HKDF-Extract(salt, token)
  *   key = HKDF-Expand(prk, "ows-api-key-v1", 32)
  */
-export async function encryptWithToken(
+export function encryptWithToken(
   plaintext: Uint8Array,
   token: string,
 ): Promise<CryptoEnvelope> {
-  const crypto = await importNodeCrypto()
+  const crypto = importNodeCrypto()
 
   const salt = crypto.randomBytes(SALT_BYTES)
   const iv = crypto.randomBytes(IV_BYTES)
@@ -121,7 +122,7 @@ export async function encryptWithToken(
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(plaintext)), cipher.final()])
   const authTag = cipher.getAuthTag()
 
-  return {
+  return Promise.resolve({
     cipher: 'aes-256-gcm',
     cipherparams: { iv: iv.toString('hex') },
     ciphertext: ciphertext.toString('hex'),
@@ -132,7 +133,7 @@ export async function encryptWithToken(
       salt: salt.toString('hex'),
       info: HKDF_INFO,
     },
-  }
+  })
 }
 
 /**
@@ -143,7 +144,7 @@ export async function decryptWithToken(
   token: string,
 ): Promise<Uint8Array> {
   const { AltudeError } = await import('@altude/core')
-  const crypto = await importNodeCrypto()
+  const crypto = importNodeCrypto()
 
   if (envelope.kdf !== 'hkdf-sha256') {
     throw new Error(`Expected hkdf-sha256 KDF, got ${envelope.kdf}`)
@@ -170,18 +171,18 @@ export async function decryptWithToken(
 // SHA-256 hash (for token_hash field in API key files)
 // ---------------------------------------------------------------------------
 
-export async function sha256Hex(input: string): Promise<string> {
-  const crypto = await importNodeCrypto()
-  return crypto.createHash('sha256').update(input).digest('hex')
+export function sha256Hex(input: string): Promise<string> {
+  const crypto = importNodeCrypto()
+  return Promise.resolve(crypto.createHash('sha256').update(input).digest('hex'))
 }
 
 // ---------------------------------------------------------------------------
 // Secure random helpers
 // ---------------------------------------------------------------------------
 
-export async function randomBytes(n: number): Promise<Uint8Array> {
-  const crypto = await importNodeCrypto()
-  return crypto.randomBytes(n)
+export function randomBytes(n: number): Promise<Uint8Array> {
+  const crypto = importNodeCrypto()
+  return Promise.resolve(crypto.randomBytes(n))
 }
 
 export async function randomHex(n: number): Promise<string> {
@@ -196,7 +197,7 @@ export async function randomHex(n: number): Promise<string> {
 async function deriveKeyScrypt(
   passphrase: string,
   salt: Buffer,
-  crypto: typeof import('node:crypto'),
+  crypto: typeof NodeCrypto,
   n: number = SCRYPT_N,
 ): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
@@ -216,7 +217,7 @@ async function deriveKeyScrypt(
 function deriveKeyHkdf(
   token: string,
   salt: Buffer,
-  crypto: typeof import('node:crypto'),
+  crypto: typeof NodeCrypto,
 ): Buffer {
   // HKDF-SHA256: extract then expand
   const prk = crypto.createHmac('sha256', salt).update(token).digest()
@@ -230,7 +231,7 @@ function deriveKeyHkdf(
   return t1.subarray(0, SCRYPT_DKLEN)
 }
 
-async function importNodeCrypto(): Promise<typeof import('node:crypto')> {
+function importNodeCrypto(): typeof NodeCrypto {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('node:crypto') as typeof import('node:crypto')
+  return require('node:crypto') as typeof NodeCrypto
 }

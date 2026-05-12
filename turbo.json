@@ -12,7 +12,9 @@
       "dependsOn": ["^build"],
       "env": ["ALTUDE_API_KEY", "ALTUDE_API_KEY_DEVNET"]
     },
-    "lint": {},
+    "lint": {
+      "dependsOn": ["^build"]
+    },
     "clean": {
       "cache": false
     }
