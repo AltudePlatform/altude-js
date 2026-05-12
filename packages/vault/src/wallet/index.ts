@@ -75,7 +75,7 @@ async function importWalletMnemonicInternal(
     account_id: `${chainId}:${address}`,
     address,
     chain_id: chainId,
-    derivation_path: vaultIndex === 0 ? SOLANA_DERIVATION_PATH : `m/44'/501'/${vaultIndex}'/0'`,
+    derivation_path: vaultIndex === 0 ? SOLANA_DERIVATION_PATH : `m/44'/501'/${vaultIndex.toString()}'/0'`,
   }
 
   // Encrypt the mnemonic (as UTF-8 bytes)

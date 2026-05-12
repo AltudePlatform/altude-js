@@ -10,7 +10,6 @@
  */
 
 import type { AltudeVault } from '@altude/vault'
-import { ed25519 } from '@noble/curves/ed25519.js'
 
 // Gill's KeyPairSigner type — minimal interface for compatibility
 export interface GillKeyPairSigner {

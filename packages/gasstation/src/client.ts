@@ -153,7 +153,7 @@ export class AltudeHttpClient {
           const text = await response.text()
           throw new AltudeError({
             code: 'RELAY_ERROR',
-            message: `Altude relay returned ${response.status}: ${text}`,
+            message: `Altude relay returned ${response.status.toString()}: ${text}`,
           })
         }
 
@@ -170,7 +170,7 @@ export class AltudeHttpClient {
 
     throw new AltudeError({
       code: 'RELAY_ERROR',
-      message: `Request to ${path} failed after ${retries} attempts`,
+      message: `Request to ${path} failed after ${retries.toString()} attempts`,
       cause: lastError,
     })
   }

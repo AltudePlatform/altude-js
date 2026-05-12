@@ -46,7 +46,7 @@ export async function deriveSolanaKeypair(
   const root = HDKey.fromMasterSeed(seed)
 
   // Solana uses hardened derivation: m/44'/501'/<index>'/0'
-  const path = index === 0 ? SOLANA_DERIVATION_PATH : `m/44'/501'/${index}'/0'`
+  const path = index === 0 ? SOLANA_DERIVATION_PATH : `m/44'/501'/${index.toString()}'/0'`
   const child = root.derive(path)
 
   if (!child.privateKey) {

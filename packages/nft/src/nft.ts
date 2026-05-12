@@ -12,7 +12,7 @@
  * the corresponding feature.
  */
 
-import { AltudeError, ALTUDE_FEE_PAYER } from '@altude/core'
+import { AltudeError } from '@altude/core'
 import type { AltudeHttpClient } from '@altude/gasstation'
 
 // ---------------------------------------------------------------------------
@@ -128,66 +128,66 @@ export function buildNFTMetadata(options: NFTMetadata): NFTMetadata {
  *
  * Requires @metaplex-foundation/mpl-core to be installed.
  */
-export async function createNFTCollection(
+export function createNFTCollection(
   client: AltudeHttpClient,
-  options: CreateCollectionOptions,
+  _options: CreateCollectionOptions,
 ): Promise<CreateCollectionResult> {
   if (client.isMockMode) {
-    return {
+    return Promise.resolve({
       collectionMint: 'MockCollectionMint' + Math.random().toString(36).slice(2, 10),
       signature: 'MockCollectionSig' + Math.random().toString(36).slice(2),
-    }
+    })
   }
 
   // In live mode, delegate to the Altude relay which handles Metaplex Core
   // collection creation with ALTUDE_FEE_PAYER as the fee payer.
   // Use the relay's send endpoint with the serialized transaction.
-  throw new AltudeError({
+  return Promise.reject(new AltudeError({
     code: 'RELAY_ERROR',
     message:
       'createNFTCollection in live mode requires building a Metaplex Core transaction ' +
       'with @metaplex-foundation/mpl-core. Install it and build + sign the transaction, ' +
       'then relay via gasStation.send({ signedTransaction }).',
-  })
+  }))
 }
 
 /**
  * Mint a standard Metaplex Core NFT (gasless).
  */
-export async function mintNFT(
+export function mintNFT(
   client: AltudeHttpClient,
-  options: MintNFTOptions,
+  _options: MintNFTOptions,
 ): Promise<MintNFTResult> {
   if (client.isMockMode) {
-    return {
+    return Promise.resolve({
       asset: 'MockAsset' + Math.random().toString(36).slice(2, 10),
       signature: 'MockMintSig' + Math.random().toString(36).slice(2),
-    }
+    })
   }
-  throw new AltudeError({
+  return Promise.reject(new AltudeError({
     code: 'RELAY_ERROR',
     message: 'mintNFT requires a live Altude API key.',
-  })
+  }))
 }
 
 /**
  * Mint a compressed NFT (cNFT) under a Merkle tree (gasless).
  * Dramatically lower cost per mint vs standard NFTs.
  */
-export async function mintCompressedNFT(
+export function mintCompressedNFT(
   client: AltudeHttpClient,
-  options: MintCompressedNFTOptions,
+  _options: MintCompressedNFTOptions,
 ): Promise<MintNFTResult> {
   if (client.isMockMode) {
-    return {
+    return Promise.resolve({
       asset: 'MockCNFTAsset' + Math.random().toString(36).slice(2, 10),
       signature: 'MockCNFTSig' + Math.random().toString(36).slice(2),
-    }
+    })
   }
-  throw new AltudeError({
+  return Promise.reject(new AltudeError({
     code: 'RELAY_ERROR',
     message: 'mintCompressedNFT requires a live Altude API key.',
-  })
+  }))
 }
 
 /**
@@ -214,7 +214,7 @@ export async function getNFTsByOwner(options: GetNFTsByOwnerOptions): Promise<NF
   if (!response.ok) {
     throw new AltudeError({
       code: 'RPC_ERROR',
-      message: `DAS API returned ${response.status}`,
+      message: `DAS API returned ${response.status.toString()}`,
     })
   }
 

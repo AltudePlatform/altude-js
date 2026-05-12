@@ -28,11 +28,11 @@ describe('wallet lifecycle', () => {
     const wallet = await vault.createWallet({ name: 'test-wallet' })
     expect(wallet.name).toBe('test-wallet')
     expect(wallet.accounts).toHaveLength(1)
-    expect(wallet.accounts[0]!.chainId).toContain('solana')
+    expect(wallet.accounts[0]?.chainId).toContain('solana')
 
     const all = await vault.listWallets()
     expect(all).toHaveLength(1)
-    expect(all[0]!.id).toBe(wallet.id)
+    expect(all[0]?.id).toBe(wallet.id)
   })
 
   it('looks up a wallet by name', async () => {
@@ -63,8 +63,8 @@ describe('wallet lifecycle', () => {
     expect(mnemonic.split(' ')).toHaveLength(12)
 
     const imported = await vault.importWalletMnemonic('reimported', mnemonic, passphrase)
-    expect(imported.accounts[0]!.address).toBe(
-      (await vault.getWallet('export-test')).accounts[0]!.address,
+    expect(imported.accounts[0]?.address).toBe(
+      (await vault.getWallet('export-test')).accounts[0]?.address,
     )
   })
 

@@ -15,6 +15,10 @@
  *   ~/.ows/policies/*.json -rw-r--r-- (644)
  */
 
+import type * as NodeOs from 'node:os'
+import type * as NodePath from 'node:path'
+import type * as NodeFsPromises from 'node:fs/promises'
+
 export interface VaultStorage {
   /** Read a file. Returns null if not found. */
   read(path: string): Promise<string | null>
@@ -44,20 +48,15 @@ export class NodeVaultStorage implements VaultStorage {
   #defaultVaultPath(): string {
     // Use dynamic require-style access to avoid bundler issues
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const os = require('node:os') as typeof import('node:os')
+    const os = require('node:os') as typeof NodeOs
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof import('node:path')
+    const path = require('node:path') as typeof NodePath
     return path.join(os.homedir(), '.ows')
-  }
-
-  #fs() {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('node:fs') as typeof import('node:fs')
   }
 
   #fsp() {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('node:fs/promises') as typeof import('node:fs/promises')
+    return require('node:fs/promises') as typeof NodeFsPromises
   }
 
   async read(filePath: string): Promise<string | null> {
@@ -70,7 +69,8 @@ export class NodeVaultStorage implements VaultStorage {
   }
 
   async write(filePath: string, data: string): Promise<void> {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     const dir = path.dirname(filePath)
     await this.#fsp().mkdir(dir, { recursive: true })
 
@@ -104,7 +104,8 @@ export class NodeVaultStorage implements VaultStorage {
   async checkPermissions(): Promise<void> {
     const { vaultPermissionError } = await import('@altude/core')
     const fsp = this.#fsp()
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
 
     const sensitiveSubdirs = ['wallets', 'keys']
     for (const sub of sensitiveSubdirs) {
@@ -133,7 +134,8 @@ export class NodeVaultStorage implements VaultStorage {
   }
 
   #modeFor(filePath: string): number {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     const rel = filePath.replace(this.vaultPath + path.sep, '')
     if (rel.startsWith('policies')) return 0o644
     return 0o600
@@ -146,32 +148,38 @@ export class NodeVaultStorage implements VaultStorage {
 
   /** Full path helpers used by the vault manager. */
   walletPath(id: string): string {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     return path.join(this.vaultPath, 'wallets', `${id}.json`)
   }
 
   walletsDir(): string {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     return path.join(this.vaultPath, 'wallets')
   }
 
   keyPath(id: string): string {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     return path.join(this.vaultPath, 'keys', `${id}.json`)
   }
 
   keysDir(): string {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     return path.join(this.vaultPath, 'keys')
   }
 
   policyPath(id: string): string {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     return path.join(this.vaultPath, 'policies', `${id}.json`)
   }
 
   auditLogPath(): string {
-    const path = require('node:path') as typeof import('node:path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof NodePath
     return path.join(this.vaultPath, 'logs', 'audit.jsonl')
   }
 }
@@ -204,7 +212,7 @@ export class BrowserVaultStorage implements VaultStorage {
         this.#db = req.result
         resolve(req.result)
       }
-      req.onerror = () => reject(req.error)
+      req.onerror = () => { reject(req.error ?? new Error('IDB open error')) }
     })
   }
 
@@ -222,8 +230,8 @@ export class BrowserVaultStorage implements VaultStorage {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readonly')
       const req = tx.objectStore(store).get(key)
-      req.onsuccess = () => resolve((req.result as string | undefined) ?? null)
-      req.onerror = () => reject(req.error)
+      req.onsuccess = () => { resolve((req.result as string | undefined) ?? null) }
+      req.onerror = () => { reject(req.error ?? new Error('IDB read error')) }
     })
   }
 
@@ -233,8 +241,8 @@ export class BrowserVaultStorage implements VaultStorage {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite')
       tx.objectStore(store).put(data, key)
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
+      tx.oncomplete = () => { resolve() }
+      tx.onerror = () => { reject(tx.error ?? new Error('IDB write error')) }
     })
   }
 
@@ -244,8 +252,8 @@ export class BrowserVaultStorage implements VaultStorage {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite')
       tx.objectStore(store).delete(key)
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
+      tx.oncomplete = () => { resolve() }
+      tx.onerror = () => { reject(tx.error ?? new Error('IDB delete error')) }
     })
   }
 
@@ -255,8 +263,8 @@ export class BrowserVaultStorage implements VaultStorage {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readonly')
       const req = tx.objectStore(store).getAllKeys()
-      req.onsuccess = () => resolve(req.result.map(String))
-      req.onerror = () => reject(req.error)
+      req.onsuccess = () => { resolve(req.result.map(String)) }
+      req.onerror = () => { reject(req.error ?? new Error('IDB list error')) }
     })
   }
 

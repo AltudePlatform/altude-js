@@ -36,7 +36,6 @@ import {
   deleteWallet,
   renameWallet,
   loadWalletFile,
-  decryptSolanaKeypair,
 } from './wallet/index.js'
 import type { CreateApiKeyOptions, CreatedApiKey } from './wallet/apikeys.js'
 import {
