@@ -14,7 +14,7 @@
  * Fee payer: ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71
  */
 
-import { AltudeError, ALTUDE_API_URLS, ALTUDE_FEE_PAYER } from '@altude/core'
+import { AltudeError, ALTUDE_API_URLS, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 
 export { ALTUDE_FEE_PAYER }
@@ -133,6 +133,7 @@ export class AltudeHttpClient {
   readonly network: SolanaNetwork
   #configCache: ConfigResponse | undefined
   #configPromise: Promise<ConfigResponse> | undefined
+  #rpcClient: ReturnType<typeof createAltudeClient> | undefined
 
   constructor(apiKey?: string, baseUrl?: string, network: SolanaNetwork = 'mainnet-beta') {
     this.apiKey = apiKey
@@ -151,12 +152,34 @@ export class AltudeHttpClient {
     if (forceRefresh) {
       this.#configCache = undefined
       this.#configPromise = undefined
+      this.#rpcClient = undefined
     }
     if (this.#configCache) {
       return this.#configCache
     }
     this.#configPromise ??= this.#loadConfig()
     return this.#configPromise
+  }
+
+  /**
+   * Return a Gill-backed Solana RPC client whose URL is resolved from the
+   * Altude relay config (`RpcUrl` field).  Mirrors the Android SDK's
+   * `AltudeGasStation.init()` behaviour where the RPC connection is
+   * initialised from the config API response.
+   *
+   * In mock mode the client falls back to the well-known public endpoint for
+   * the configured network.
+   */
+  async getRpcClient(): Promise<ReturnType<typeof createAltudeClient>> {
+    if (this.isMockMode) {
+      this.#rpcClient ??= createAltudeClient({ network: this.network })
+      return this.#rpcClient
+    }
+    // #loadConfig() sets #rpcClient from config.RpcUrl; just ensure it ran.
+    await this.#ensureConfig()
+    // Fallback should never be reached, but keeps TypeScript happy.
+    this.#rpcClient ??= createAltudeClient({ network: this.network })
+    return this.#rpcClient
   }
 
   async getBlockhash(): Promise<BlockhashResponse> {
@@ -303,6 +326,8 @@ export class AltudeHttpClient {
   async #loadConfig(): Promise<ConfigResponse> {
     const config = await this.#get<ConfigResponse>('/api/transaction/config')
     this.#configCache = config
+    // Initialise the RPC client from the relay-resolved RpcUrl (mirrors Android SDK behaviour).
+    this.#rpcClient = createAltudeClient({ rpcUrl: config.RpcUrl, network: this.network })
     return config
   }
 

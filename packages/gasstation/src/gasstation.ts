@@ -5,11 +5,13 @@
  *
  * Usage:
  *   const gs = new AltudeGasStation({ apiKey: 'your-key', network: 'devnet' })
+ *   const rpc = await gs.getRpcClient()   // Gill client initialised from config RpcUrl
  *   const blockhash = await gs.getBlockhash()
  *   const sig = await gs.send({ to: '...', amount: 1_000_000 })
  */
 
 import type { SolanaNetwork } from '@altude/core'
+import { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import type {
   ConfigResponse,
@@ -71,6 +73,19 @@ export class AltudeGasStation {
   /** Fetch relay configuration resolved at runtime from the Altude API. */
   async getConfig(forceRefresh = false): Promise<ConfigResponse> {
     return this.client.getConfig(forceRefresh)
+  }
+
+  /**
+   * Return a Gill-backed Solana RPC client whose endpoint is resolved from
+   * the Altude relay config (`RpcUrl`).  This mirrors the Android SDK's
+   * `AltudeGasStation.init()` flow where the RPC connection is bootstrapped
+   * from the config API response.
+   *
+   * In mock mode the client uses the well-known public endpoint for the
+   * configured network.
+   */
+  async getRpcClient(): Promise<ReturnType<typeof createAltudeClient>> {
+    return this.client.getRpcClient()
   }
 
   /**

@@ -91,6 +91,13 @@ describe('AltudeHttpClient — mock mode', () => {
     })
     expect(result.signature).toBeTruthy()
   })
+
+  it('getRpcClient returns a Gill SolanaClient in mock mode', async () => {
+    const client = new AltudeHttpClient()
+    const rpc = await client.getRpcClient()
+    expect(rpc).toHaveProperty('rpc')
+    expect(rpc).toHaveProperty('rpcSubscriptions')
+  })
 })
 
 describe('AltudeHttpClient — live mode', () => {
@@ -144,6 +151,41 @@ describe('AltudeHttpClient — live mode', () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.altude.so/api/transaction/config')
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('https://api.altude.so/api/transaction/sendbatch')
   })
+
+  it('getRpcClient returns a client initialised from config RpcUrl', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        RpcUrl: 'https://rpc.altude.so',
+        Token: 'runtime-token',
+        RpcEnvironment: 'devnet',
+        TokenExpiration: '2026-01-01T00:00:00Z',
+      }),
+    )
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    const rpc = await client.getRpcClient()
+    // The RPC client is a Gill SolanaClient — it should expose rpc and rpcSubscriptions.
+    expect(rpc).toHaveProperty('rpc')
+    expect(rpc).toHaveProperty('rpcSubscriptions')
+  })
+
+  it('getRpcClient returns same instance on repeated calls', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        RpcUrl: 'https://rpc.altude.so',
+        Token: 'runtime-token',
+        RpcEnvironment: 'devnet',
+        TokenExpiration: '2026-01-01T00:00:00Z',
+      }),
+    )
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    const first = await client.getRpcClient()
+    const second = await client.getRpcClient()
+    expect(first).toBe(second)
+  })
 })
 
 describe('AltudeGasStation facade', () => {
@@ -178,6 +220,20 @@ describe('AltudeGasStation facade', () => {
     const gs = new AltudeGasStation()
     const result = await gs.getConfig()
     expect(result.FeePayer).toBeTruthy()
+  })
+
+  it('getRpcClient returns a Gill SolanaClient in mock mode', async () => {
+    const gs = new AltudeGasStation()
+    const rpc = await gs.getRpcClient()
+    expect(rpc).toHaveProperty('rpc')
+    expect(rpc).toHaveProperty('rpcSubscriptions')
+  })
+
+  it('getRpcClient returns same instance on repeated calls in mock mode', async () => {
+    const gs = new AltudeGasStation()
+    const first = await gs.getRpcClient()
+    const second = await gs.getRpcClient()
+    expect(first).toBe(second)
   })
 
   it('exposes additional missing endpoints through the facade', async () => {
