@@ -14,7 +14,7 @@ import type { SolanaNetwork } from '@altude/core'
 import type { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import { createTransaction, transactionToBase64WithSigners } from 'gill'
-import type { Address, IInstruction, TransactionSigner } from 'gill'
+import type { Address, Instruction, TransactionSigner } from 'gill'
 import { buildTransferTokensTransaction } from 'gill/programs/token'
 import { getTransferSolInstruction } from 'gill/programs'
 import type {
@@ -63,13 +63,12 @@ export interface GaslessTransactionSigner {
 }
 
 export interface SerializeInstructionPayloadOptions {
-  latestBlockhash?: string
   feePayer?: string
 }
 
 export class AltudeGasStation {
   readonly client: AltudeHttpClient
-  #instructions: IInstruction[] = []
+  #instructions: Instruction[] = []
 
   constructor(config: AltudeGasStationConfig = {}) {
     const { apiKey, network = 'mainnet-beta', baseUrl } = config
@@ -117,17 +116,17 @@ export class AltudeGasStation {
   }
 
   /** Replace the managed transaction instruction list. */
-  setInstructions(instructions: readonly IInstruction[]): void {
+  setInstructions(instructions: readonly Instruction[]): void {
     this.#instructions = [...instructions]
   }
 
   /** Append one instruction to the managed transaction instruction list. */
-  addInstruction(instruction: IInstruction): void {
+  addInstruction(instruction: Instruction): void {
     this.#instructions.push(instruction)
   }
 
   /** Remove one instruction from the managed transaction instruction list. */
-  removeInstruction(index: number): IInstruction | undefined {
+  removeInstruction(index: number): Instruction | undefined {
     if (index < 0 || index >= this.#instructions.length) {
       return undefined
     }
@@ -140,7 +139,7 @@ export class AltudeGasStation {
   }
 
   /** Read back the current managed transaction instructions. */
-  getInstructions(): readonly IInstruction[] {
+  getInstructions(): readonly Instruction[] {
     return this.#instructions
   }
 
@@ -155,8 +154,7 @@ export class AltudeGasStation {
 
     const config = await this.getConfig()
     const rpc = await this.getRpcClient()
-    const latestBlockhash =
-      options.latestBlockhash ?? (await rpc.rpc.getLatestBlockhash().send()).value.blockhash
+    const latestBlockhash = (await rpc.rpc.getLatestBlockhash().send()).value
     const feePayer = (options.feePayer ?? config.FeePayer) as unknown as Address
 
     const transaction = createTransaction({

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AltudeGasStation } from '../src/gasstation.js'
 import { AltudeHttpClient } from '../src/client.js'
-import type { IInstruction } from 'gill'
+import type { Instruction } from 'gill'
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -272,12 +272,12 @@ describe('AltudeGasStation facade', () => {
       programAddress: '11111111111111111111111111111111',
       accounts: [],
       data: new Uint8Array(),
-    } as unknown as IInstruction
+    } as unknown as Instruction
     const secondInstruction = {
       programAddress: 'ComputeBudget111111111111111111111111111111',
       accounts: [],
       data: new Uint8Array(),
-    } as unknown as IInstruction
+    } as unknown as Instruction
 
     gs.setInstructions([firstInstruction])
     gs.addInstruction(secondInstruction)
