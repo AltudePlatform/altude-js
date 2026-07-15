@@ -81,7 +81,9 @@ export interface CreateAccountOptions {
 }
 
 export interface CreateAccountResponse {
-  signature: string
+  Signature: string
+  Status?: string
+  Message?: string
 }
 
 export interface CloseAccountOptions {

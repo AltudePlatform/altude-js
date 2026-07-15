@@ -37,19 +37,19 @@ describe('AltudeHttpClient — mock mode', () => {
   it('sendTransaction returns a mock signature', async () => {
     const client = new AltudeHttpClient()
     const result = await client.sendTransaction({ transaction: 'base64encodedtx==' })
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('createAccount returns a mock signature', async () => {
     const client = new AltudeHttpClient()
     const result = await client.createAccount({ signedTransaction: 'base64encodedtx==' })
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('sendBatchTransaction returns a mock signature', async () => {
     const client = new AltudeHttpClient()
     const result = await client.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('sendBatch aliases sendBatchTransaction in mock mode', async () => {
@@ -58,14 +58,14 @@ describe('AltudeHttpClient — mock mode', () => {
 
     const result = await client.sendBatch({ signedTransaction: 'base64encodedtx==' })
 
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
     expect(sendBatchTransactionSpy).toHaveBeenCalledWith({ signedTransaction: 'base64encodedtx==' })
   })
 
   it('closeAccount returns a mock signature', async () => {
     const client = new AltudeHttpClient()
     const result = await client.closeAccount({ signedTransaction: 'base64encodedtx==' })
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('getBalance returns mock data', async () => {
@@ -100,7 +100,7 @@ describe('AltudeHttpClient — mock mode', () => {
       amount: 1_000_000,
       userPublicKey: '11111111111111111111111111111111',
     })
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('getRpcClient returns a Gill SolanaClient in mock mode', async () => {
@@ -152,12 +152,12 @@ describe('AltudeHttpClient — live mode', () => {
           TokenExpiration: '2026-01-01T00:00:00Z',
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ signature: 'LiveBatchSig' }))
+      .mockResolvedValueOnce(jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }))
 
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
     const result = await client.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
 
-    expect(result.signature).toBe('LiveBatchSig')
+    expect(result.Signature).toBe('LiveBatchSig')
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.altude.so/api/transaction/config')
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('https://api.altude.so/api/transaction/sendbatch')
@@ -175,12 +175,12 @@ describe('AltudeHttpClient — live mode', () => {
           TokenExpiration: '2026-01-01T00:00:00Z',
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ signature: 'LiveBatchSig' }))
+      .mockResolvedValueOnce(jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }))
 
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
     const result = await client.sendBatch({ signedTransaction: 'base64encodedtx==' })
 
-    expect(result.signature).toBe('LiveBatchSig')
+    expect(result.Signature).toBe('LiveBatchSig')
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('https://api.altude.so/api/transaction/sendbatch')
   })
 
@@ -217,6 +217,49 @@ describe('AltudeHttpClient — live mode', () => {
     const first = await client.getRpcClient()
     const second = await client.getRpcClient()
     expect(first).toBe(second)
+  })
+
+  it('sendTransaction sends { SignedTransaction } body matching Android SDK', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+          RpcUrl: 'https://rpc.altude.so',
+          Token: 'runtime-token',
+          RpcEnvironment: 'devnet',
+          TokenExpiration: '2026-01-01T00:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ Signature: 'TxSig123', Status: 'Success', Message: '' }))
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    const result = await client.sendTransaction({ transaction: 'base64tx==' })
+
+    expect(result.Signature).toBe('TxSig123')
+    const sentBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string) as Record<string, unknown>
+    expect(sentBody).toEqual({ SignedTransaction: 'base64tx==' })
+  })
+
+  it('getBalance sends { accountAddress, mintAddress } body matching Android SDK', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+          RpcUrl: 'https://rpc.altude.so',
+          Token: 'runtime-token',
+          RpcEnvironment: 'devnet',
+          TokenExpiration: '2026-01-01T00:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ address: 'wallet123', uiAmount: 1.0 }))
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    await client.getBalance({ address: 'wallet123', mint: 'mint456' })
+
+    const sentBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string) as Record<string, unknown>
+    expect(sentBody).toEqual({ accountAddress: 'wallet123', mintAddress: 'mint456' })
   })
 })
 
@@ -280,8 +323,8 @@ describe('AltudeGasStation facade', () => {
       walletAddress: '11111111111111111111111111111111',
     })
 
-    expect(batchResult.signature).toBeTruthy()
-    expect(batchAliasResult.signature).toBeTruthy()
+    expect(batchResult.Signature).toBeTruthy()
+    expect(batchAliasResult.Signature).toBeTruthy()
     expect(accountInfo.accountAddress).toBe('11111111111111111111111111111111')
     expect(history.page).toBe(1)
   })
@@ -360,7 +403,7 @@ describe('AltudeGasStation facade', () => {
 
     const result = await gs.sendBatch({ signedTransaction: 'serialized-payload' })
 
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
     expect(sendBatchTransactionSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
   })
 
@@ -401,7 +444,7 @@ describe('AltudeGasStation facade', () => {
     const callArg = createAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
     expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('closeAccount builds a transaction and relays it (feePayer as close authority)', async () => {
@@ -432,7 +475,7 @@ describe('AltudeGasStation facade', () => {
     const callArg = closeAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
     expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 
   it('closeAccount builds a transaction and relays it (user as close authority)', async () => {
@@ -470,6 +513,6 @@ describe('AltudeGasStation facade', () => {
     expect(closeAccountSpy).toHaveBeenCalledOnce()
     const callArg = closeAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
-    expect(result.signature).toBeTruthy()
+    expect(result.Signature).toBeTruthy()
   })
 })

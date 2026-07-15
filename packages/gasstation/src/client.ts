@@ -38,11 +38,15 @@ export interface ConfigResponse {
 export interface SendTransactionOptions {
   /** Base64-encoded signed transaction */
   transaction: string
+  /** Commitment level — kept for forward compatibility; not sent to the relay */
   commitment?: 'confirmed' | 'finalized'
 }
 
+/** Mirrors Android SDK `TransactionResponse` — all fields are PascalCase as returned by the relay. */
 export interface SendTransactionResponse {
-  signature: string
+  Signature: string
+  Status?: string
+  Message?: string
 }
 
 export interface BatchTransactionOptions {
@@ -55,8 +59,11 @@ export interface CreateAccountOptions {
   signedTransaction: string
 }
 
+/** Mirrors Android SDK `TransactionResponse` — all fields are PascalCase as returned by the relay. */
 export interface CreateAccountResponse {
-  signature: string
+  Signature: string
+  Status?: string
+  Message?: string
 }
 
 export interface CloseAccountOptions {
@@ -114,8 +121,11 @@ export interface SwapOptions {
   slippageBps?: number
 }
 
+/** Mirrors Android SDK `TransactionResponse` — all fields are PascalCase as returned by the relay. */
 export interface SwapResponse {
-  signature: string
+  Signature: string
+  Status?: string
+  Message?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -188,15 +198,17 @@ export class AltudeHttpClient {
 
   async sendTransaction(options: SendTransactionOptions): Promise<SendTransactionResponse> {
     if (this.isMockMode) {
-      return { signature: 'MockSignature' + Math.random().toString(36).slice(2) }
+      return { Signature: 'MockSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    return this.#post<SendTransactionResponse>('/api/Transaction/send', options)
+    return this.#post<SendTransactionResponse>('/api/Transaction/send', {
+      SignedTransaction: options.transaction,
+    })
   }
 
   async sendBatchTransaction(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
     if (this.isMockMode) {
-      return { signature: 'MockBatchSignature' + Math.random().toString(36).slice(2) }
+      return { Signature: 'MockBatchSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
     return this.#post<SendTransactionResponse>('/api/transaction/sendbatch', {
@@ -210,7 +222,7 @@ export class AltudeHttpClient {
 
   async createAccount(options: CreateAccountOptions): Promise<CreateAccountResponse> {
     if (this.isMockMode) {
-      return { signature: 'MockAccountSig' + Math.random().toString(36).slice(2) }
+      return { Signature: 'MockAccountSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
     return this.#post<CreateAccountResponse>('/api/Account/create', {
@@ -220,7 +232,7 @@ export class AltudeHttpClient {
 
   async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
     if (this.isMockMode) {
-      return { signature: 'MockCloseAccountSig' + Math.random().toString(36).slice(2) }
+      return { Signature: 'MockCloseAccountSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
     return this.#post<SendTransactionResponse>('/api/account/close', {
@@ -233,7 +245,10 @@ export class AltudeHttpClient {
       return { address: options.address, lamports: 1_000_000_000, uiAmount: 1.0 }
     }
     await this.#ensureConfig()
-    return this.#post<BalanceResponse>('/api/Account/balance', options)
+    return this.#post<BalanceResponse>('/api/Account/balance', {
+      accountAddress: options.address,
+      mintAddress: options.mint ?? '',
+    })
   }
 
   async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
@@ -259,7 +274,7 @@ export class AltudeHttpClient {
 
   async swap(options: SwapOptions): Promise<SwapResponse> {
     if (this.isMockMode) {
-      return { signature: 'MockSwapSig' + Math.random().toString(36).slice(2) }
+      return { Signature: 'MockSwapSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
     return this.#post<SwapResponse>('/api/Transaction/swap', options)
