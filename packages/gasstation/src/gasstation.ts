@@ -325,6 +325,11 @@ export class AltudeGasStation {
     return this.client.sendBatchTransaction(options)
   }
 
+  /** Relay a batch transaction payload. */
+  async sendBatch(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
+    return this.sendBatchTransaction(options)
+  }
+
   /**
    * Close a token account and reclaim its rent lamports.
    *

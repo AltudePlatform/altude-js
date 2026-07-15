@@ -204,6 +204,10 @@ export class AltudeHttpClient {
     })
   }
 
+  async sendBatch(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
+    return this.sendBatchTransaction(options)
+  }
+
   async createAccount(options: CreateAccountOptions): Promise<CreateAccountResponse> {
     if (this.isMockMode) {
       return { signature: 'MockAccountSig' + Math.random().toString(36).slice(2) }

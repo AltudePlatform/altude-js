@@ -52,6 +52,16 @@ describe('AltudeHttpClient — mock mode', () => {
     expect(result.signature).toBeTruthy()
   })
 
+  it('sendBatch aliases sendBatchTransaction in mock mode', async () => {
+    const client = new AltudeHttpClient()
+    const sendBatchTransactionSpy = vi.spyOn(client, 'sendBatchTransaction')
+
+    const result = await client.sendBatch({ signedTransaction: 'base64encodedtx==' })
+
+    expect(result.signature).toBeTruthy()
+    expect(sendBatchTransactionSpy).toHaveBeenCalledWith({ signedTransaction: 'base64encodedtx==' })
+  })
+
   it('closeAccount returns a mock signature', async () => {
     const client = new AltudeHttpClient()
     const result = await client.closeAccount({ signedTransaction: 'base64encodedtx==' })
@@ -153,6 +163,27 @@ describe('AltudeHttpClient — live mode', () => {
     expect(fetchSpy.mock.calls[1]?.[0]).toBe('https://api.altude.so/api/transaction/sendbatch')
   })
 
+  it('sendBatch aliases sendBatchTransaction in live mode', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+          RpcUrl: 'https://rpc.altude.so',
+          Token: 'runtime-token',
+          RpcEnvironment: 'devnet',
+          TokenExpiration: '2026-01-01T00:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ signature: 'LiveBatchSig' }))
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    const result = await client.sendBatch({ signedTransaction: 'base64encodedtx==' })
+
+    expect(result.signature).toBe('LiveBatchSig')
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('https://api.altude.so/api/transaction/sendbatch')
+  })
+
   it('getRpcClient returns a client initialised from config RpcUrl', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       jsonResponse({
@@ -241,6 +272,7 @@ describe('AltudeGasStation facade', () => {
     const gs = new AltudeGasStation()
 
     const batchResult = await gs.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
+    const batchAliasResult = await gs.sendBatch({ signedTransaction: 'base64encodedtx==' })
     const accountInfo = await gs.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
     const history = await gs.getHistory({
       page: 1,
@@ -249,6 +281,7 @@ describe('AltudeGasStation facade', () => {
     })
 
     expect(batchResult.signature).toBeTruthy()
+    expect(batchAliasResult.signature).toBeTruthy()
     expect(accountInfo.accountAddress).toBe('11111111111111111111111111111111')
     expect(history.page).toBe(1)
   })
@@ -319,6 +352,16 @@ describe('AltudeGasStation facade', () => {
     await gs.sendSerializedInstructionPayload('serialized-payload')
 
     expect(sendBatchSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
+  })
+
+  it('sendBatch aliases sendBatchTransaction through the facade', async () => {
+    const gs = new AltudeGasStation()
+    const sendBatchTransactionSpy = vi.spyOn(gs, 'sendBatchTransaction')
+
+    const result = await gs.sendBatch({ signedTransaction: 'serialized-payload' })
+
+    expect(result.signature).toBeTruthy()
+    expect(sendBatchTransactionSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
   })
 
   it('createAccount builds a transaction and relays it (mock mode)', async () => {
