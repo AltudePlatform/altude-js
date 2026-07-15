@@ -13,6 +13,10 @@
 import type { SolanaNetwork } from '@altude/core'
 import { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
+import { createTransaction, transactionToBase64WithSigners } from 'gill'
+import type { Address, TransactionSigner } from 'gill'
+import { buildTransferTokensTransaction } from 'gill/programs/token'
+import { getTransferSolInstruction } from 'gill/programs'
 import type {
   ConfigResponse,
   SendTransactionResponse,
@@ -46,8 +50,16 @@ export interface SendOptions {
   token?: string
   /** Transaction commitment level */
   commitment?: 'confirmed' | 'finalized'
+  /** Signer used to build and partially sign the transaction before relay. */
+  sourceSigner?: GaslessTransactionSigner
   /** Base64-encoded pre-built signed transaction (optional) */
   signedTransaction?: string
+}
+
+export interface GaslessTransactionSigner {
+  address: string
+  signTransactionMessage(txBytes: Uint8Array): Promise<Uint8Array>
+  signMessage(message: Uint8Array): Promise<Uint8Array>
 }
 
 export class AltudeGasStation {
@@ -91,6 +103,8 @@ export class AltudeGasStation {
   /**
    * Relay a gasless SPL token or SOL transfer.
    * If `options.signedTransaction` is provided it is forwarded directly.
+   * Otherwise a source signer is required so the SDK can build and partially
+   * sign a transaction before handing it to the relay.
    */
   async send(options: SendOptions): Promise<SendTransactionResponse> {
     if (options.signedTransaction) {
@@ -99,13 +113,50 @@ export class AltudeGasStation {
         ...(options.commitment !== undefined && { commitment: options.commitment }),
       })
     }
-    // Placeholder — caller is responsible for building + signing the transaction
-    // and passing it as signedTransaction. This branch exists for future
-    // built-in transaction construction using Gill.
-    throw new Error(
-      'send() requires a pre-built signedTransaction (base64). ' +
-        'Build the transaction with @altude/solana-adapter and pass it here.',
-    )
+
+    if (!options.sourceSigner) {
+      throw new Error(
+        'send() requires either a pre-built signedTransaction or a sourceSigner so the SDK can build one.',
+      )
+    }
+
+    const config = await this.getConfig()
+    const rpc = await this.getRpcClient()
+    const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
+    const feePayer = config.FeePayer as unknown as Address
+    const sourceSigner = options.sourceSigner as unknown as TransactionSigner
+    const destination = options.to as unknown as Address
+
+    let signedTransaction: string
+    if (options.token?.trim()) {
+      const transaction = await buildTransferTokensTransaction({
+        feePayer,
+        latestBlockhash,
+        mint: options.token.trim() as unknown as Address,
+        authority: sourceSigner,
+        amount: options.amount,
+        destination,
+      })
+      signedTransaction = await transactionToBase64WithSigners(transaction)
+    } else {
+      const instruction = getTransferSolInstruction({
+        source: sourceSigner,
+        destination,
+        amount: BigInt(options.amount),
+      })
+      const transaction = createTransaction({
+        version: 'legacy',
+        feePayer,
+        instructions: [instruction],
+        latestBlockhash,
+      })
+      signedTransaction = await transactionToBase64WithSigners(transaction)
+    }
+
+    return this.client.sendTransaction({
+      transaction: signedTransaction,
+      ...(options.commitment !== undefined && { commitment: options.commitment }),
+    })
   }
 
   /** Create a sponsored Solana account (Altude pays rent). */
