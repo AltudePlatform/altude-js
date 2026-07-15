@@ -12,11 +12,18 @@
 import type { SolanaNetwork } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import type {
+  ConfigResponse,
   SendTransactionResponse,
+  BatchTransactionOptions,
   CreateAccountOptions,
   CreateAccountResponse,
+  CloseAccountOptions,
   GetBalanceOptions,
   BalanceResponse,
+  GetAccountInfoOptions,
+  GetAccountInfoResponse,
+  GetHistoryOptions,
+  GetHistoryResponse,
   SwapOptions,
   SwapResponse,
   BlockhashResponse,
@@ -61,6 +68,11 @@ export class AltudeGasStation {
     return this.client.getBlockhash()
   }
 
+  /** Fetch relay configuration resolved at runtime from the Altude API. */
+  async getConfig(forceRefresh = false): Promise<ConfigResponse> {
+    return this.client.getConfig(forceRefresh)
+  }
+
   /**
    * Relay a gasless SPL token or SOL transfer.
    * If `options.signedTransaction` is provided it is forwarded directly.
@@ -86,6 +98,16 @@ export class AltudeGasStation {
     return this.client.createAccount(options)
   }
 
+  /** Relay a batch transaction payload. */
+  async sendBatchTransaction(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
+    return this.client.sendBatchTransaction(options)
+  }
+
+  /** Close an account using a signed transaction payload. */
+  async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
+    return this.client.closeAccount(options)
+  }
+
   /**
    * Gasless token swap via Jupiter aggregator.
    * The relay builds, signs (fee payer), and submits the swap transaction.
@@ -97,5 +119,15 @@ export class AltudeGasStation {
   /** Fetch SOL or SPL token balance for an address. */
   async getBalance(options: GetBalanceOptions): Promise<BalanceResponse> {
     return this.client.getBalance(options)
+  }
+
+  /** Fetch on-chain account info for an address. */
+  async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
+    return this.client.getAccountInfo(options)
+  }
+
+  /** Fetch paginated account history for a wallet address. */
+  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+    return this.client.getHistory(options)
   }
 }

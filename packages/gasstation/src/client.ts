@@ -2,9 +2,14 @@
  * Altude HTTP client — typed fetch wrapper for the Altude relay API.
  *
  * Endpoints surfaced by the altude-dynamic-gas-station-demo:
+ *   GET  /api/transaction/config     → relay runtime config
  *   POST /api/Transaction/blockhash  → { Blockhash: string }
  *   POST /api/Transaction/send       → relay a signed transaction
+ *   POST /api/transaction/sendbatch  → relay a batch transaction
  *   POST /api/Account/create         → sponsored account creation
+ *   POST /api/account/close          → close an account
+ *   POST /api/account/getaccountinfo → fetch account info
+ *   POST /api/account/gethistory     → fetch account history
  *
  * Fee payer: ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71
  */
@@ -22,6 +27,14 @@ export interface BlockhashResponse {
   Blockhash: string
 }
 
+export interface ConfigResponse {
+  FeePayer: string
+  RpcUrl: string
+  Token: string
+  RpcEnvironment: string
+  TokenExpiration: string | null
+}
+
 export interface SendTransactionOptions {
   /** Base64-encoded signed transaction */
   transaction: string
@@ -30,6 +43,11 @@ export interface SendTransactionOptions {
 
 export interface SendTransactionResponse {
   signature: string
+}
+
+export interface BatchTransactionOptions {
+  /** Base64-encoded signed transaction batch */
+  signedTransaction: string
 }
 
 export interface CreateAccountOptions {
@@ -45,6 +63,11 @@ export interface CreateAccountResponse {
   signature: string
 }
 
+export interface CloseAccountOptions {
+  /** Base64-encoded signed transaction */
+  signedTransaction: string
+}
+
 export interface GetBalanceOptions {
   /** Wallet address (base58) */
   address: string
@@ -58,6 +81,28 @@ export interface BalanceResponse {
   amount?: string
   decimals?: number
   uiAmount?: number
+}
+
+export interface GetAccountInfoOptions {
+  /** Wallet or account address (base58) */
+  accountAddress: string
+}
+
+export interface GetAccountInfoResponse {
+  [key: string]: unknown
+}
+
+export interface GetHistoryOptions {
+  /** Page number */
+  page: string | number
+  /** Page size */
+  pageSize: string | number
+  /** Wallet address (base58) */
+  walletAddress: string
+}
+
+export interface GetHistoryResponse {
+  [key: string]: unknown
 }
 
 export interface SwapOptions {
@@ -85,17 +130,40 @@ export class AltudeHttpClient {
   readonly apiKey: string | undefined
   readonly baseUrl: string
   readonly isMockMode: boolean
+  readonly network: SolanaNetwork
+  #configCache: ConfigResponse | undefined
+  #configPromise: Promise<ConfigResponse> | undefined
 
   constructor(apiKey?: string, baseUrl?: string, network: SolanaNetwork = 'mainnet-beta') {
     this.apiKey = apiKey
+    this.network = network
     this.baseUrl = baseUrl ?? ALTUDE_API_URLS[network === 'mainnet-beta' ? 'mainnet' : 'devnet']
     this.isMockMode = !apiKey
+    if (!this.isMockMode) {
+      this.#configPromise = this.#loadConfig()
+    }
+  }
+
+  async getConfig(forceRefresh = false): Promise<ConfigResponse> {
+    if (this.isMockMode) {
+      return this.#getMockConfig()
+    }
+    if (forceRefresh) {
+      this.#configCache = undefined
+      this.#configPromise = undefined
+    }
+    if (this.#configCache) {
+      return this.#configCache
+    }
+    this.#configPromise ??= this.#loadConfig()
+    return this.#configPromise
   }
 
   async getBlockhash(): Promise<BlockhashResponse> {
     if (this.isMockMode) {
       return { Blockhash: 'MockBlockhash11111111111111111111111111111111' }
     }
+    await this.#ensureConfig()
     return this.#post<BlockhashResponse>('/api/Transaction/blockhash', {})
   }
 
@@ -103,27 +171,72 @@ export class AltudeHttpClient {
     if (this.isMockMode) {
       return { signature: 'MockSignature' + Math.random().toString(36).slice(2) }
     }
+    await this.#ensureConfig()
     return this.#post<SendTransactionResponse>('/api/Transaction/send', options)
+  }
+
+  async sendBatchTransaction(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
+    if (this.isMockMode) {
+      return { signature: 'MockBatchSignature' + Math.random().toString(36).slice(2) }
+    }
+    await this.#ensureConfig()
+    return this.#post<SendTransactionResponse>('/api/transaction/sendbatch', {
+      SignedTransaction: options.signedTransaction,
+    })
   }
 
   async createAccount(options: CreateAccountOptions): Promise<CreateAccountResponse> {
     if (this.isMockMode) {
       return { signature: 'MockAccountSig' + Math.random().toString(36).slice(2) }
     }
+    await this.#ensureConfig()
     return this.#post<CreateAccountResponse>('/api/Account/create', options)
+  }
+
+  async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
+    if (this.isMockMode) {
+      return { signature: 'MockCloseAccountSig' + Math.random().toString(36).slice(2) }
+    }
+    await this.#ensureConfig()
+    return this.#post<SendTransactionResponse>('/api/account/close', {
+      SignedTransaction: options.signedTransaction,
+    })
   }
 
   async getBalance(options: GetBalanceOptions): Promise<BalanceResponse> {
     if (this.isMockMode) {
       return { address: options.address, lamports: 1_000_000_000, uiAmount: 1.0 }
     }
+    await this.#ensureConfig()
     return this.#post<BalanceResponse>('/api/Account/balance', options)
+  }
+
+  async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
+    if (this.isMockMode) {
+      return { accountAddress: options.accountAddress, lamports: 0, executable: false }
+    }
+    await this.#ensureConfig()
+    return this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', options)
+  }
+
+  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+    if (this.isMockMode) {
+      return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: options.walletAddress }
+    }
+    await this.#ensureConfig()
+    const params = new URLSearchParams({
+      Page: options.page.toString(),
+      PageSize: options.pageSize.toString(),
+      walletAddress: options.walletAddress,
+    })
+    return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
   }
 
   async swap(options: SwapOptions): Promise<SwapResponse> {
     if (this.isMockMode) {
       return { signature: 'MockSwapSig' + Math.random().toString(36).slice(2) }
     }
+    await this.#ensureConfig()
     return this.#post<SwapResponse>('/api/Transaction/swap', options)
   }
 
@@ -131,7 +244,15 @@ export class AltudeHttpClient {
   // Internal fetch with retry and error normalization
   // ---------------------------------------------------------------------------
 
-  async #post<T>(path: string, body: unknown, retries = 3): Promise<T> {
+  async #post<T>(path: string, body?: unknown, retries = 3): Promise<T> {
+    return this.#request<T>('POST', path, body, retries)
+  }
+
+  async #get<T>(path: string, retries = 3): Promise<T> {
+    return this.#request<T>('GET', path, undefined, retries)
+  }
+
+  async #request<T>(method: 'GET' | 'POST', path: string, body?: unknown, retries = 3): Promise<T> {
     const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -144,9 +265,9 @@ export class AltudeHttpClient {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
         const response = await fetch(url, {
-          method: 'POST',
+          method,
           headers,
-          body: JSON.stringify(body),
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         })
 
         if (!response.ok) {
@@ -173,6 +294,26 @@ export class AltudeHttpClient {
       message: `Request to ${path} failed after ${retries.toString()} attempts`,
       cause: lastError,
     })
+  }
+
+  async #ensureConfig(): Promise<void> {
+    await this.getConfig()
+  }
+
+  async #loadConfig(): Promise<ConfigResponse> {
+    const config = await this.#get<ConfigResponse>('/api/transaction/config')
+    this.#configCache = config
+    return config
+  }
+
+  #getMockConfig(): ConfigResponse {
+    return {
+      FeePayer: ALTUDE_FEE_PAYER,
+      RpcUrl: this.baseUrl,
+      Token: '',
+      RpcEnvironment: this.network,
+      TokenExpiration: null,
+    }
   }
 }
 

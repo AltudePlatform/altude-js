@@ -1,11 +1,29 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AltudeGasStation } from '../src/gasstation.js'
 import { AltudeHttpClient } from '../src/client.js'
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('AltudeHttpClient — mock mode', () => {
   it('operates in mock mode when no API key is given', () => {
     const client = new AltudeHttpClient()
     expect(client.isMockMode).toBe(true)
+  })
+
+  it('getConfig returns mock relay config', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.getConfig()
+    expect(result.FeePayer).toBeTruthy()
+    expect(result.RpcEnvironment).toBe('mainnet-beta')
   })
 
   it('getBlockhash returns a mock blockhash', async () => {
@@ -27,11 +45,40 @@ describe('AltudeHttpClient — mock mode', () => {
     expect(result.signature).toBeTruthy()
   })
 
+  it('sendBatchTransaction returns a mock signature', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
+    expect(result.signature).toBeTruthy()
+  })
+
+  it('closeAccount returns a mock signature', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.closeAccount({ signedTransaction: 'base64encodedtx==' })
+    expect(result.signature).toBeTruthy()
+  })
+
   it('getBalance returns mock data', async () => {
     const client = new AltudeHttpClient()
     const result = await client.getBalance({ address: '11111111111111111111111111111111' })
     expect(result.address).toBe('11111111111111111111111111111111')
     expect(result.lamports).toBeGreaterThan(0)
+  })
+
+  it('getAccountInfo returns mock data', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
+    expect(result.accountAddress).toBe('11111111111111111111111111111111')
+  })
+
+  it('getHistory returns mock data', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.getHistory({
+      page: 1,
+      pageSize: 10,
+      walletAddress: '11111111111111111111111111111111',
+    })
+    expect(result.page).toBe(1)
+    expect(result.pageSize).toBe(10)
   })
 
   it('swap returns a mock signature', async () => {
@@ -43,6 +90,59 @@ describe('AltudeHttpClient — mock mode', () => {
       userPublicKey: '11111111111111111111111111111111',
     })
     expect(result.signature).toBeTruthy()
+  })
+})
+
+describe('AltudeHttpClient — live mode', () => {
+  it('prefetches and caches runtime config', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        RpcUrl: 'https://rpc.altude.so',
+        Token: 'runtime-token',
+        RpcEnvironment: 'devnet',
+        TokenExpiration: '2026-01-01T00:00:00Z',
+      }),
+    )
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    const first = await client.getConfig()
+    const second = await client.getConfig()
+    const requestInit = fetchSpy.mock.calls[0]?.[1]
+
+    expect(first).toEqual(second)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.altude.so/api/transaction/config')
+    expect(requestInit).toMatchObject({
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': 'test-key',
+      },
+    })
+  })
+
+  it('loads runtime config before additional live requests', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+          RpcUrl: 'https://rpc.altude.so',
+          Token: 'runtime-token',
+          RpcEnvironment: 'devnet',
+          TokenExpiration: '2026-01-01T00:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ signature: 'LiveBatchSig' }))
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    const result = await client.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
+
+    expect(result.signature).toBe('LiveBatchSig')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.altude.so/api/transaction/config')
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('https://api.altude.so/api/transaction/sendbatch')
   })
 })
 
@@ -72,5 +172,29 @@ describe('AltudeGasStation facade', () => {
     const gs = new AltudeGasStation()
     const result = await gs.getBalance({ address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71' })
     expect(result.address).toBeTruthy()
+  })
+
+  it('exposes getConfig through the facade', async () => {
+    const gs = new AltudeGasStation()
+    const result = await gs.getConfig()
+    expect(result.FeePayer).toBeTruthy()
+  })
+
+  it('exposes additional missing endpoints through the facade', async () => {
+    const gs = new AltudeGasStation()
+
+    const batchResult = await gs.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
+    const closeResult = await gs.closeAccount({ signedTransaction: 'base64encodedtx==' })
+    const accountInfo = await gs.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
+    const history = await gs.getHistory({
+      page: 1,
+      pageSize: 10,
+      walletAddress: '11111111111111111111111111111111',
+    })
+
+    expect(batchResult.signature).toBeTruthy()
+    expect(closeResult.signature).toBeTruthy()
+    expect(accountInfo.accountAddress).toBe('11111111111111111111111111111111')
+    expect(history.page).toBe(1)
   })
 })
