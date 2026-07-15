@@ -13,17 +13,15 @@
 import type { SolanaNetwork } from '@altude/core'
 import type { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
-import { createTransaction, transactionToBase64WithSigners } from 'gill'
+import { createTransaction, transactionToBase64WithSigners, createNoopSigner } from 'gill'
 import type { Address, Instruction, TransactionSigner } from 'gill'
 import { buildTransferTokensTransaction } from 'gill/programs/token'
-import { getTransferSolInstruction } from 'gill/programs'
+import { getTransferSolInstruction, getCreateAccountInstruction } from 'gill/programs'
+import { getCloseAccountInstruction } from 'gill/programs/token'
 import type {
   ConfigResponse,
   SendTransactionResponse,
   BatchTransactionOptions,
-  CreateAccountOptions,
-  CreateAccountResponse,
-  CloseAccountOptions,
   GetBalanceOptions,
   BalanceResponse,
   GetAccountInfoOptions,
@@ -64,6 +62,41 @@ export interface GaslessTransactionSigner {
 
 export interface SerializeInstructionPayloadOptions {
   feePayer?: string
+}
+
+export interface CreateAccountOptions {
+  /** The new account's public key (base58). Must match the provided signer's address. */
+  newAccountPubkey: string
+  /** Space in bytes to allocate (default: 0) */
+  space?: number
+  /** Program that will own the account (default: System Program) */
+  programId?: string
+  /**
+   * Lamports to deposit for rent-exemption.
+   * Obtain via `rpc.getMinimumBalanceForRentExemption(space).send()`.
+   */
+  lamports: number
+  /** Signer for the new account (the keypair being created). */
+  signer: GaslessTransactionSigner
+}
+
+export interface CreateAccountResponse {
+  signature: string
+}
+
+export interface CloseAccountOptions {
+  /** The token account to close (base58). */
+  accountAddress: string
+  /** Destination address that will receive the reclaimed rent lamports (base58). */
+  destination: string
+  /**
+   * Authority that can close the account.
+   *
+   * - Provide the user's signer when the **user** is the close authority.
+   * - Omit when the **fee payer** (Altude relay) is the close authority; the
+   *   relay will add its signature server-side.
+   */
+  signer?: GaslessTransactionSigner
 }
 
 export class AltudeGasStation {
@@ -242,9 +275,49 @@ export class AltudeGasStation {
     })
   }
 
-  /** Create a sponsored Solana account (Altude pays rent). */
+  /**
+   * Create a sponsored Solana account.
+   *
+   * Mirrors the Android SDK flow:
+   *   1. Generate `SystemProgram.createAccount` instruction (fee payer as relay signer)
+   *   2. Partial-sign with the new account's signer
+   *   3. Send the partially-signed transaction to the Altude relay
+   *
+   * The relay (fee payer) adds its signature server-side and broadcasts the
+   * transaction, covering the rent deposit and transaction fee on behalf of
+   * the user.
+   */
   async createAccount(options: CreateAccountOptions): Promise<CreateAccountResponse> {
-    return this.client.createAccount(options)
+    const config = await this.getConfig()
+    const rpc = await this.getRpcClient()
+    const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
+    const feePayer = config.FeePayer as unknown as Address
+
+    // The relay (fee payer) pays rent — use a noop signer so the slot stays
+    // empty for the relay to fill in server-side.
+    const feePayerNoop = createNoopSigner(feePayer)
+    const newAccountSigner = options.signer as unknown as TransactionSigner
+
+    const SYSTEM_PROGRAM_ADDRESS = '11111111111111111111111111111111' as unknown as Address
+    const programAddress = (options.programId ?? SYSTEM_PROGRAM_ADDRESS) as unknown as Address
+
+    const instruction = getCreateAccountInstruction({
+      payer: feePayerNoop,
+      newAccount: newAccountSigner,
+      lamports: BigInt(options.lamports),
+      space: BigInt(options.space ?? 0),
+      programAddress,
+    })
+
+    const transaction = createTransaction({
+      version: 'legacy',
+      feePayer,
+      instructions: [instruction],
+      latestBlockhash,
+    })
+
+    const signedTransaction = await transactionToBase64WithSigners(transaction)
+    return this.client.createAccount({ signedTransaction })
   }
 
   /** Relay a batch transaction payload. */
@@ -252,14 +325,60 @@ export class AltudeGasStation {
     return this.client.sendBatchTransaction(options)
   }
 
-  /** Close an account using a signed transaction payload. */
+  /**
+   * Close a token account and reclaim its rent lamports.
+   *
+   * Mirrors the Android SDK flow:
+   *   1. Generate `Token.closeAccount` instruction
+   *   2. Partial-sign with the close authority's signer (if provided)
+   *   3. Send the partially-signed transaction to the Altude relay
+   *
+   * When the fee payer (Altude relay) is the close authority — as set during
+   * account creation — omit `signer`; the relay adds its own signature
+   * server-side.  When the user holds the close authority, pass their signer.
+   */
   async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
-    return this.client.closeAccount(options)
+    const config = await this.getConfig()
+    const rpc = await this.getRpcClient()
+    const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
+    const feePayer = config.FeePayer as unknown as Address
+
+    // Resolve the close authority: user-provided signer or noop for relay.
+    const closeAuthority: Address | TransactionSigner = options.signer
+      ? (options.signer as unknown as TransactionSigner)
+      : createNoopSigner(feePayer)
+
+    const instruction = getCloseAccountInstruction({
+      account: options.accountAddress as unknown as Address,
+      destination: options.destination as unknown as Address,
+      owner: closeAuthority,
+    })
+
+    const transaction = createTransaction({
+      version: 'legacy',
+      feePayer,
+      instructions: [instruction],
+      latestBlockhash,
+    })
+
+    const signedTransaction = await transactionToBase64WithSigners(transaction)
+    return this.client.closeAccount({ signedTransaction })
   }
 
   /**
-   * Gasless token swap via Jupiter aggregator.
-   * The relay builds, signs (fee payer), and submits the swap transaction.
+   * Gasless token swap via the Jupiter aggregator.
+   *
+   * Expected flow (mirrors Android SDK):
+   *   1. Send swap parameters to the Altude relay.
+   *   2. The relay fetches a Jupiter quote and builds a partially-signed
+   *      transaction (fee payer signature included, user signature missing).
+   *   3. The caller signs the transaction with `options.signer`.
+   *   4. The fully-signed transaction is sent back to the relay for broadcast.
+   *
+   * If `options.signer` is not provided the relay is responsible for the
+   * entire flow.  Note that most Jupiter swap transactions debit the **user's**
+   * token accounts, so omitting the signer will only work when the relay has
+   * an alternative signing arrangement for those accounts.
    */
   async swap(options: SwapOptions): Promise<SwapResponse> {
     return this.client.swap(options)

@@ -1,5 +1,13 @@
 export { AltudeGasStation } from './gasstation.js'
-export type { AltudeGasStationConfig, SendOptions, SerializeInstructionPayloadOptions } from './gasstation.js'
+export type {
+  AltudeGasStationConfig,
+  SendOptions,
+  SerializeInstructionPayloadOptions,
+  CreateAccountOptions,
+  CreateAccountResponse,
+  CloseAccountOptions,
+  GaslessTransactionSigner,
+} from './gasstation.js'
 export { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient, ALTUDE_FEE_PAYER } from './client.js'
 export type {
   BlockhashResponse,
@@ -7,9 +15,6 @@ export type {
   SendTransactionOptions,
   SendTransactionResponse,
   BatchTransactionOptions,
-  CreateAccountOptions,
-  CreateAccountResponse,
-  CloseAccountOptions,
   GetBalanceOptions,
   BalanceResponse,
   GetAccountInfoOptions,

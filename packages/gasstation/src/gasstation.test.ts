@@ -42,7 +42,7 @@ describe('AltudeHttpClient — mock mode', () => {
 
   it('createAccount returns a mock signature', async () => {
     const client = new AltudeHttpClient()
-    const result = await client.createAccount({ newAccountPubkey: '11111111111111111111111111111111' })
+    const result = await client.createAccount({ signedTransaction: 'base64encodedtx==' })
     expect(result.signature).toBeTruthy()
   })
 
@@ -241,7 +241,6 @@ describe('AltudeGasStation facade', () => {
     const gs = new AltudeGasStation()
 
     const batchResult = await gs.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
-    const closeResult = await gs.closeAccount({ signedTransaction: 'base64encodedtx==' })
     const accountInfo = await gs.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
     const history = await gs.getHistory({
       page: 1,
@@ -250,7 +249,6 @@ describe('AltudeGasStation facade', () => {
     })
 
     expect(batchResult.signature).toBeTruthy()
-    expect(closeResult.signature).toBeTruthy()
     expect(accountInfo.accountAddress).toBe('11111111111111111111111111111111')
     expect(history.page).toBe(1)
   })
@@ -321,5 +319,114 @@ describe('AltudeGasStation facade', () => {
     await gs.sendSerializedInstructionPayload('serialized-payload')
 
     expect(sendBatchSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
+  })
+
+  it('createAccount builds a transaction and relays it (mock mode)', async () => {
+    const gs = new AltudeGasStation()
+    const createAccountSpy = vi.spyOn(gs.client, 'createAccount')
+
+    const signer = {
+      address: 'So11111111111111111111111111111111111111112',
+      signTransactionMessages: vi.fn().mockResolvedValue([{}]),
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+      signMessage: vi.fn().mockResolvedValue(new Uint8Array([9, 9])),
+    }
+
+    // Stub getRpcClient to avoid real network calls.
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.createAccount({
+      newAccountPubkey: 'So11111111111111111111111111111111111111112',
+      lamports: 1_000_000,
+      space: 0,
+      signer,
+    })
+
+    expect(createAccountSpy).toHaveBeenCalledOnce()
+    const callArg = createAccountSpy.mock.calls[0]?.[0]
+    expect(typeof callArg?.signedTransaction).toBe('string')
+    expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
+    expect(result.signature).toBeTruthy()
+  })
+
+  it('closeAccount builds a transaction and relays it (feePayer as close authority)', async () => {
+    const gs = new AltudeGasStation()
+    const closeAccountSpy = vi.spyOn(gs.client, 'closeAccount')
+
+    // Stub getRpcClient to avoid real network calls.
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.closeAccount({
+      accountAddress: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+      destination: '11111111111111111111111111111111',
+    })
+
+    expect(closeAccountSpy).toHaveBeenCalledOnce()
+    const callArg = closeAccountSpy.mock.calls[0]?.[0]
+    expect(typeof callArg?.signedTransaction).toBe('string')
+    expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
+    expect(result.signature).toBeTruthy()
+  })
+
+  it('closeAccount builds a transaction and relays it (user as close authority)', async () => {
+    const gs = new AltudeGasStation()
+    const closeAccountSpy = vi.spyOn(gs.client, 'closeAccount')
+
+    const signer = {
+      address: '11111111111111111111111111111111',
+      signTransactionMessages: vi.fn().mockResolvedValue([{}]),
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+      signMessage: vi.fn().mockResolvedValue(new Uint8Array([9, 9])),
+    }
+
+    // Stub getRpcClient to avoid real network calls.
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.closeAccount({
+      accountAddress: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+      destination: '11111111111111111111111111111111',
+      signer,
+    })
+
+    expect(closeAccountSpy).toHaveBeenCalledOnce()
+    const callArg = closeAccountSpy.mock.calls[0]?.[0]
+    expect(typeof callArg?.signedTransaction).toBe('string')
+    expect(result.signature).toBeTruthy()
   })
 })

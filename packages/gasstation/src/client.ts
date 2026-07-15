@@ -51,12 +51,8 @@ export interface BatchTransactionOptions {
 }
 
 export interface CreateAccountOptions {
-  /** The new account's public key (base58) */
-  newAccountPubkey: string
-  /** Space in bytes to allocate */
-  space?: number
-  /** Program owner */
-  programId?: string
+  /** Base64-encoded partially-signed transaction (built by the gasstation facade) */
+  signedTransaction: string
 }
 
 export interface CreateAccountResponse {
@@ -64,7 +60,7 @@ export interface CreateAccountResponse {
 }
 
 export interface CloseAccountOptions {
-  /** Base64-encoded signed transaction */
+  /** Base64-encoded partially-signed transaction (built by the gasstation facade) */
   signedTransaction: string
 }
 
@@ -213,7 +209,9 @@ export class AltudeHttpClient {
       return { signature: 'MockAccountSig' + Math.random().toString(36).slice(2) }
     }
     await this.#ensureConfig()
-    return this.#post<CreateAccountResponse>('/api/Account/create', options)
+    return this.#post<CreateAccountResponse>('/api/Account/create', {
+      SignedTransaction: options.signedTransaction,
+    })
   }
 
   async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
