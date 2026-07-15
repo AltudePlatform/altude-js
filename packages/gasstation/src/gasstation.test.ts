@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AltudeGasStation } from '../src/gasstation.js'
 import { AltudeHttpClient } from '../src/client.js'
+import type { IInstruction } from 'gill'
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -252,5 +253,73 @@ describe('AltudeGasStation facade', () => {
     expect(closeResult.signature).toBeTruthy()
     expect(accountInfo.accountAddress).toBe('11111111111111111111111111111111')
     expect(history.page).toBe(1)
+  })
+
+  it('init preloads relay config and rpc client', async () => {
+    const gs = new AltudeGasStation()
+    const configSpy = vi.spyOn(gs, 'getConfig')
+    const rpcSpy = vi.spyOn(gs, 'getRpcClient')
+
+    await gs.init()
+
+    expect(configSpy).toHaveBeenCalledTimes(1)
+    expect(rpcSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('manages instruction list state', () => {
+    const gs = new AltudeGasStation()
+    const firstInstruction = {
+      programAddress: '11111111111111111111111111111111',
+      accounts: [],
+      data: new Uint8Array(),
+    } as unknown as IInstruction
+    const secondInstruction = {
+      programAddress: 'ComputeBudget111111111111111111111111111111',
+      accounts: [],
+      data: new Uint8Array(),
+    } as unknown as IInstruction
+
+    gs.setInstructions([firstInstruction])
+    gs.addInstruction(secondInstruction)
+    expect(gs.getInstructions()).toHaveLength(2)
+
+    const removed = gs.removeInstruction(0)
+    expect(removed).toBe(firstInstruction)
+    expect(gs.getInstructions()).toHaveLength(1)
+
+    gs.clearInstructions()
+    expect(gs.getInstructions()).toHaveLength(0)
+  })
+
+  it('serializeInstructionPayload throws when there are no managed instructions', async () => {
+    const gs = new AltudeGasStation()
+    await expect(gs.serializeInstructionPayload()).rejects.toThrow(
+      'No instructions available. Add instructions before serializing.',
+    )
+  })
+
+  it('partialSignTransactionMessage delegates to signer', async () => {
+    const gs = new AltudeGasStation()
+    const signature = new Uint8Array([1, 2, 3, 4])
+    const signer = {
+      address: '11111111111111111111111111111111',
+      signTransactionMessage: vi.fn().mockResolvedValue(signature),
+      signMessage: vi.fn().mockResolvedValue(new Uint8Array([9, 9])),
+    }
+    const txMessage = new Uint8Array([7, 8, 9])
+
+    const result = await gs.partialSignTransactionMessage(txMessage, signer)
+
+    expect(signer.signTransactionMessage).toHaveBeenCalledWith(txMessage)
+    expect(result).toEqual(signature)
+  })
+
+  it('sendSerializedInstructionPayload relays payload through batch endpoint', async () => {
+    const gs = new AltudeGasStation()
+    const sendBatchSpy = vi.spyOn(gs, 'sendBatchTransaction')
+
+    await gs.sendSerializedInstructionPayload('serialized-payload')
+
+    expect(sendBatchSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
   })
 })

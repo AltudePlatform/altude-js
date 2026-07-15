@@ -11,10 +11,10 @@
  */
 
 import type { SolanaNetwork } from '@altude/core'
-import { createAltudeClient } from '@altude/core'
+import type { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import { createTransaction, transactionToBase64WithSigners } from 'gill'
-import type { Address, TransactionSigner } from 'gill'
+import type { Address, IInstruction, TransactionSigner } from 'gill'
 import { buildTransferTokensTransaction } from 'gill/programs/token'
 import { getTransferSolInstruction } from 'gill/programs'
 import type {
@@ -62,8 +62,14 @@ export interface GaslessTransactionSigner {
   signMessage(message: Uint8Array): Promise<Uint8Array>
 }
 
+export interface SerializeInstructionPayloadOptions {
+  latestBlockhash?: string
+  feePayer?: string
+}
+
 export class AltudeGasStation {
   readonly client: AltudeHttpClient
+  #instructions: IInstruction[] = []
 
   constructor(config: AltudeGasStationConfig = {}) {
     const { apiKey, network = 'mainnet-beta', baseUrl } = config
@@ -82,6 +88,16 @@ export class AltudeGasStation {
     return this.client.getBlockhash()
   }
 
+  /**
+   * Initialize relay runtime state (config + RPC client bootstrap).
+   * Mirrors the Android-style init flow.
+   */
+  async init(forceRefresh = false): Promise<ConfigResponse> {
+    const config = await this.getConfig(forceRefresh)
+    await this.getRpcClient()
+    return config
+  }
+
   /** Fetch relay configuration resolved at runtime from the Altude API. */
   async getConfig(forceRefresh = false): Promise<ConfigResponse> {
     return this.client.getConfig(forceRefresh)
@@ -98,6 +114,75 @@ export class AltudeGasStation {
    */
   async getRpcClient(): Promise<ReturnType<typeof createAltudeClient>> {
     return this.client.getRpcClient()
+  }
+
+  /** Replace the managed transaction instruction list. */
+  setInstructions(instructions: readonly IInstruction[]): void {
+    this.#instructions = [...instructions]
+  }
+
+  /** Append one instruction to the managed transaction instruction list. */
+  addInstruction(instruction: IInstruction): void {
+    this.#instructions.push(instruction)
+  }
+
+  /** Remove one instruction from the managed transaction instruction list. */
+  removeInstruction(index: number): IInstruction | undefined {
+    if (index < 0 || index >= this.#instructions.length) {
+      return undefined
+    }
+    return this.#instructions.splice(index, 1)[0]
+  }
+
+  /** Clear all managed transaction instructions. */
+  clearInstructions(): void {
+    this.#instructions = []
+  }
+
+  /** Read back the current managed transaction instructions. */
+  getInstructions(): readonly IInstruction[] {
+    return this.#instructions
+  }
+
+  /**
+   * Serialize managed instructions into a relay-ready transaction payload.
+   * Any signer objects already embedded in instruction accounts are used.
+   */
+  async serializeInstructionPayload(options: SerializeInstructionPayloadOptions = {}): Promise<string> {
+    if (this.#instructions.length === 0) {
+      throw new Error('No instructions available. Add instructions before serializing.')
+    }
+
+    const config = await this.getConfig()
+    const rpc = await this.getRpcClient()
+    const latestBlockhash =
+      options.latestBlockhash ?? (await rpc.rpc.getLatestBlockhash().send()).value.blockhash
+    const feePayer = (options.feePayer ?? config.FeePayer) as unknown as Address
+
+    const transaction = createTransaction({
+      version: 'legacy',
+      feePayer,
+      instructions: [...this.#instructions],
+      latestBlockhash,
+    })
+
+    return transactionToBase64WithSigners(transaction)
+  }
+
+  /**
+   * Partial-sign a transaction message using the provided signer implementation.
+   * Useful when callers control message compilation externally.
+   */
+  async partialSignTransactionMessage(
+    transactionMessageBytes: Uint8Array,
+    signer: GaslessTransactionSigner,
+  ): Promise<Uint8Array> {
+    return signer.signTransactionMessage(transactionMessageBytes)
+  }
+
+  /** Relay a serialized instruction payload string to the Altude API. */
+  async sendSerializedInstructionPayload(serializedPayload: string): Promise<SendTransactionResponse> {
+    return this.sendBatchTransaction({ signedTransaction: serializedPayload })
   }
 
   /**
