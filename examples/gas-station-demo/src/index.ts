@@ -85,7 +85,7 @@ async function main() {
   console.log('  Example — sponsored account creation (mirrors Android SDK flow):')
   console.log('  ----------------------------------------------------------------')
   console.log('  // 1. Derive a GaslessTransactionSigner from your vault wallet')
-  console.log('  // 2. Call gasStation.createAccount({ newAccountPubkey, lamports, space, signer })')
+  console.log('  // 2. Call gasStation.createAccount({ account, tokens, commitment, computeOptions }, signer)')
   console.log('  //    → SDK builds SystemProgram.createAccount instruction (feePayer as payer)')
   console.log('  //    → SDK partial-signs with the new account signer')
   console.log('  //    → SDK relays partially-signed tx; relay adds feePayer signature')

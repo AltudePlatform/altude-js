@@ -498,9 +498,8 @@ describe('AltudeGasStation facade', () => {
     } as never)
 
     const result = await gs.createAccount({
-      newAccountPubkey: 'So11111111111111111111111111111111111111112',
-      lamports: 1_000_000,
-      space: 0,
+      account: 'So11111111111111111111111111111111111111112',
+      tokens: ['So11111111111111111111111111111111111111112'],
       signer,
     })
 

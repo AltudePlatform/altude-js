@@ -15,8 +15,15 @@ import type { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import { createTransaction, transactionToBase64WithSigners, createNoopSigner } from 'gill'
 import type { Address, Instruction, TransactionSigner } from 'gill'
-import { buildTransferTokensTransaction, getCreateAssociatedTokenInstructionAsync } from 'gill/programs/token'
-import { getTransferSolInstruction, getCreateAccountInstruction } from 'gill/programs'
+import {
+  buildTransferTokensTransaction,
+  getCreateAssociatedTokenInstructionAsync,
+  getAssociatedTokenAccountAddress,
+  getSetAuthorityInstruction,
+  TOKEN_PROGRAM_ADDRESS,
+  AuthorityType,
+} from 'gill/programs/token'
+import { getTransferSolInstruction, getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction, getRequestHeapFrameInstruction } from 'gill/programs'
 import { getCloseAccountInstruction } from 'gill/programs/token'
 import type {
   ConfigResponse,
@@ -68,19 +75,22 @@ export interface SerializeInstructionPayloadOptions {
 }
 
 export interface CreateAccountOptions {
-  /** The new account's public key (base58). Must match the provided signer's address. */
-  accountPubkey: string
-  /** Space in bytes to allocate (default: 0) */
-  space?: number
-  /** Program that will own the account (default: System Program) */
-  programId?: string
-  /**
-   * Lamports to deposit for rent-exemption.
-   * Obtain via `rpc.getMinimumBalanceForRentExemption(space).send()`.
-   */
-  lamports: number
-  /** Signer for the new account (the keypair being created). */
-  signer: GaslessTransactionSigner
+  /** Wallet address for token account ownership. Must match the signer when provided. */
+  account?: string
+  /** Token mints for ATAs to create. Mirrors Android SDK default to USDC. */
+  tokens?: string[]
+  /** Reference passthrough field for Android SDK shape parity. */
+  reference?: string
+  /** Commitment for blockhash resolution. */
+  commitment?: 'processed' | 'confirmed' | 'finalized'
+  /** Compute budget options matching Android SDK structure. */
+  computeOptions?: {
+    computeUnitLimit?: number
+    computeUnitPriceMicroLamports?: number
+    heapFrameBytes?: number
+  }
+  /** Backward-compatible signer location; Android SDK passes signer separately. */
+  signer?: GaslessTransactionSigner
 }
 
 export interface CreateAccountResponse {
@@ -295,44 +305,81 @@ export class AltudeGasStation {
   }
 
   /**
-   * Create a sponsored Solana account.
+   * Create sponsored token accounts.
    *
    * Mirrors the Android SDK flow:
-   *   1. Generate `SystemProgram.createAccount` instruction (fee payer as relay signer)
-   *   2. Partial-sign with the new account's signer
-   *   3. Send the partially-signed transaction to the Altude relay
-   *
-   * The relay (fee payer) adds its signature server-side and broadcasts the
-   * transaction, covering the rent deposit and transaction fee on behalf of
-   * the user.
+   *   1. Build ATA creation instructions for each requested token mint
+   *   2. Set each ATA owner authority to the relay fee payer
+   *   3. Partial-sign with the user signer
+   *   4. Send the partially-signed transaction to the Altude relay
    */
-  async createAccount(options: CreateAccountOptions): Promise<CreateAccountResponse> {
+  async createAccount(options: CreateAccountOptions = {}, signer?: GaslessTransactionSigner): Promise<CreateAccountResponse> {
+    const signerToUse = signer ?? options.signer
+    if (!signerToUse) {
+      throw new Error('createAccount() requires a signer.')
+    }
+
+    if (options.account?.trim() && options.account !== signerToUse.address) {
+      throw new Error('createAccount() account must match signer.address when account is provided.')
+    }
+
     const config = await this.getConfig()
     const rpc = await this.getRpcClient()
     const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
     const feePayer = config.FeePayer as unknown as Address
 
-    // The relay (fee payer) pays rent — use a noop signer so the slot stays
-    // empty for the relay to fill in server-side.
     const feePayerNoop = createNoopSigner(feePayer)
-    const owner = this.#toTransactionSigner(options.signer)
+    const owner = this.#toTransactionSigner(signerToUse)
+    const ownerAddress = owner.address as unknown as Address
+    const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
+    const computeOptions = options.computeOptions ?? {}
+    const computeInstructions: Instruction[] = [
+      getSetComputeUnitLimitInstruction({
+        units: BigInt(computeOptions.computeUnitLimit ?? 400_000),
+      }),
+      ...(computeOptions.computeUnitPriceMicroLamports !== undefined
+        ? [
+            getSetComputeUnitPriceInstruction({
+              microLamports: BigInt(computeOptions.computeUnitPriceMicroLamports),
+            }),
+          ]
+        : []),
+      ...(computeOptions.heapFrameBytes !== undefined
+        ? [
+            getRequestHeapFrameInstruction({
+              bytes: Number(computeOptions.heapFrameBytes),
+            }),
+          ]
+        : []),
+    ]
+    const tokenInstructions: Instruction[] = []
 
-    const SYSTEM_PROGRAM_ADDRESS = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' as unknown as Address
-    const programAddress = (options.programId ?? SYSTEM_PROGRAM_ADDRESS) as unknown as Address
-
-    const instruction = getCreateAssociatedTokenInstructionAsync({ 
-      payer: feePayerNoop,
-      owner: owner.address as unknown as Address,
-      mint: options.mint as unknown as Address,
-      ata: options.newAccountPubkey as unknown as Address,
-      systemProgram: SYSTEM_PROGRAM_ADDRESS,
-      tokenProgram: SYSTEM_PROGRAM_ADDRESS,
-    })
+    for (const token of tokens) {
+      const mint = token as unknown as Address
+      const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress, TOKEN_PROGRAM_ADDRESS)
+      const createAssociatedTokenInstruction = await getCreateAssociatedTokenInstructionAsync({
+        payer: feePayerNoop,
+        owner: ownerAddress,
+        mint,
+        ata,
+        tokenProgram: TOKEN_PROGRAM_ADDRESS,
+      })
+      const setAuthorityInstruction = getSetAuthorityInstruction(
+        {
+          owned: ata,
+          owner,
+          authorityType: AuthorityType.AccountOwner,
+          newAuthority: feePayer,
+        },
+        { programAddress: TOKEN_PROGRAM_ADDRESS },
+      )
+      tokenInstructions.push(createAssociatedTokenInstruction, setAuthorityInstruction)
+    }
 
     const transaction = createTransaction({
       version: 'legacy',
       feePayer,
-      instructions: [instruction],
+      instructions: [...computeInstructions, ...tokenInstructions],
       latestBlockhash,
     })
 
@@ -438,5 +485,11 @@ export class AltudeGasStation {
         return signatureDictionaries
       },
     } as unknown as TransactionSigner
+  }
+
+  #defaultCreateAccountMint(): string {
+    return this.client.network === 'devnet'
+      ? '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
+      : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   }
 }
