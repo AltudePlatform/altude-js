@@ -303,64 +303,68 @@ export class AltudeGasStation {
       throw new Error('send() requires a recipient address (toAddress or to).')
     }
 
-    const config = await this.getConfig()
-    const rpc = await this.getRpcClient()
-    const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
-    const feePayer = config.FeePayer as unknown as Address
-    const sourceSigner = this.#toTransactionSigner(options.sourceSigner)
-    const destinationAddress = destination as unknown as Address
-    const computeOptions = options.computeOptions ?? {}
+    const execute = async (): Promise<SendTransactionResponse> => {
+      const config = await this.getConfig()
+      const rpc = await this.getRpcClient()
+      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
+      const feePayer = config.FeePayer as unknown as Address
+      const sourceSigner = this.#toTransactionSigner(options.sourceSigner as GaslessTransactionSigner)
+      const destinationAddress = destination as unknown as Address
+      const computeOptions = options.computeOptions ?? {}
 
-    // Build optional compute budget instructions.
-    const computeInstructions: Instruction[] = []
-    if (options.computeOptions) {
-      computeInstructions.push(
-        getSetComputeUnitLimitInstruction({ units: computeOptions.computeUnitLimit ?? 400_000 }),
-      )
-      if (computeOptions.computeUnitPriceMicroLamports !== undefined) {
+      // Build optional compute budget instructions.
+      const computeInstructions: Instruction[] = []
+      if (options.computeOptions) {
         computeInstructions.push(
-          getSetComputeUnitPriceInstruction({
-            microLamports: BigInt(computeOptions.computeUnitPriceMicroLamports),
-          }),
+          getSetComputeUnitLimitInstruction({ units: computeOptions.computeUnitLimit ?? 400_000 }),
         )
+        if (computeOptions.computeUnitPriceMicroLamports !== undefined) {
+          computeInstructions.push(
+            getSetComputeUnitPriceInstruction({
+              microLamports: BigInt(computeOptions.computeUnitPriceMicroLamports),
+            }),
+          )
+        }
+        if (computeOptions.heapFrameBytes !== undefined) {
+          computeInstructions.push(
+            getRequestHeapFrameInstruction({ bytes: computeOptions.heapFrameBytes }),
+          )
+        }
       }
-      if (computeOptions.heapFrameBytes !== undefined) {
-        computeInstructions.push(
-          getRequestHeapFrameInstruction({ bytes: computeOptions.heapFrameBytes }),
-        )
+
+      let signedTransaction: string
+      if (options.token?.trim()) {
+        const transaction = await buildTransferTokensTransaction({
+          feePayer,
+          latestBlockhash,
+          mint: options.token.trim() as unknown as Address,
+          authority: sourceSigner,
+          amount: options.amount,
+          destination: destinationAddress,
+        })
+        signedTransaction = await transactionToBase64WithSigners(transaction)
+      } else {
+        const transferInstruction = getTransferSolInstruction({
+          source: sourceSigner,
+          destination: destinationAddress,
+          amount: BigInt(options.amount),
+        })
+        const transaction = createTransaction({
+          version: 'legacy',
+          feePayer,
+          instructions: [...computeInstructions, transferInstruction],
+          latestBlockhash,
+        })
+        signedTransaction = await transactionToBase64WithSigners(transaction)
       }
+
+      return this.client.sendTransaction({
+        transaction: signedTransaction,
+        ...(options.commitment !== undefined && { commitment: options.commitment }),
+      })
     }
 
-    let signedTransaction: string
-    if (options.token?.trim()) {
-      const transaction = await buildTransferTokensTransaction({
-        feePayer,
-        latestBlockhash,
-        mint: options.token.trim() as unknown as Address,
-        authority: sourceSigner,
-        amount: options.amount,
-        destination: destinationAddress,
-      })
-      signedTransaction = await transactionToBase64WithSigners(transaction)
-    } else {
-      const transferInstruction = getTransferSolInstruction({
-        source: sourceSigner,
-        destination: destinationAddress,
-        amount: BigInt(options.amount),
-      })
-      const transaction = createTransaction({
-        version: 'legacy',
-        feePayer,
-        instructions: [...computeInstructions, transferInstruction],
-        latestBlockhash,
-      })
-      signedTransaction = await transactionToBase64WithSigners(transaction)
-    }
-
-    return this.client.sendTransaction({
-      transaction: signedTransaction,
-      ...(options.commitment !== undefined && { commitment: options.commitment }),
-    })
+    return this.#retryOnBlockhashNotFound(execute)
   }
 
   /**
@@ -382,68 +386,73 @@ export class AltudeGasStation {
       throw new Error('createAccount() account must match signer.address when account is provided.')
     }
 
-    const config = await this.getConfig()
-    const rpc = await this.getRpcClient()
-    const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
-    const feePayer = config.FeePayer as unknown as Address
+    const execute = async (): Promise<CreateAccountResponse> => {
+      const config = await this.getConfig()
+      const rpc = await this.getRpcClient()
+      
+      const feePayer = config.FeePayer as unknown as Address
 
-    const feePayerNoop = createNoopSigner(feePayer)
-    const owner = this.#toTransactionSigner(signerToUse)
-    const ownerAddress = owner.address as unknown as Address
-    const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
-    const computeOptions = options.computeOptions ?? {}
-    const computeInstructions: Instruction[] = [
-      getSetComputeUnitLimitInstruction({
-        units: computeOptions.computeUnitLimit ?? 400_000,
-      }),
-      ...(computeOptions.computeUnitPriceMicroLamports !== undefined
-        ? [
-            getSetComputeUnitPriceInstruction({
-              microLamports: BigInt(computeOptions.computeUnitPriceMicroLamports),
-            }),
-          ]
-        : []),
-      ...(computeOptions.heapFrameBytes !== undefined
-        ? [
-            getRequestHeapFrameInstruction({
-              bytes: computeOptions.heapFrameBytes,
-            }),
-          ]
-        : []),
-    ]
-    const tokenInstructions: Instruction[] = []
+      const feePayerNoop = createNoopSigner(feePayer)
+      const owner = this.#toTransactionSigner(signerToUse)
+      const ownerAddress = owner.address as unknown as Address
+      const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
+      const computeOptions = options.computeOptions ?? {}
+      const computeInstructions: Instruction[] = [
+        getSetComputeUnitLimitInstruction({
+          units: computeOptions.computeUnitLimit ?? 400_000,
+        }),
+        ...(computeOptions.computeUnitPriceMicroLamports !== undefined
+          ? [
+              getSetComputeUnitPriceInstruction({
+                microLamports: BigInt(computeOptions.computeUnitPriceMicroLamports),
+              }),
+            ]
+          : []),
+        ...(computeOptions.heapFrameBytes !== undefined
+          ? [
+              getRequestHeapFrameInstruction({
+                bytes: computeOptions.heapFrameBytes,
+              }),
+            ]
+          : []),
+      ]
+      const tokenInstructions: Instruction[] = []
 
-    for (const token of tokens) {
-      const mint = token as unknown as Address
-      const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress, TOKEN_PROGRAM_ADDRESS)
-      const createAssociatedTokenInstruction = await getCreateAssociatedTokenInstructionAsync({
-        payer: feePayerNoop,
-        owner: ownerAddress,
-        mint,
-        ata,
-        tokenProgram: TOKEN_PROGRAM_ADDRESS,
+      for (const token of tokens) {
+        const mint = token as unknown as Address
+        const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress, TOKEN_PROGRAM_ADDRESS)
+        const createAssociatedTokenInstruction = await getCreateAssociatedTokenInstructionAsync({
+          payer: feePayerNoop,
+          owner: ownerAddress,
+          mint,
+          ata,
+          tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        })
+        const setAuthorityInstruction = getSetAuthorityInstruction(
+          {
+            owned: ata,
+            owner,
+            authorityType: AuthorityType.CloseAccount,
+            newAuthority: feePayer,
+          },
+          { programAddress: TOKEN_PROGRAM_ADDRESS },
+        )
+        tokenInstructions.push(createAssociatedTokenInstruction, setAuthorityInstruction)
+      }
+      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
+      console.log('createAccount() latestBlockhash:', latestBlockhash, 'feePayer:', feePayer, 'owner:', ownerAddress, 'tokens:', tokens)
+      const transaction = createTransaction({
+        version: 'legacy',
+        feePayer,
+        instructions: [...computeInstructions, ...tokenInstructions],
+        latestBlockhash,
       })
-      const setAuthorityInstruction = getSetAuthorityInstruction(
-        {
-          owned: ata,
-          owner,
-          authorityType: AuthorityType.AccountOwner,
-          newAuthority: feePayer,
-        },
-        { programAddress: TOKEN_PROGRAM_ADDRESS },
-      )
-      tokenInstructions.push(createAssociatedTokenInstruction, setAuthorityInstruction)
+
+      const signedTransaction = await transactionToBase64WithSigners(transaction)
+      return this.client.createAccount({ signedTransaction })
     }
 
-    const transaction = createTransaction({
-      version: 'legacy',
-      feePayer,
-      instructions: [...computeInstructions, ...tokenInstructions],
-      latestBlockhash,
-    })
-
-    const signedTransaction = await transactionToBase64WithSigners(transaction)
-    return this.client.createAccount({ signedTransaction })
+    return this.#retryOnBlockhashNotFound(execute)
   }
 
   /** Relay a batch transaction payload. */
@@ -469,82 +478,86 @@ export class AltudeGasStation {
    * server-side.  When the user holds the close authority, pass their signer.
    */
   async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
-    const config = await this.getConfig()
-    const rpc = await this.getRpcClient()
-    const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
-    const feePayer = config.FeePayer as unknown as Address
+    const execute = async (): Promise<SendTransactionResponse> => {
+      const config = await this.getConfig()
+      const rpc = await this.getRpcClient()
+      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
+      const feePayer = config.FeePayer as unknown as Address
 
-    // Resolve the close authority: user-provided signer or noop for relay.
-    const closeAuthority: Address | TransactionSigner = options.signer
-      ? this.#toTransactionSigner(options.signer)
-      : createNoopSigner(feePayer)
+      // Resolve the close authority: user-provided signer or noop for relay.
+      const closeAuthority: Address | TransactionSigner = options.signer
+        ? this.#toTransactionSigner(options.signer)
+        : createNoopSigner(feePayer)
 
-    // Build optional compute budget instructions.
-    const computeInstructions: Instruction[] = []
-    if (options.computeOptions) {
-      const computeOpts = options.computeOptions
-      computeInstructions.push(
-        getSetComputeUnitLimitInstruction({ units: computeOpts.computeUnitLimit ?? 400_000 }),
-      )
-      if (computeOpts.computeUnitPriceMicroLamports !== undefined) {
+      // Build optional compute budget instructions.
+      const computeInstructions: Instruction[] = []
+      if (options.computeOptions) {
+        const computeOpts = options.computeOptions
         computeInstructions.push(
-          getSetComputeUnitPriceInstruction({
-            microLamports: BigInt(computeOpts.computeUnitPriceMicroLamports),
-          }),
+          getSetComputeUnitLimitInstruction({ units: computeOpts.computeUnitLimit ?? 400_000 }),
         )
+        if (computeOpts.computeUnitPriceMicroLamports !== undefined) {
+          computeInstructions.push(
+            getSetComputeUnitPriceInstruction({
+              microLamports: BigInt(computeOpts.computeUnitPriceMicroLamports),
+            }),
+          )
+        }
+        if (computeOpts.heapFrameBytes !== undefined) {
+          computeInstructions.push(
+            getRequestHeapFrameInstruction({ bytes: computeOpts.heapFrameBytes }),
+          )
+        }
       }
-      if (computeOpts.heapFrameBytes !== undefined) {
-        computeInstructions.push(
-          getRequestHeapFrameInstruction({ bytes: computeOpts.heapFrameBytes }),
-        )
-      }
-    }
 
-    const closeInstructions: Instruction[] = []
+      const closeInstructions: Instruction[] = []
 
-    if (options.account && !options.accountAddress) {
-      // Android SDK-style: auto-discover ATAs for the wallet + token list, close each.
-      const walletAddress = options.account as unknown as Address
-      const destinationAddress = walletAddress // rent goes back to the wallet
-      const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
+      if (options.account && !options.accountAddress) {
+        // Android SDK-style: auto-discover ATAs for the wallet + token list, close each.
+        const walletAddress = options.account as unknown as Address
+        const destinationAddress = walletAddress // rent goes back to the wallet
+        const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
 
-      for (const token of tokens) {
-        const mint = token as unknown as Address
-        const ata = await getAssociatedTokenAccountAddress(mint, walletAddress, TOKEN_PROGRAM_ADDRESS)
+        for (const token of tokens) {
+          const mint = token as unknown as Address
+          const ata = await getAssociatedTokenAccountAddress(mint, walletAddress, TOKEN_PROGRAM_ADDRESS)
+          closeInstructions.push(
+            getCloseAccountInstruction({
+              account: ata,
+              destination: destinationAddress,
+              owner: closeAuthority,
+            }),
+          )
+        }
+      } else if (options.accountAddress) {
+        // JS-style: explicit token account address + destination.
+        const destination = (options.destination ?? options.account ?? '') as unknown as Address
+        if (!destination) {
+          throw new Error('closeAccount() requires a destination address when using accountAddress.')
+        }
         closeInstructions.push(
           getCloseAccountInstruction({
-            account: ata,
-            destination: destinationAddress,
+            account: options.accountAddress as unknown as Address,
+            destination,
             owner: closeAuthority,
           }),
         )
+      } else {
+        throw new Error('closeAccount() requires either accountAddress or account (+ optional tokens).')
       }
-    } else if (options.accountAddress) {
-      // JS-style: explicit token account address + destination.
-      const destination = (options.destination ?? options.account ?? '') as unknown as Address
-      if (!destination) {
-        throw new Error('closeAccount() requires a destination address when using accountAddress.')
-      }
-      closeInstructions.push(
-        getCloseAccountInstruction({
-          account: options.accountAddress as unknown as Address,
-          destination,
-          owner: closeAuthority,
-        }),
-      )
-    } else {
-      throw new Error('closeAccount() requires either accountAddress or account (+ optional tokens).')
+
+      const transaction = createTransaction({
+        version: 'legacy',
+        feePayer,
+        instructions: [...computeInstructions, ...closeInstructions],
+        latestBlockhash,
+      })
+
+      const signedTransaction = await transactionToBase64WithSigners(transaction)
+      return this.client.closeAccount({ signedTransaction })
     }
 
-    const transaction = createTransaction({
-      version: 'legacy',
-      feePayer,
-      instructions: [...computeInstructions, ...closeInstructions],
-      latestBlockhash,
-    })
-
-    const signedTransaction = await transactionToBase64WithSigners(transaction)
-    return this.client.closeAccount({ signedTransaction })
+    return this.#retryOnBlockhashNotFound(execute)
   }
 
   /**
@@ -601,5 +614,21 @@ export class AltudeGasStation {
     return this.client.network === 'devnet'
       ? '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
       : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+  }
+
+  async #retryOnBlockhashNotFound<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!this.#isBlockhashNotFoundError(error)) {
+        throw error
+      }
+      return operation()
+    }
+  }
+
+  #isBlockhashNotFoundError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return /BlockhashNotFound|Blockhash not found/i.test(message)
   }
 }

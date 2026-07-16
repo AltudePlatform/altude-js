@@ -508,6 +508,41 @@ describe('AltudeGasStation facade', () => {
     expect(result.Signature).toBeTruthy()
   })
 
+  it('send retries once when relay returns blockhash not found', async () => {
+    const gs = new AltudeGasStation()
+    const sendTransactionSpy = vi
+      .spyOn(gs.client, 'sendTransaction')
+      .mockRejectedValueOnce(new Error('Transaction simulation failed: Blockhash not found'))
+      .mockResolvedValueOnce({ Signature: 'RetriedSig', Status: 'Success', Message: '' })
+    const signer = {
+      address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(2)),
+    }
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.send({
+      sourceSigner: signer,
+      toAddress: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      amount: 1_000,
+    })
+
+    expect(sendTransactionSpy).toHaveBeenCalledTimes(2)
+    expect(result.Signature).toBe('RetriedSig')
+  })
+
   it('createAccount builds a transaction and relays it (mock mode)', async () => {
     const gs = new AltudeGasStation()
     const createAccountSpy = vi.spyOn(gs.client, 'createAccount')
