@@ -78,9 +78,13 @@ export interface CloseAccountOptions {
 }
 
 export interface GetBalanceOptions {
-  /** Wallet address (base58) */
-  address: string
-  /** SPL token mint address. If omitted, returns SOL balance. */
+  /** Wallet address (base58). Mirrors Android SDK `GetBalanceOption.account`. */
+  account?: string
+  /** Wallet address (base58). Kept for backward compatibility; prefer `account`. */
+  address?: string
+  /** SPL token mint address. Mirrors Android SDK `GetBalanceOption.token`. */
+  token?: string
+  /** SPL token mint address. Kept for backward compatibility; prefer `token`. */
   mint?: string
 }
 
@@ -93,8 +97,10 @@ export interface BalanceResponse {
 }
 
 export interface GetAccountInfoOptions {
-  /** Wallet or account address (base58) */
-  accountAddress: string
+  /** Wallet or account address (base58). Mirrors Android SDK `GetAccountInfoOption.account`. */
+  account?: string
+  /** Wallet or account address (base58). Kept for backward compatibility; prefer `account`. */
+  accountAddress?: string
 }
 
 export interface GetAccountInfoResponse {
@@ -102,12 +108,18 @@ export interface GetAccountInfoResponse {
 }
 
 export interface GetHistoryOptions {
-  /** Page number */
-  page: string | number
-  /** Page size */
-  pageSize: string | number
-  /** Wallet address (base58) */
-  walletAddress: string
+  /** Page number. Kept for backward compatibility. */
+  page?: string | number
+  /** Page size. Kept for backward compatibility. */
+  pageSize?: string | number
+  /** Wallet address (base58). */
+  walletAddress?: string
+  /** Wallet address (base58). Mirrors Android SDK `GetHistoryOption.account`. */
+  account?: string
+  /** Number of records to return. Mirrors Android SDK `GetHistoryOption.limit`. Default 10. */
+  limit?: number
+  /** Number of records to skip. Mirrors Android SDK `GetHistoryOption.offset`. Default 0. */
+  offset?: number
 }
 
 export interface GetHistoryResponse {
@@ -121,10 +133,46 @@ export interface SwapOptions {
   outputMint: string
   /** Amount in lamports / smallest unit */
   amount: number
-  /** Signer's public key */
-  userPublicKey: string
+  /** Signer's public key. Mirrors Android SDK `SwapOption.account`. */
+  account?: string
+  /** Signer's public key. Kept for backward compatibility; prefer `account`. */
+  userPublicKey?: string
   /** Slippage in basis points (default 50 = 0.5%) */
   slippageBps?: number
+  /** Swap mode: "ExactIn" or "ExactOut". Default "ExactIn". Mirrors Android SDK `SwapOption.swapMode`. */
+  swapMode?: string
+  /** DEX names to include (e.g. ["Raydium", "Orca+V2"]). Mirrors Android SDK `SwapOption.dexes`. */
+  dexes?: string[]
+  /** DEX names to exclude. Mirrors Android SDK `SwapOption.excludeDexes`. */
+  excludeDexes?: string[]
+  /** Restrict intermediate tokens to stable tokens. Default true. Mirrors Android SDK `SwapOption.restrictIntermediateTokens`. */
+  restrictIntermediateTokens?: boolean
+  /** Limit to direct (single-hop) routes only. Default false. Mirrors Android SDK `SwapOption.onlyDirectRoutes`. */
+  onlyDirectRoutes?: boolean
+  /** Use legacy (non-versioned) transaction. Default false. Mirrors Android SDK `SwapOption.asLegacyTransaction`. */
+  asLegacyTransaction?: boolean
+  /** Platform fee in basis points. Mirrors Android SDK `SwapOption.platformFeeBps`. */
+  platformFeeBps?: number
+  /** Maximum number of accounts used in the quote. Default 32. Mirrors Android SDK `SwapOption.maxAccounts`. */
+  maxAccounts?: number
+  /** Instruction version: "V1" or "V2". Default "V1". Mirrors Android SDK `SwapOption.instructionVersion`. */
+  instructionVersion?: string
+  /** Dynamic slippage (no longer applicable for /swap). Default false. Mirrors Android SDK `SwapOption.dynamicSlippage`. */
+  dynamicSlippage?: boolean
+  /** Priority level with max lamports. Mirrors Android SDK `SwapOption.priorityLevelWithMaxLamports`. */
+  priorityLevelWithMaxLamports?: PriorityLevelWithMaxLamports
+  /** Transaction commitment level. Mirrors Android SDK `SwapOption.commitment`. */
+  commitment?: 'processed' | 'confirmed' | 'finalized'
+}
+
+/** Priority fee configuration. Mirrors Android SDK `PriorityLevelWithMaxLamports`. */
+export interface PriorityLevelWithMaxLamports {
+  /** Maximum lamports to pay for priority fee. */
+  maxLamports: number
+  /** Priority level (e.g. "medium", "high", "veryHigh"). */
+  priorityLevel: string
+  /** Whether to use global fee estimate. */
+  global: boolean
 }
 
 /** Mirrors Android SDK `TransactionResponse` — all fields are PascalCase as returned by the relay. */
@@ -302,14 +350,16 @@ export class AltudeHttpClient {
   }
 
   async getBalance(options: GetBalanceOptions): Promise<BalanceResponse> {
+    const walletAddress = options.account ?? options.address ?? ''
+    const mintAddress = options.token ?? options.mint ?? ''
     if (this.isMockMode) {
-      return { address: options.address, lamports: 1_000_000_000, uiAmount: 1.0 }
+      return { address: walletAddress, lamports: 1_000_000_000, uiAmount: 1.0 }
     }
     await this.#ensureConfig()
     try {
       return await this.#post<BalanceResponse>('/api/Account/balance', {
-        accountAddress: options.address,
-        mintAddress: options.mint ?? '',
+        accountAddress: walletAddress,
+        mintAddress,
       })
     } catch (err) {
       if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
@@ -317,20 +367,21 @@ export class AltudeHttpClient {
       }
 
       return this.#post<BalanceResponse>('/api/Account/balance', {
-        AccountAddress: options.address,
-        MintAddress: options.mint ?? '',
+        AccountAddress: walletAddress,
+        MintAddress: mintAddress,
       })
     }
   }
 
   async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
+    const addr = options.account ?? options.accountAddress ?? ''
     if (this.isMockMode) {
-      return { accountAddress: options.accountAddress, lamports: 0, executable: false }
+      return { accountAddress: addr, lamports: 0, executable: false }
     }
     await this.#ensureConfig()
     try {
       return await this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', {
-        accountAddress: options.accountAddress,
+        accountAddress: addr,
       })
     } catch (err) {
       if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
@@ -338,21 +389,54 @@ export class AltudeHttpClient {
       }
 
       return this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', {
-        AccountAddress: options.accountAddress,
+        AccountAddress: addr,
       })
     }
   }
 
   async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+    const walletAddr = options.walletAddress ?? options.account ?? ''
+    // Android-style pagination (limit/offset) takes precedence over page/pageSize.
+    const useAndroidStyle = options.limit !== undefined || options.offset !== undefined
     if (this.isMockMode) {
-      return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: options.walletAddress }
+      if (useAndroidStyle) {
+        return {
+          items: [],
+          limit: options.limit ?? 10,
+          offset: options.offset ?? 0,
+          walletAddress: walletAddr,
+        }
+      }
+      return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: walletAddr }
     }
     await this.#ensureConfig()
+    if (useAndroidStyle) {
+      // Android SDK-style: { account, limit, offset, walletAddress }
+      const account = options.account ?? options.walletAddress ?? ''
+      try {
+        return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+          account,
+          limit: options.limit ?? 10,
+          offset: options.offset ?? 0,
+          walletAddress: walletAddr,
+        })
+      } catch (err) {
+        if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+          throw err
+        }
+        return this.#post<GetHistoryResponse>('/api/account/gethistory', {
+          Account: account,
+          Limit: options.limit ?? 10,
+          Offset: options.offset ?? 0,
+          WalletAddress: walletAddr,
+        })
+      }
+    }
     try {
       return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
         page: options.page,
         pageSize: options.pageSize,
-        walletAddress: options.walletAddress,
+        walletAddress: walletAddr,
       })
     } catch (err) {
       if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
@@ -363,7 +447,7 @@ export class AltudeHttpClient {
         return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
           Page: options.page,
           PageSize: options.pageSize,
-          WalletAddress: options.walletAddress,
+          WalletAddress: walletAddr,
         })
       } catch (fallbackErr) {
         if (!(fallbackErr instanceof AltudeError) || fallbackErr.code !== 'RELAY_ERROR') {
@@ -372,9 +456,9 @@ export class AltudeHttpClient {
 
         // Final fallback for relays that still expect query parameters.
         const params = new URLSearchParams({
-          Page: options.page.toString(),
-          PageSize: options.pageSize.toString(),
-          walletAddress: options.walletAddress,
+          Page: options.page?.toString() ?? '',
+          PageSize: options.pageSize?.toString() ?? '',
+          walletAddress: walletAddr,
         })
         return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
       }
@@ -386,8 +470,12 @@ export class AltudeHttpClient {
       return { Signature: 'MockSwapSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
+    // Normalize: `account` (Android SDK) and `userPublicKey` (JS compat) both map to the relay's userPublicKey field.
+    const { account, userPublicKey, ...rest } = options
+    const normalizedUserPublicKey = account ?? userPublicKey
+    const swapBody = { ...rest, userPublicKey: normalizedUserPublicKey }
     try {
-      const response = await this.#post<SwapResponse>('/api/Transaction/swap', options)
+      const response = await this.#post<SwapResponse>('/api/Transaction/swap', swapBody)
       return this.#normalizeTransactionResponse(response)
     } catch (err) {
       if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
@@ -398,7 +486,7 @@ export class AltudeHttpClient {
         InputMint: options.inputMint,
         OutputMint: options.outputMint,
         Amount: options.amount,
-        UserPublicKey: options.userPublicKey,
+        UserPublicKey: normalizedUserPublicKey,
         SlippageBps: options.slippageBps,
       })
       return this.#normalizeTransactionResponse(fallback)

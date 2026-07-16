@@ -23,4 +23,5 @@ export type {
   GetHistoryResponse,
   SwapOptions,
   SwapResponse,
+  PriorityLevelWithMaxLamports,
 } from './client.js'

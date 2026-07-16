@@ -47,14 +47,24 @@ export interface AltudeGasStationConfig {
 }
 
 export interface SendOptions {
-  /** Recipient address (base58) */
-  to: string
+  /** Sender wallet address (base58). Mirrors Android SDK `SendOptions.account`. */
+  account?: string
+  /** Recipient address (base58). Mirrors Android SDK `SendOptions.toAddress`. */
+  toAddress?: string
+  /** Recipient address (base58). Kept for backward compatibility; prefer `toAddress`. */
+  to?: string
   /** Amount in lamports (for SOL) or smallest unit (for tokens) */
   amount: number
   /** SPL token mint. Omit for SOL. */
   token?: string
   /** Transaction commitment level */
   commitment?: 'confirmed' | 'finalized'
+  /** Compute budget options. Mirrors Android SDK `SendOptions.computeOptions`. */
+  computeOptions?: {
+    computeUnitLimit?: number
+    computeUnitPriceMicroLamports?: number
+    heapFrameBytes?: number
+  }
   /** Signer used to build and partially sign the transaction before relay. */
   sourceSigner?: GaslessTransactionSigner
   /** Base64-encoded pre-built signed transaction (optional) */
@@ -100,10 +110,33 @@ export interface CreateAccountResponse {
 }
 
 export interface CloseAccountOptions {
-  /** The token account to close (base58). */
-  accountAddress: string
+  /**
+   * The specific token account to close (base58).
+   * Use with `destination` for a direct single-account close.
+   */
+  accountAddress?: string
   /** Destination address that will receive the reclaimed rent lamports (base58). */
-  destination: string
+  destination?: string
+  /**
+   * Wallet address (base58). Mirrors Android SDK `CloseAccountOption.account`.
+   * When combined with `tokens`, ATAs are auto-discovered and closed.
+   */
+  account?: string
+  /**
+   * Token mints whose associated token accounts should be closed.
+   * Mirrors Android SDK `CloseAccountOption.tokens`. Defaults to USDC.
+   */
+  tokens?: string[]
+  /** Reference passthrough field. Mirrors Android SDK `CloseAccountOption.reference`. */
+  reference?: string
+  /** Commitment for blockhash resolution. Mirrors Android SDK `CloseAccountOption.commitment`. */
+  commitment?: 'processed' | 'confirmed' | 'finalized'
+  /** Compute budget options. Mirrors Android SDK `CloseAccountOption.computeOptions`. */
+  computeOptions?: {
+    computeUnitLimit?: number
+    computeUnitPriceMicroLamports?: number
+    heapFrameBytes?: number
+  }
   /**
    * Authority that can close the account.
    *
@@ -265,12 +298,38 @@ export class AltudeGasStation {
       )
     }
 
+    const destination = options.toAddress ?? options.to
+    if (!destination) {
+      throw new Error('send() requires a recipient address (toAddress or to).')
+    }
+
     const config = await this.getConfig()
     const rpc = await this.getRpcClient()
     const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
     const feePayer = config.FeePayer as unknown as Address
     const sourceSigner = this.#toTransactionSigner(options.sourceSigner)
-    const destination = options.to as unknown as Address
+    const destinationAddress = destination as unknown as Address
+    const computeOptions = options.computeOptions ?? {}
+
+    // Build optional compute budget instructions.
+    const computeInstructions: Instruction[] = []
+    if (options.computeOptions) {
+      computeInstructions.push(
+        getSetComputeUnitLimitInstruction({ units: computeOptions.computeUnitLimit ?? 400_000 }),
+      )
+      if (computeOptions.computeUnitPriceMicroLamports !== undefined) {
+        computeInstructions.push(
+          getSetComputeUnitPriceInstruction({
+            microLamports: BigInt(computeOptions.computeUnitPriceMicroLamports),
+          }),
+        )
+      }
+      if (computeOptions.heapFrameBytes !== undefined) {
+        computeInstructions.push(
+          getRequestHeapFrameInstruction({ bytes: computeOptions.heapFrameBytes }),
+        )
+      }
+    }
 
     let signedTransaction: string
     if (options.token?.trim()) {
@@ -280,19 +339,19 @@ export class AltudeGasStation {
         mint: options.token.trim() as unknown as Address,
         authority: sourceSigner,
         amount: options.amount,
-        destination,
+        destination: destinationAddress,
       })
       signedTransaction = await transactionToBase64WithSigners(transaction)
     } else {
-      const instruction = getTransferSolInstruction({
+      const transferInstruction = getTransferSolInstruction({
         source: sourceSigner,
-        destination,
+        destination: destinationAddress,
         amount: BigInt(options.amount),
       })
       const transaction = createTransaction({
         version: 'legacy',
         feePayer,
-        instructions: [instruction],
+        instructions: [...computeInstructions, transferInstruction],
         latestBlockhash,
       })
       signedTransaction = await transactionToBase64WithSigners(transaction)
@@ -420,16 +479,67 @@ export class AltudeGasStation {
       ? this.#toTransactionSigner(options.signer)
       : createNoopSigner(feePayer)
 
-    const instruction = getCloseAccountInstruction({
-      account: options.accountAddress as unknown as Address,
-      destination: options.destination as unknown as Address,
-      owner: closeAuthority,
-    })
+    // Build optional compute budget instructions.
+    const computeInstructions: Instruction[] = []
+    if (options.computeOptions) {
+      const computeOpts = options.computeOptions
+      computeInstructions.push(
+        getSetComputeUnitLimitInstruction({ units: computeOpts.computeUnitLimit ?? 400_000 }),
+      )
+      if (computeOpts.computeUnitPriceMicroLamports !== undefined) {
+        computeInstructions.push(
+          getSetComputeUnitPriceInstruction({
+            microLamports: BigInt(computeOpts.computeUnitPriceMicroLamports),
+          }),
+        )
+      }
+      if (computeOpts.heapFrameBytes !== undefined) {
+        computeInstructions.push(
+          getRequestHeapFrameInstruction({ bytes: computeOpts.heapFrameBytes }),
+        )
+      }
+    }
+
+    const closeInstructions: Instruction[] = []
+
+    if (options.account && !options.accountAddress) {
+      // Android SDK-style: auto-discover ATAs for the wallet + token list, close each.
+      const walletAddress = options.account as unknown as Address
+      const destinationAddress = walletAddress // rent goes back to the wallet
+      const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
+
+      for (const token of tokens) {
+        const mint = token as unknown as Address
+        const ata = await getAssociatedTokenAccountAddress(mint, walletAddress, TOKEN_PROGRAM_ADDRESS)
+        closeInstructions.push(
+          getCloseAccountInstruction({
+            account: ata,
+            destination: destinationAddress,
+            owner: closeAuthority,
+          }),
+        )
+      }
+    } else if (options.accountAddress) {
+      // JS-style: explicit token account address + destination.
+      const destination = (options.destination ?? options.account ?? '') as unknown as Address
+      if (!destination) {
+        throw new Error('closeAccount() requires a destination address when using accountAddress.')
+      }
+      closeInstructions.push(
+        getCloseAccountInstruction({
+          account: options.accountAddress as unknown as Address,
+          destination,
+          owner: closeAuthority,
+        }),
+      )
+    } else {
+      throw new Error('closeAccount() requires either accountAddress or account (+ optional tokens).')
+    }
 
     const transaction = createTransaction({
       version: 'legacy',
       feePayer,
-      instructions: [instruction],
+      instructions: [...computeInstructions, ...closeInstructions],
       latestBlockhash,
     })
 

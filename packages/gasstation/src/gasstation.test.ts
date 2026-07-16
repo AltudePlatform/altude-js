@@ -68,20 +68,33 @@ describe('AltudeHttpClient — mock mode', () => {
     expect(result.Signature).toBeTruthy()
   })
 
-  it('getBalance returns mock data', async () => {
+  it('getBalance returns mock data (address field)', async () => {
     const client = new AltudeHttpClient()
     const result = await client.getBalance({ address: '11111111111111111111111111111111' })
     expect(result.address).toBe('11111111111111111111111111111111')
     expect(result.lamports).toBeGreaterThan(0)
   })
 
-  it('getAccountInfo returns mock data', async () => {
+  it('getBalance returns mock data (Android-style account field)', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.getBalance({ account: '11111111111111111111111111111111' })
+    expect(result.address).toBe('11111111111111111111111111111111')
+    expect(result.lamports).toBeGreaterThan(0)
+  })
+
+  it('getAccountInfo returns mock data (accountAddress field)', async () => {
     const client = new AltudeHttpClient()
     const result = await client.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
     expect(result.accountAddress).toBe('11111111111111111111111111111111')
   })
 
-  it('getHistory returns mock data', async () => {
+  it('getAccountInfo returns mock data (Android-style account field)', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.getAccountInfo({ account: '11111111111111111111111111111111' })
+    expect(result.accountAddress).toBe('11111111111111111111111111111111')
+  })
+
+  it('getHistory returns mock data (page/pageSize fields)', async () => {
     const client = new AltudeHttpClient()
     const result = await client.getHistory({
       page: 1,
@@ -92,13 +105,37 @@ describe('AltudeHttpClient — mock mode', () => {
     expect(result.pageSize).toBe(10)
   })
 
-  it('swap returns a mock signature', async () => {
+  it('getHistory returns mock data (Android-style limit/offset fields)', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.getHistory({
+      account: '11111111111111111111111111111111',
+      limit: 20,
+      offset: 5,
+    })
+    expect(result.limit).toBe(20)
+    expect(result.offset).toBe(5)
+  })
+
+  it('swap returns a mock signature (userPublicKey field)', async () => {
     const client = new AltudeHttpClient()
     const result = await client.swap({
       inputMint: 'So11111111111111111111111111111111111111112',
       outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
       amount: 1_000_000,
       userPublicKey: '11111111111111111111111111111111',
+    })
+    expect(result.Signature).toBeTruthy()
+  })
+
+  it('swap returns a mock signature (Android-style account field)', async () => {
+    const client = new AltudeHttpClient()
+    const result = await client.swap({
+      inputMint: 'So11111111111111111111111111111111111111112',
+      outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      amount: 1_000_000,
+      account: '11111111111111111111111111111111',
+      swapMode: 'ExactIn',
+      slippageBps: 50,
     })
     expect(result.Signature).toBeTruthy()
   })
@@ -579,5 +616,87 @@ describe('AltudeGasStation facade', () => {
     const callArg = closeAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
     expect(result.Signature).toBeTruthy()
+  })
+
+  it('closeAccount supports Android-style account + tokens (auto-discovers ATAs)', async () => {
+    const gs = new AltudeGasStation()
+    const closeAccountSpy = vi.spyOn(gs.client, 'closeAccount')
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.closeAccount({
+      account: 'So11111111111111111111111111111111111111112',
+      tokens: ['EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'],
+    })
+
+    expect(closeAccountSpy).toHaveBeenCalledOnce()
+    const callArg = closeAccountSpy.mock.calls[0]?.[0]
+    expect(typeof callArg?.signedTransaction).toBe('string')
+    expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
+    expect(result.Signature).toBeTruthy()
+  })
+
+  it('send accepts Android-style toAddress and computeOptions', async () => {
+    const gs = new AltudeGasStation()
+    const sendTransactionSpy = vi.spyOn(gs.client, 'sendTransaction')
+    const signer = {
+      address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(1)),
+    }
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.send({
+      sourceSigner: signer,
+      toAddress: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      amount: 1_000,
+      computeOptions: { computeUnitLimit: 200_000, computeUnitPriceMicroLamports: 5000 },
+    })
+
+    expect(signer.signTransactionMessage).toHaveBeenCalled()
+    expect(sendTransactionSpy).toHaveBeenCalledOnce()
+    expect(result.Signature).toBeTruthy()
+  })
+
+  it('getBalance facade accepts Android-style account field', async () => {
+    const gs = new AltudeGasStation()
+    const result = await gs.getBalance({ account: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71' })
+    expect(result.address).toBeTruthy()
+  })
+
+  it('getAccountInfo facade accepts Android-style account field', async () => {
+    const gs = new AltudeGasStation()
+    const result = await gs.getAccountInfo({ account: '11111111111111111111111111111111' })
+    expect(result.accountAddress).toBe('11111111111111111111111111111111')
+  })
+
+  it('getHistory facade accepts Android-style limit/offset fields', async () => {
+    const gs = new AltudeGasStation()
+    const result = await gs.getHistory({ account: '11111111111111111111111111111111', limit: 15, offset: 0 })
+    expect(result.limit).toBe(15)
   })
 })
