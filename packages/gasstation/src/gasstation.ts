@@ -15,7 +15,7 @@ import type { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
 import { createTransaction, transactionToBase64WithSigners, createNoopSigner } from 'gill'
 import type { Address, Instruction, TransactionSigner } from 'gill'
-import { buildTransferTokensTransaction } from 'gill/programs/token'
+import { buildTransferTokensTransaction, getCreateAssociatedTokenInstructionAsync } from 'gill/programs/token'
 import { getTransferSolInstruction, getCreateAccountInstruction } from 'gill/programs'
 import { getCloseAccountInstruction } from 'gill/programs/token'
 import type {
@@ -56,8 +56,11 @@ export interface SendOptions {
 
 export interface GaslessTransactionSigner {
   address: string
-  signTransactionMessage(txBytes: Uint8Array): Promise<Uint8Array>
-  signMessage(message: Uint8Array): Promise<Uint8Array>
+  /** Preferred Gill-compatible signer method. */
+  signTransactionMessage?: (txBytes: Uint8Array) => Promise<Uint8Array>
+  /** Backward-compatible alias used by some client integrations. */
+  sign?: (txBytes: Uint8Array) => Promise<Uint8Array>
+  signMessage?: (message: Uint8Array) => Promise<Uint8Array>
 }
 
 export interface SerializeInstructionPayloadOptions {
@@ -66,7 +69,7 @@ export interface SerializeInstructionPayloadOptions {
 
 export interface CreateAccountOptions {
   /** The new account's public key (base58). Must match the provided signer's address. */
-  newAccountPubkey: string
+  accountPubkey: string
   /** Space in bytes to allocate (default: 0) */
   space?: number
   /** Program that will own the account (default: System Program) */
@@ -210,7 +213,21 @@ export class AltudeGasStation {
     transactionMessageBytes: Uint8Array,
     signer: GaslessTransactionSigner,
   ): Promise<Uint8Array> {
-    return signer.signTransactionMessage(transactionMessageBytes)
+    return this.sign(transactionMessageBytes, signer)
+  }
+
+  /**
+   * Sign raw transaction message bytes using the provided signer.
+   * Supports both `signTransactionMessage()` and legacy `sign()` methods.
+   */
+  async sign(transactionMessageBytes: Uint8Array, signer: GaslessTransactionSigner): Promise<Uint8Array> {
+    if (signer.signTransactionMessage) {
+      return signer.signTransactionMessage(transactionMessageBytes)
+    }
+    if (signer.sign) {
+      return signer.sign(transactionMessageBytes)
+    }
+    throw new Error('Signer must implement signTransactionMessage(txBytes) or sign(txBytes).')
   }
 
   /** Relay a serialized instruction payload string to the Altude API. */
@@ -242,7 +259,7 @@ export class AltudeGasStation {
     const rpc = await this.getRpcClient()
     const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
     const feePayer = config.FeePayer as unknown as Address
-    const sourceSigner = options.sourceSigner as unknown as TransactionSigner
+    const sourceSigner = this.#toTransactionSigner(options.sourceSigner)
     const destination = options.to as unknown as Address
 
     let signedTransaction: string
@@ -298,17 +315,18 @@ export class AltudeGasStation {
     // The relay (fee payer) pays rent — use a noop signer so the slot stays
     // empty for the relay to fill in server-side.
     const feePayerNoop = createNoopSigner(feePayer)
-    const newAccountSigner = options.signer as unknown as TransactionSigner
+    const owner = this.#toTransactionSigner(options.signer)
 
-    const SYSTEM_PROGRAM_ADDRESS = '11111111111111111111111111111111' as unknown as Address
+    const SYSTEM_PROGRAM_ADDRESS = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' as unknown as Address
     const programAddress = (options.programId ?? SYSTEM_PROGRAM_ADDRESS) as unknown as Address
 
-    const instruction = getCreateAccountInstruction({
+    const instruction = getCreateAssociatedTokenInstructionAsync({ 
       payer: feePayerNoop,
-      newAccount: newAccountSigner,
-      lamports: BigInt(options.lamports),
-      space: BigInt(options.space ?? 0),
-      programAddress,
+      owner: owner.address as unknown as Address,
+      mint: options.mint as unknown as Address,
+      ata: options.newAccountPubkey as unknown as Address,
+      systemProgram: SYSTEM_PROGRAM_ADDRESS,
+      tokenProgram: SYSTEM_PROGRAM_ADDRESS,
     })
 
     const transaction = createTransaction({
@@ -352,7 +370,7 @@ export class AltudeGasStation {
 
     // Resolve the close authority: user-provided signer or noop for relay.
     const closeAuthority: Address | TransactionSigner = options.signer
-      ? (options.signer as unknown as TransactionSigner)
+      ? this.#toTransactionSigner(options.signer)
       : createNoopSigner(feePayer)
 
     const instruction = getCloseAccountInstruction({
@@ -404,5 +422,21 @@ export class AltudeGasStation {
   /** Fetch paginated account history for a wallet address. */
   async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
     return this.client.getHistory(options)
+  }
+
+  #toTransactionSigner(signer: GaslessTransactionSigner): TransactionSigner {
+    const signerAddress = signer.address as unknown as Address
+    const signBytes = (txBytes: Uint8Array) => this.sign(txBytes, signer)
+    return {
+      address: signerAddress,
+      signTransactions: async (transactions: ReadonlyArray<{ messageBytes: Uint8Array }>) => {
+        const signatureDictionaries = await Promise.all(
+          transactions.map(async (transaction) => ({
+            [signerAddress]: await signBytes(transaction.messageBytes as Uint8Array),
+          })),
+        )
+        return signatureDictionaries
+      },
+    } as unknown as TransactionSigner
   }
 }

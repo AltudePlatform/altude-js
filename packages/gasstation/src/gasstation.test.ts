@@ -388,6 +388,36 @@ describe('AltudeGasStation facade', () => {
     expect(result).toEqual(signature)
   })
 
+  it('sign delegates to signTransactionMessage when available', async () => {
+    const gs = new AltudeGasStation()
+    const signature = new Uint8Array([4, 3, 2, 1])
+    const signer = {
+      address: '11111111111111111111111111111111',
+      signTransactionMessage: vi.fn().mockResolvedValue(signature),
+    }
+    const txMessage = new Uint8Array([1, 9, 9])
+
+    const result = await gs.sign(txMessage, signer)
+
+    expect(signer.signTransactionMessage).toHaveBeenCalledWith(txMessage)
+    expect(result).toEqual(signature)
+  })
+
+  it('partialSignTransactionMessage supports legacy sign() signer fallback', async () => {
+    const gs = new AltudeGasStation()
+    const signature = new Uint8Array([7, 7, 7])
+    const signer = {
+      address: '11111111111111111111111111111111',
+      sign: vi.fn().mockResolvedValue(signature),
+    }
+    const txMessage = new Uint8Array([5, 6, 7])
+
+    const result = await gs.partialSignTransactionMessage(txMessage, signer)
+
+    expect(signer.sign).toHaveBeenCalledWith(txMessage)
+    expect(result).toEqual(signature)
+  })
+
   it('sendSerializedInstructionPayload relays payload through batch endpoint', async () => {
     const gs = new AltudeGasStation()
     const sendBatchSpy = vi.spyOn(gs, 'sendBatchTransaction')
@@ -405,6 +435,40 @@ describe('AltudeGasStation facade', () => {
 
     expect(result.Signature).toBeTruthy()
     expect(sendBatchTransactionSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
+  })
+
+  it('send partially signs on client side before relaying', async () => {
+    const gs = new AltudeGasStation()
+    const sendTransactionSpy = vi.spyOn(gs.client, 'sendTransaction')
+    const signer = {
+      address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(1)),
+    }
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.send({
+      sourceSigner: signer,
+      to: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      amount: 1_000,
+    })
+
+    expect(signer.signTransactionMessage).toHaveBeenCalled()
+    expect(sendTransactionSpy).toHaveBeenCalledOnce()
+    expect(sendTransactionSpy.mock.calls[0]?.[0]?.transaction.length).toBeGreaterThan(0)
+    expect(result.Signature).toBeTruthy()
   })
 
   it('createAccount builds a transaction and relays it (mock mode)', async () => {
@@ -441,6 +505,7 @@ describe('AltudeGasStation facade', () => {
     })
 
     expect(createAccountSpy).toHaveBeenCalledOnce()
+    expect(signer.signTransactionMessage).toHaveBeenCalled()
     const callArg = createAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
     expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
@@ -511,6 +576,7 @@ describe('AltudeGasStation facade', () => {
     })
 
     expect(closeAccountSpy).toHaveBeenCalledOnce()
+    expect(signer.signTransactionMessage).toHaveBeenCalled()
     const callArg = closeAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
     expect(result.Signature).toBeTruthy()

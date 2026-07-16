@@ -191,7 +191,4 @@ export const SOLANA_DERIVATION_PATH = "m/44'/501'/0'/0'" as const
 
 export const ALTUDE_FEE_PAYER = 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71' as const
 
-export const ALTUDE_API_URLS = {
-  mainnet: 'https://api.altude.so',
-  devnet: 'https://api.altude.so',
-} as const
+export const ALTUDE_API_URL = 'https://api.altude.so'

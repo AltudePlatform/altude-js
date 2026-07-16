@@ -14,7 +14,7 @@
  * Fee payer: ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71
  */
 
-import { AltudeError, ALTUDE_API_URLS, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
+import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 
 export { ALTUDE_FEE_PAYER }
@@ -47,6 +47,9 @@ export interface SendTransactionResponse {
   Signature: string
   Status?: string
   Message?: string
+  signature?: string
+  status?: string
+  message?: string
 }
 
 export interface BatchTransactionOptions {
@@ -64,6 +67,9 @@ export interface CreateAccountResponse {
   Signature: string
   Status?: string
   Message?: string
+  signature?: string
+  status?: string
+  message?: string
 }
 
 export interface CloseAccountOptions {
@@ -126,6 +132,9 @@ export interface SwapResponse {
   Signature: string
   Status?: string
   Message?: string
+  signature?: string
+  status?: string
+  message?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +143,7 @@ export interface SwapResponse {
 
 export class AltudeHttpClient {
   readonly apiKey: string | undefined
-  readonly baseUrl: string
+  readonly baseUrl: string = ALTUDE_API_URL
   readonly isMockMode: boolean
   readonly network: SolanaNetwork
   #configCache: ConfigResponse | undefined
@@ -144,7 +153,7 @@ export class AltudeHttpClient {
   constructor(apiKey?: string, baseUrl?: string, network: SolanaNetwork = 'mainnet-beta') {
     this.apiKey = apiKey
     this.network = network
-    this.baseUrl = baseUrl ?? ALTUDE_API_URLS[network === 'mainnet-beta' ? 'mainnet' : 'devnet']
+    this.baseUrl = baseUrl ?? ALTUDE_API_URL
     this.isMockMode = !apiKey
     if (!this.isMockMode) {
       this.#configPromise = this.#loadConfig()
@@ -184,7 +193,11 @@ export class AltudeHttpClient {
     // #loadConfig() sets #rpcClient from config.RpcUrl; just ensure it ran.
     await this.#ensureConfig()
     // Fallback should never be reached, but keeps TypeScript happy.
-    this.#rpcClient ??= createAltudeClient({ network: this.network })
+    this.#rpcClient ??= createAltudeClient({
+      network: this.network,
+      ...(this.#configCache?.RpcUrl ? { rpcUrl: this.#configCache.RpcUrl } : {}),
+      ...(this.#configCache?.Token ? { rpcToken: this.#configCache.Token } : {}),
+    })
     return this.#rpcClient
   }
 
@@ -201,9 +214,21 @@ export class AltudeHttpClient {
       return { Signature: 'MockSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    return this.#post<SendTransactionResponse>('/api/Transaction/send', {
-      SignedTransaction: options.transaction,
-    })
+    try {
+      const response = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
+        SignedTransaction: options.transaction,
+      })
+      return this.#normalizeTransactionResponse(response)
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      const fallback = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
+        transaction: options.transaction,
+      })
+      return this.#normalizeTransactionResponse(fallback)
+    }
   }
 
   async sendBatchTransaction(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
@@ -211,9 +236,21 @@ export class AltudeHttpClient {
       return { Signature: 'MockBatchSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    return this.#post<SendTransactionResponse>('/api/transaction/sendbatch', {
-      SignedTransaction: options.signedTransaction,
-    })
+    try {
+      const response = await this.#post<SendTransactionResponse>('/api/transaction/sendbatch', {
+        signedTransaction: options.signedTransaction,
+      })
+      return this.#normalizeTransactionResponse(response)
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      const fallback = await this.#post<SendTransactionResponse>('/api/transaction/sendbatch', {
+        SignedTransaction: options.signedTransaction,
+      })
+      return this.#normalizeTransactionResponse(fallback)
+    }
   }
 
   async sendBatch(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
@@ -225,9 +262,21 @@ export class AltudeHttpClient {
       return { Signature: 'MockAccountSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    return this.#post<CreateAccountResponse>('/api/Account/create', {
-      SignedTransaction: options.signedTransaction,
-    })
+    try {
+      const response = await this.#post<CreateAccountResponse>('/api/Account/create', {
+        signedTransaction: options.signedTransaction,
+      })
+      return this.#normalizeTransactionResponse(response)
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      const fallback = await this.#post<CreateAccountResponse>('/api/Account/create', {
+        SignedTransaction: options.signedTransaction,
+      })
+      return this.#normalizeTransactionResponse(fallback)
+    }
   }
 
   async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
@@ -235,9 +284,21 @@ export class AltudeHttpClient {
       return { Signature: 'MockCloseAccountSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    return this.#post<SendTransactionResponse>('/api/account/close', {
-      SignedTransaction: options.signedTransaction,
-    })
+    try {
+      const response = await this.#post<SendTransactionResponse>('/api/account/close', {
+        signedTransaction: options.signedTransaction,
+      })
+      return this.#normalizeTransactionResponse(response)
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      const fallback = await this.#post<SendTransactionResponse>('/api/account/close', {
+        SignedTransaction: options.signedTransaction,
+      })
+      return this.#normalizeTransactionResponse(fallback)
+    }
   }
 
   async getBalance(options: GetBalanceOptions): Promise<BalanceResponse> {
@@ -245,10 +306,21 @@ export class AltudeHttpClient {
       return { address: options.address, lamports: 1_000_000_000, uiAmount: 1.0 }
     }
     await this.#ensureConfig()
-    return this.#post<BalanceResponse>('/api/Account/balance', {
-      accountAddress: options.address,
-      mintAddress: options.mint ?? '',
-    })
+    try {
+      return await this.#post<BalanceResponse>('/api/Account/balance', {
+        accountAddress: options.address,
+        mintAddress: options.mint ?? '',
+      })
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      return this.#post<BalanceResponse>('/api/Account/balance', {
+        AccountAddress: options.address,
+        MintAddress: options.mint ?? '',
+      })
+    }
   }
 
   async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
@@ -256,7 +328,19 @@ export class AltudeHttpClient {
       return { accountAddress: options.accountAddress, lamports: 0, executable: false }
     }
     await this.#ensureConfig()
-    return this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', options)
+    try {
+      return await this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', {
+        accountAddress: options.accountAddress,
+      })
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      return this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', {
+        AccountAddress: options.accountAddress,
+      })
+    }
   }
 
   async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
@@ -264,12 +348,37 @@ export class AltudeHttpClient {
       return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: options.walletAddress }
     }
     await this.#ensureConfig()
-    const params = new URLSearchParams({
-      Page: options.page.toString(),
-      PageSize: options.pageSize.toString(),
-      walletAddress: options.walletAddress,
-    })
-    return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
+    try {
+      return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+        page: options.page,
+        pageSize: options.pageSize,
+        walletAddress: options.walletAddress,
+      })
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      try {
+        return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+          Page: options.page,
+          PageSize: options.pageSize,
+          WalletAddress: options.walletAddress,
+        })
+      } catch (fallbackErr) {
+        if (!(fallbackErr instanceof AltudeError) || fallbackErr.code !== 'RELAY_ERROR') {
+          throw fallbackErr
+        }
+
+        // Final fallback for relays that still expect query parameters.
+        const params = new URLSearchParams({
+          Page: options.page.toString(),
+          PageSize: options.pageSize.toString(),
+          walletAddress: options.walletAddress,
+        })
+        return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
+      }
+    }
   }
 
   async swap(options: SwapOptions): Promise<SwapResponse> {
@@ -277,7 +386,33 @@ export class AltudeHttpClient {
       return { Signature: 'MockSwapSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    return this.#post<SwapResponse>('/api/Transaction/swap', options)
+    try {
+      const response = await this.#post<SwapResponse>('/api/Transaction/swap', options)
+      return this.#normalizeTransactionResponse(response)
+    } catch (err) {
+      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+        throw err
+      }
+
+      const fallback = await this.#post<SwapResponse>('/api/Transaction/swap', {
+        InputMint: options.inputMint,
+        OutputMint: options.outputMint,
+        Amount: options.amount,
+        UserPublicKey: options.userPublicKey,
+        SlippageBps: options.slippageBps,
+      })
+      return this.#normalizeTransactionResponse(fallback)
+    }
+  }
+
+  #normalizeTransactionResponse<T extends SendTransactionResponse>(response: T): T {
+    const normalized = {
+      ...response,
+      Signature: response.Signature ?? response.signature ?? '',
+      Status: response.Status ?? response.status,
+      Message: response.Message ?? response.message,
+    }
+    return normalized as T
   }
 
   // ---------------------------------------------------------------------------
@@ -344,7 +479,11 @@ export class AltudeHttpClient {
     const config = await this.#get<ConfigResponse>('/api/transaction/config')
     this.#configCache = config
     // Initialise the RPC client from the relay-resolved RpcUrl (mirrors Android SDK behaviour).
-    this.#rpcClient = createAltudeClient({ rpcUrl: config.RpcUrl, network: this.network })
+    this.#rpcClient = createAltudeClient({
+      rpcUrl: config.RpcUrl,
+      network: this.network,
+      ...(config.Token ? { rpcToken: config.Token } : {}),
+    })
     return config
   }
 

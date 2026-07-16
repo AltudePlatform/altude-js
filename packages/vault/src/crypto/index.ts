@@ -12,7 +12,9 @@
  */
 
 import type { CryptoEnvelope } from '@altude/core'
-import type * as NodeCrypto from 'node:crypto'
+import * as nodeCrypto from 'node:crypto'
+
+type NodeCryptoModule = typeof nodeCrypto
 
 // OWS-mandated scrypt parameters (production)
 const SCRYPT_N_PROD = 65536
@@ -197,7 +199,7 @@ export async function randomHex(n: number): Promise<string> {
 async function deriveKeyScrypt(
   passphrase: string,
   salt: Buffer,
-  crypto: typeof NodeCrypto,
+  crypto: NodeCryptoModule,
   n: number = SCRYPT_N,
 ): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
@@ -217,7 +219,7 @@ async function deriveKeyScrypt(
 function deriveKeyHkdf(
   token: string,
   salt: Buffer,
-  crypto: typeof NodeCrypto,
+  crypto: NodeCryptoModule,
 ): Buffer {
   // HKDF-SHA256: extract then expand
   const prk = crypto.createHmac('sha256', salt).update(token).digest()
@@ -231,7 +233,6 @@ function deriveKeyHkdf(
   return t1.subarray(0, SCRYPT_DKLEN)
 }
 
-function importNodeCrypto(): typeof NodeCrypto {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('node:crypto') as typeof NodeCrypto
+function importNodeCrypto(): NodeCryptoModule {
+  return nodeCrypto
 }
