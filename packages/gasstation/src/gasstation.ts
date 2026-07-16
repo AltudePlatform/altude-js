@@ -335,7 +335,7 @@ export class AltudeGasStation {
     const computeOptions = options.computeOptions ?? {}
     const computeInstructions: Instruction[] = [
       getSetComputeUnitLimitInstruction({
-        units: BigInt(computeOptions.computeUnitLimit ?? 400_000),
+        units: computeOptions.computeUnitLimit ?? 400_000,
       }),
       ...(computeOptions.computeUnitPriceMicroLamports !== undefined
         ? [
@@ -347,7 +347,7 @@ export class AltudeGasStation {
       ...(computeOptions.heapFrameBytes !== undefined
         ? [
             getRequestHeapFrameInstruction({
-              bytes: Number(computeOptions.heapFrameBytes),
+              bytes: computeOptions.heapFrameBytes,
             }),
           ]
         : []),
@@ -479,7 +479,7 @@ export class AltudeGasStation {
       signTransactions: async (transactions: ReadonlyArray<{ messageBytes: Uint8Array }>) => {
         const signatureDictionaries = await Promise.all(
           transactions.map(async (transaction) => ({
-            [signerAddress]: await signBytes(transaction.messageBytes as Uint8Array),
+            [signerAddress]: await signBytes(transaction.messageBytes),
           })),
         )
         return signatureDictionaries
