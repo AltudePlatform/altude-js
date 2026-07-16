@@ -117,8 +117,9 @@ pnpm typecheck
 ## Releases
 
 - CI runs on every PR and push via `.github/workflows/ci.yml`.
-- Publishing is automated by `.github/workflows/release.yml` on every merge to `main`.
-- Configure npm credentials in a repository secret named `NPM_TOKEN` (used as `NODE_AUTH_TOKEN` by the release job).
+- PRs that change publishable packages must include a Changeset; CI verifies this before merge.
+- Publishing is automated by `.github/workflows/release.yml` on every merge to `main`, and the workflow can also be re-run manually with `workflow_dispatch`.
+- Configure npm credentials in a repository secret named `NPM_TOKEN`; the release job exposes it to pnpm/npm as `NODE_AUTH_TOKEN`.
 - Version bumps are handled with Changesets. Add a changeset in feature PRs (`pnpm changeset`) and the release workflow will:
   - open/update a release PR with incremented versions and changelogs
   - publish to npm and create release tags when that release PR is merged to `main`
