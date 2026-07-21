@@ -1,6 +1,6 @@
 {
   "name": "altude-js",
-  "version": "0.0.0",
+  "version": "0.0.0-alpha1",
   "private": true,
   "description": "Altude TypeScript SDK for Solana — OWS-conformant wallet infrastructure",
   "scripts": {
