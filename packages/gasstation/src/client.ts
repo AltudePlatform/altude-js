@@ -44,7 +44,7 @@ export interface SendTransactionOptions {
 
 /** Mirrors Android SDK `TransactionResponse` — all fields are PascalCase as returned by the relay. */
 export interface SendTransactionResponse {
-  Signature: string
+  Signature?: string
   Status?: string
   Message?: string
   signature?: string
@@ -500,7 +500,7 @@ export class AltudeHttpClient {
       Status: response.Status ?? response.status,
       Message: response.Message ?? response.message,
     }
-    return normalized as T
+    return normalized
   }
 
   // ---------------------------------------------------------------------------
