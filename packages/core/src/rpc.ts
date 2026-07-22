@@ -14,11 +14,17 @@ const RPC_URLS: Record<SolanaNetwork, string> = {
   testnet: 'https://api.testnet.solana.com',
 }
 
+type SolanaRpcHeaders = NonNullable<NonNullable<Parameters<typeof _createSolanaClient>[0]['rpcConfig']>['headers']>
+
 export interface AltudeClientConfig {
   network?: SolanaNetwork
   rpcUrl?: string
   /** Altude API key — used to route through the Altude relay when provided. */
   apiKey?: string
+  /** Optional bearer token used to authorize RPC calls. */
+  rpcToken?: string
+  /** Additional headers to include on all RPC calls. */
+  rpcHeaders?: SolanaRpcHeaders
 }
 
 /**
@@ -33,6 +39,17 @@ export function createAltudeClient(config: AltudeClientConfig = {}) {
   const network: SolanaNetwork = config.network ?? 'mainnet-beta'
   const envUrl = typeof process !== 'undefined' ? process.env['ALTUDE_RPC_URL'] : undefined
   const url = config.rpcUrl ?? envUrl ?? RPC_URLS[network]
+  const headers: SolanaRpcHeaders = config.rpcToken?.trim()
+    ? {
+        ...(config.rpcHeaders ?? {}),
+        Authorization: config.rpcToken.startsWith('Bearer ')
+          ? config.rpcToken
+          : `Bearer ${config.rpcToken}`,
+      }
+    : (config.rpcHeaders ?? {})
 
-  return _createSolanaClient({ urlOrMoniker: url })
+  return _createSolanaClient({
+    urlOrMoniker: url,
+    ...(Object.keys(headers).length > 0 ? { rpcConfig: { headers } } : {}),
+  })
 }

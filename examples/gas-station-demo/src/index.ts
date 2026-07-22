@@ -81,6 +81,21 @@ async function main() {
   console.log('✓ Demo complete.')
   console.log('  To relay a real transaction, build it using @altude/solana-adapter,')
   console.log('  sign it with vault.sign(), then call gasStation.send({ signedTransaction }).')
+  console.log('')
+  console.log('  Example — sponsored account creation (mirrors Android SDK flow):')
+  console.log('  ----------------------------------------------------------------')
+  console.log('  // 1. Derive a GaslessTransactionSigner from your vault wallet')
+  console.log('  // 2. Call gasStation.createAccount({ account, tokens, commitment, computeOptions }, signer)')
+  console.log('  //    → SDK builds SystemProgram.createAccount instruction (feePayer as payer)')
+  console.log('  //    → SDK partial-signs with the new account signer')
+  console.log('  //    → SDK relays partially-signed tx; relay adds feePayer signature')
+  console.log('')
+  console.log('  Example — close a token account:')
+  console.log('  ----------------------------------------------------------------')
+  console.log('  // When feePayer is the close authority (set at creation):')
+  console.log('  //   gasStation.closeAccount({ accountAddress, destination })')
+  console.log('  // When the user is the close authority:')
+  console.log('  //   gasStation.closeAccount({ accountAddress, destination, signer })')
 }
 
 main().catch((err) => {

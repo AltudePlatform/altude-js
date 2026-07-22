@@ -15,10 +15,6 @@
  *   ~/.ows/policies/*.json -rw-r--r-- (644)
  */
 
-import type * as NodeOs from 'node:os'
-import type * as NodePath from 'node:path'
-import type * as NodeFsPromises from 'node:fs/promises'
-
 export interface VaultStorage {
   /** Read a file. Returns null if not found. */
   read(path: string): Promise<string | null>
@@ -40,28 +36,38 @@ export class NodeVaultStorage implements VaultStorage {
   readonly vaultPath: string
 
   constructor(vaultPath?: string) {
-    // Resolve ~/ lazily so this file can be imported in any env; the actual
-    // Node.js os/fs modules are only accessed at call time.
+    // Keep default path derivation dependency-free so ESM builds do not rely
+    // on CommonJS require shims.
     this.vaultPath = vaultPath ?? this.#defaultVaultPath()
   }
 
   #defaultVaultPath(): string {
-    // Use dynamic require-style access to avoid bundler issues
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const os = require('node:os') as typeof NodeOs
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(os.homedir(), '.ows')
+    const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.'
+    return this.#join(home, '.ows')
   }
 
-  #fsp() {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('node:fs/promises') as typeof NodeFsPromises
+  async #fsp() {
+    return import('node:fs/promises')
+  }
+
+  #join(...parts: string[]): string {
+    return parts
+      .filter((p) => p.length > 0)
+      .join('/')
+      .replace(/[\\/]+/g, '/')
+  }
+
+  #dirname(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/')
+    const idx = normalized.lastIndexOf('/')
+    if (idx <= 0) return idx === 0 ? '/' : '.'
+    return normalized.slice(0, idx)
   }
 
   async read(filePath: string): Promise<string | null> {
+    const fsp = await this.#fsp()
     try {
-      return await this.#fsp().readFile(filePath, 'utf-8')
+      return await fsp.readFile(filePath, 'utf-8')
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === 'ENOENT') return null
       throw err
@@ -69,23 +75,23 @@ export class NodeVaultStorage implements VaultStorage {
   }
 
   async write(filePath: string, data: string): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    const dir = path.dirname(filePath)
-    await this.#fsp().mkdir(dir, { recursive: true })
+    const fsp = await this.#fsp()
+    const dir = this.#dirname(filePath)
+    await fsp.mkdir(dir, { recursive: true })
 
     // Determine permission mode from the path
     const mode = this.#modeFor(filePath)
-    await this.#fsp().writeFile(filePath, data, { encoding: 'utf-8', mode })
+    await fsp.writeFile(filePath, data, { encoding: 'utf-8', mode })
 
     // Enforce directory permissions
     const dirMode = this.#dirModeFor(dir)
-    await this.#fsp().chmod(dir, dirMode)
+    await fsp.chmod(dir, dirMode)
   }
 
   async delete(filePath: string): Promise<void> {
+    const fsp = await this.#fsp()
     try {
-      await this.#fsp().unlink(filePath)
+      await fsp.unlink(filePath)
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === 'ENOENT') return
       throw err
@@ -93,8 +99,9 @@ export class NodeVaultStorage implements VaultStorage {
   }
 
   async list(dir: string): Promise<string[]> {
+    const fsp = await this.#fsp()
     try {
-      return await this.#fsp().readdir(dir)
+      return await fsp.readdir(dir)
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === 'ENOENT') return []
       throw err
@@ -103,13 +110,11 @@ export class NodeVaultStorage implements VaultStorage {
 
   async checkPermissions(): Promise<void> {
     const { vaultPermissionError } = await import('@altude/core')
-    const fsp = this.#fsp()
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
+    const fsp = await this.#fsp()
 
     const sensitiveSubdirs = ['wallets', 'keys']
     for (const sub of sensitiveSubdirs) {
-      const dir = path.join(this.vaultPath, sub)
+      const dir = this.#join(this.vaultPath, sub)
       try {
         const stat = await fsp.stat(dir)
         // 0o700 = 448 decimal
@@ -124,7 +129,7 @@ export class NodeVaultStorage implements VaultStorage {
       // Check individual files inside
       const entries = await this.list(dir)
       for (const entry of entries) {
-        const filePath = path.join(dir, entry)
+        const filePath = this.#join(dir, entry)
         const stat = await fsp.stat(filePath)
         if ((stat.mode & 0o777) !== 0o600) {
           throw vaultPermissionError(filePath)
@@ -134,9 +139,7 @@ export class NodeVaultStorage implements VaultStorage {
   }
 
   #modeFor(filePath: string): number {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    const rel = filePath.replace(this.vaultPath + path.sep, '')
+    const rel = filePath.replace(/\\/g, '/').replace(this.vaultPath.replace(/\\/g, '/') + '/', '')
     if (rel.startsWith('policies')) return 0o644
     return 0o600
   }
@@ -148,39 +151,27 @@ export class NodeVaultStorage implements VaultStorage {
 
   /** Full path helpers used by the vault manager. */
   walletPath(id: string): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(this.vaultPath, 'wallets', `${id}.json`)
+    return this.#join(this.vaultPath, 'wallets', `${id}.json`)
   }
 
   walletsDir(): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(this.vaultPath, 'wallets')
+    return this.#join(this.vaultPath, 'wallets')
   }
 
   keyPath(id: string): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(this.vaultPath, 'keys', `${id}.json`)
+    return this.#join(this.vaultPath, 'keys', `${id}.json`)
   }
 
   keysDir(): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(this.vaultPath, 'keys')
+    return this.#join(this.vaultPath, 'keys')
   }
 
   policyPath(id: string): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(this.vaultPath, 'policies', `${id}.json`)
+    return this.#join(this.vaultPath, 'policies', `${id}.json`)
   }
 
   auditLogPath(): string {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof NodePath
-    return path.join(this.vaultPath, 'logs', 'audit.jsonl')
+    return this.#join(this.vaultPath, 'logs', 'audit.jsonl')
   }
 }
 

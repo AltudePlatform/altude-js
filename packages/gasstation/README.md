@@ -1,0 +1,68 @@
+# @altude/gasstation
+
+Gasless Solana transaction relay via the Altude relay API.
+
+`@altude/gasstation` lets you build, submit, and query Solana transactions where
+the Altude relay pays the network fee. It works with any signer (including
+[`@altude/vault`](https://www.npmjs.com/package/@altude/vault) via
+[`@altude/solana-adapter`](https://www.npmjs.com/package/@altude/solana-adapter))
+and with pre-signed transaction bytes.
+
+## Install
+
+```bash
+pnpm add @altude/gasstation
+# or
+npm install @altude/gasstation
+```
+
+You'll need an Altude API key. Get one at
+[altude.io](https://altude.io) (or set `ALTUDE_API_KEY_DEVNET` for devnet
+testing).
+
+## Usage
+
+```typescript
+import { AltudeGasStation } from '@altude/gasstation'
+
+const gasStation = new AltudeGasStation({
+  apiKey: process.env.ALTUDE_API_KEY!,
+  network: 'devnet',
+})
+
+// Recent blockhash from the relay
+const { blockhash } = await gasStation.getBlockhash()
+
+// Native + SPL balances
+const balance = await gasStation.getBalance({
+  address: 'YOUR_WALLET_ADDRESS',
+})
+console.log('Balance:', balance.uiAmount, 'SOL')
+
+// Send a gasless SOL transfer (SDK builds + signs the transaction)
+const sig = await gasStation.send({
+  sourceSigner: yourSigner,
+  destination: 'RECIPIENT_ADDRESS',
+  lamports: 1_000_000n,
+})
+
+// Or pass a fully signed transaction (relay only submits it)
+const sig2 = await gasStation.send({
+  signedTransaction: preSignedTxBytes,
+})
+```
+
+## What's included
+
+- `AltudeGasStation` — high-level client (`send`, `createAccount`, `closeAccount`,
+  `getBalance`, `getAccountInfo`, `getHistory`, `swap`, `getBlockhash`, …).
+- `AltudeHttpClient`, `createAltudeDevnetClient`, `createAltudeMainnetClient`
+  — low-level HTTP client for the relay API.
+- `ALTUDE_FEE_PAYER` — the relay's fee-payer address.
+
+See the [monorepo README](https://github.com/AltudePlatform/altude-js) for the full
+SDK overview.
+
+## License
+
+MIT
