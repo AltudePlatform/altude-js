@@ -41,7 +41,12 @@
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AltudePlatform/altude-js"
+  },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }
