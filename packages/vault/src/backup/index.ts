@@ -158,7 +158,8 @@ async function extractTar(tarBuffer: Buffer, destDir: string): Promise<void> {
   const fsp = await import('node:fs/promises')
   const path = await import('node:path')
 
-  await fsp.mkdir(destDir, { recursive: true })
+  const destinationRoot = path.resolve(destDir)
+  await fsp.mkdir(destinationRoot, { recursive: true })
 
   let offset = 0
   while (offset + 512 <= tarBuffer.length) {
@@ -178,7 +179,23 @@ async function extractTar(tarBuffer: Buffer, destDir: string): Promise<void> {
     const content = tarBuffer.subarray(offset, offset + size)
     offset += Math.ceil(size / 512) * 512
 
-    const fullPath = path.join(destDir, name)
+    const normalizedName = name.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')
+    const isWindowsDrivePath = /^[A-Za-z]:\//.test(normalizedName)
+    if (!normalizedName || normalizedName.startsWith('/') || isWindowsDrivePath) {
+      throw new Error(`Invalid archive entry path: ${name}`)
+    }
+
+    const fullPath = path.resolve(destinationRoot, normalizedName)
+    const relativePath = path.relative(destinationRoot, fullPath)
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+      throw new Error(`Archive entry escapes destination: ${name}`)
+    }
+
+    if (normalizedName.endsWith('/')) {
+      await fsp.mkdir(fullPath, { recursive: true })
+      continue
+    }
+
     await fsp.mkdir(path.dirname(fullPath), { recursive: true })
     await fsp.writeFile(fullPath, content, { mode: 0o600 })
   }
