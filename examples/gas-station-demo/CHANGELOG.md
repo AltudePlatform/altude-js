@@ -1,5 +1,15 @@
 # gas-station-demo
 
+## 0.0.3
+
+### Patch Changes
+
+- Updated dependencies [572e582]
+  - @altude/core@0.0.2
+  - @altude/gasstation@0.0.2
+  - @altude/solana-adapter@0.0.1
+  - @altude/vault@0.0.1
+
 ## 0.0.2
 
 ### Patch Changes
