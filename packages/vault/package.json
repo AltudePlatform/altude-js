@@ -1,7 +1,7 @@
 {
   "name": "@altude/vault",
   "version": "0.0.0",
-  "description": "OWS-conformant encrypted key vault — TypeScript implementation of the Open Wallet Standard",
+  "description": "OWS-conformant encrypted key vault \u2014 TypeScript implementation of the Open Wallet Standard",
   "keywords": [
     "solana",
     "altude",
@@ -44,6 +44,11 @@
     "vitest": "^2.1.8"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AltudePlatform/altude-js"
   }
 }
