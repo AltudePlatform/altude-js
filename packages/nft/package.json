@@ -1,7 +1,7 @@
 {
   "name": "@altude/nft",
-  "version": "0.0.0",
-  "description": "Gasless NFT operations on Solana \u2014 Metaplex Core, compressed NFTs, DAS API",
+  "version": "0.0.1",
+  "description": "Gasless NFT operations on Solana — Metaplex Core, compressed NFTs, DAS API",
   "keywords": [
     "solana",
     "altude",

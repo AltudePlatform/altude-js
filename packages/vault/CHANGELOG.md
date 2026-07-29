@@ -1,5 +1,13 @@
 # @altude/vault
 
+## 0.0.1
+
+### Patch Changes
+
+- c65c42b: Add repository metadata and npm provenance publishing configuration to the published packages.
+- Updated dependencies [c65c42b]
+  - @altude/core@0.0.1
+
 ## 0.0.0
 
 ### Patch Changes
