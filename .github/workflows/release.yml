@@ -57,6 +57,9 @@ jobs:
           ALTUDE_SCRYPT_N: '16384'
 
       - name: Create release PR or publish
+        # Authentication uses npm Trusted Publishing (OIDC) — no NPM_TOKEN needed.
+        # Each @altude/* package must have a Trusted Publisher configured on npmjs.com
+        # (Settings > Trusted Publishers > Add) pointing to this repo + workflow file.
         uses: changesets/action@v1
         with:
           version: pnpm version-packages
