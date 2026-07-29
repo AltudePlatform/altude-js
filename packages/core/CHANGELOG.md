@@ -1,5 +1,11 @@
 # @altude/core
 
+## 0.0.1
+
+### Patch Changes
+
+- c65c42b: Add repository metadata and npm provenance publishing configuration to the published packages.
+
 ## 0.0.0
 
 ### Minor Changes

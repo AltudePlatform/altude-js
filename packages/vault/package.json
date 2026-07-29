@@ -1,7 +1,7 @@
 {
   "name": "@altude/vault",
-  "version": "0.0.0",
-  "description": "OWS-conformant encrypted key vault \u2014 TypeScript implementation of the Open Wallet Standard",
+  "version": "0.0.1",
+  "description": "OWS-conformant encrypted key vault — TypeScript implementation of the Open Wallet Standard",
   "keywords": [
     "solana",
     "altude",

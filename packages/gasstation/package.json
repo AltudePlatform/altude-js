@@ -1,6 +1,6 @@
 {
   "name": "@altude/gasstation",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Gasless Solana transaction relay via the Altude relay API",
   "keywords": [
     "solana",
