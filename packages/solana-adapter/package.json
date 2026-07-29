@@ -1,6 +1,6 @@
 {
   "name": "@altude/solana-adapter",
-  "version": "0.0.0-alpha1",
+  "version": "0.0.0",
   "description": "Bridge between the @altude/vault OWS vault and Gill / @solana/web3.js signer interfaces",
   "keywords": [
     "solana",
