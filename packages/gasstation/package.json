@@ -1,8 +1,14 @@
 {
   "name": "@altude/gasstation",
-  "version": "0.0.0-alpha1",
+  "version": "0.0.0",
   "description": "Gasless Solana transaction relay via the Altude relay API",
-  "keywords": ["solana", "altude", "gasless", "relay", "gas-station"],
+  "keywords": [
+    "solana",
+    "altude",
+    "gasless",
+    "relay",
+    "gas-station"
+  ],
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -15,7 +21,9 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
