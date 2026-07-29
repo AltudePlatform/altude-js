@@ -1,5 +1,13 @@
 # @altude/gasstation
 
+## 0.0.2
+
+### Patch Changes
+
+- 572e582: Ensure pack and publish build package outputs before creating tarballs, and fix package export metadata ordering for published entrypoints.
+- Updated dependencies [572e582]
+  - @altude/core@0.0.2
+
 ## 0.0.1
 
 ### Patch Changes
