@@ -42,16 +42,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm lint
+        run: pnpm turbo lint --filter=@altude/core --filter=@altude/gasstation
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm turbo typecheck --filter=@altude/core --filter=@altude/gasstation
 
       - name: Build
-        run: pnpm build
+        run: pnpm turbo build --filter=@altude/core --filter=@altude/gasstation
 
       - name: Test
-        run: pnpm test
+        run: pnpm turbo test --filter=@altude/core --filter=@altude/gasstation
         env:
           ALTUDE_API_KEY_DEVNET: ${{ secrets.ALTUDE_API_KEY_DEVNET }}
           ALTUDE_SCRYPT_N: '16384'
