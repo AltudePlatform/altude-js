@@ -116,6 +116,27 @@ pnpm typecheck
 
 ## Releases
 
+### Publish manifest
+
+`release-manifest.json` at the repo root is the single source of truth for which packages are published to npm:
+
+```json
+{ "publish": ["@altude/core", "@altude/gasstation"] }
+```
+
+Everything else in `packages/*` is treated as work-in-progress: it is marked `"private": true` and added to the Changesets `ignore` list, so it is never published — while still being built and tested locally and in CI.
+
+To promote a package, add its name to `publish` and run:
+
+```bash
+pnpm manifest:sync   # applies the manifest to package.json + .changeset/config.json
+pnpm manifest:check  # verifies everything is in sync (run in CI)
+```
+
+The release workflow builds, lints, typechecks and tests only the packages listed in the manifest.
+
+### Workflow
+
 - CI runs on every PR and push via `.github/workflows/ci.yml`.
 - PRs that change publishable packages must include a Changeset; CI verifies this before merge.
 - Publishing is automated by `.github/workflows/release.yml` on every merge to `main`, and the workflow can also be re-run manually with `workflow_dispatch`.

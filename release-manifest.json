@@ -1,0 +1,4 @@
+{
+  "$comment": "Single source of truth for which workspace packages are published to npm. Add a package name to \"publish\" when it is ready to ship, then run `pnpm manifest:sync`.",
+  "publish": ["@altude/core", "@altude/gasstation"]
+}
