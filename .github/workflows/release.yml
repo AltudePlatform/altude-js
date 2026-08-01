@@ -41,17 +41,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # release-manifest.json is the single source of truth for which packages
+      # are published. Everything else stays `private: true` and is ignored by
+      # Changesets, so it can never be published by accident.
+      - name: Verify release manifest is in sync
+        run: pnpm manifest:check
+
+      - name: Resolve publishable package filters
+        id: manifest
+        run: echo "filters=$(node scripts/release-manifest.mjs turbo-filter)" >> "$GITHUB_OUTPUT"
+
       - name: Lint
-        run: pnpm turbo lint --filter=@altude/core --filter=@altude/gasstation
+        run: pnpm turbo lint ${{ steps.manifest.outputs.filters }}
 
       - name: Typecheck
-        run: pnpm turbo typecheck --filter=@altude/core --filter=@altude/gasstation
+        run: pnpm turbo typecheck ${{ steps.manifest.outputs.filters }}
 
       - name: Build
-        run: pnpm turbo build --filter=@altude/core --filter=@altude/gasstation
+        run: pnpm turbo build ${{ steps.manifest.outputs.filters }}
 
       - name: Test
-        run: pnpm turbo test --filter=@altude/core --filter=@altude/gasstation
+        run: pnpm turbo test ${{ steps.manifest.outputs.filters }}
         env:
           ALTUDE_API_KEY_DEVNET: ${{ secrets.ALTUDE_API_KEY_DEVNET }}
           ALTUDE_SCRYPT_N: '16384'

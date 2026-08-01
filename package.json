@@ -9,6 +9,8 @@
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
     "clean": "turbo clean",
+    "manifest:check": "node scripts/release-manifest.mjs check",
+    "manifest:sync": "node scripts/release-manifest.mjs sync",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .gitignore",
     "version-packages": "changeset version",
     "release": "changeset publish"

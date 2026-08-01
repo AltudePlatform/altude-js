@@ -7,5 +7,9 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@altude/nft", "@altude/vault", "@altude/solana-adapter"]
+  "ignore": [
+    "@altude/nft",
+    "@altude/solana-adapter",
+    "@altude/vault"
+  ]
 }
