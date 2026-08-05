@@ -156,7 +156,7 @@ describe('AltudeHttpClient — live mode', () => {
         RpcUrl: 'https://rpc.altude.so',
         Token: 'runtime-token',
         RpcEnvironment: 'devnet',
-        TokenExpiration: '2026-01-01T00:00:00Z',
+        TokenExpiration: '2099-01-01T00:00:00Z',
       }),
     )
 
@@ -186,7 +186,7 @@ describe('AltudeHttpClient — live mode', () => {
           RpcUrl: 'https://rpc.altude.so',
           Token: 'runtime-token',
           RpcEnvironment: 'devnet',
-          TokenExpiration: '2026-01-01T00:00:00Z',
+          TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
       .mockResolvedValueOnce(jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }))
@@ -209,7 +209,7 @@ describe('AltudeHttpClient — live mode', () => {
           RpcUrl: 'https://rpc.altude.so',
           Token: 'runtime-token',
           RpcEnvironment: 'devnet',
-          TokenExpiration: '2026-01-01T00:00:00Z',
+          TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
       .mockResolvedValueOnce(jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }))
@@ -228,7 +228,7 @@ describe('AltudeHttpClient — live mode', () => {
         RpcUrl: 'https://rpc.altude.so',
         Token: 'runtime-token',
         RpcEnvironment: 'devnet',
-        TokenExpiration: '2026-01-01T00:00:00Z',
+        TokenExpiration: '2099-01-01T00:00:00Z',
       }),
     )
 
@@ -246,7 +246,7 @@ describe('AltudeHttpClient — live mode', () => {
         RpcUrl: 'https://rpc.altude.so',
         Token: 'runtime-token',
         RpcEnvironment: 'devnet',
-        TokenExpiration: '2026-01-01T00:00:00Z',
+        TokenExpiration: '2099-01-01T00:00:00Z',
       }),
     )
 
@@ -265,7 +265,7 @@ describe('AltudeHttpClient — live mode', () => {
           RpcUrl: 'https://rpc.altude.so',
           Token: 'runtime-token',
           RpcEnvironment: 'devnet',
-          TokenExpiration: '2026-01-01T00:00:00Z',
+          TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
       .mockResolvedValueOnce(jsonResponse({ Signature: 'TxSig123', Status: 'Success', Message: '' }))
@@ -287,7 +287,7 @@ describe('AltudeHttpClient — live mode', () => {
           RpcUrl: 'https://rpc.altude.so',
           Token: 'runtime-token',
           RpcEnvironment: 'devnet',
-          TokenExpiration: '2026-01-01T00:00:00Z',
+          TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
       .mockResolvedValueOnce(jsonResponse({ address: 'wallet123', uiAmount: 1.0 }))
@@ -508,7 +508,7 @@ describe('AltudeGasStation facade', () => {
     expect(result.Signature).toBeTruthy()
   })
 
-  it('send retries once when relay returns blockhash not found', async () => {
+  it('send does not retry when relay throws blockhash not found', async () => {
     const gs = new AltudeGasStation()
     const sendTransactionSpy = vi
       .spyOn(gs.client, 'sendTransaction')
@@ -533,14 +533,55 @@ describe('AltudeGasStation facade', () => {
       rpcSubscriptions: {},
     } as never)
 
+    await expect(
+      gs.send({
+        sourceSigner: signer,
+        toAddress: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        amount: 1_000,
+      }),
+    ).rejects.toThrow('Blockhash not found')
+
+    expect(sendTransactionSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('send does not retry when relay response message contains blockhash not found', async () => {
+    const gs = new AltudeGasStation()
+    const sendTransactionSpy = vi
+      .spyOn(gs.client, 'sendTransaction')
+      .mockResolvedValueOnce({
+        Signature: '',
+        Status: 'Failed',
+        Message: 'Transaction simulation failed: Blockhash not found',
+      })
+      .mockResolvedValueOnce({ Signature: 'RetriedSigFromResponse', Status: 'Success', Message: '' })
+    const signer = {
+      address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(3)),
+    }
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
     const result = await gs.send({
       sourceSigner: signer,
       toAddress: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
       amount: 1_000,
     })
 
-    expect(sendTransactionSpy).toHaveBeenCalledTimes(2)
-    expect(result.Signature).toBe('RetriedSig')
+    expect(sendTransactionSpy).toHaveBeenCalledTimes(1)
+    expect(result.Status).toBe('Failed')
+    expect(result.Message).toContain('Blockhash not found')
   })
 
   it('createAccount builds a transaction and relays it (mock mode)', async () => {
