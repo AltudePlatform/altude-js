@@ -452,7 +452,7 @@ export class AltudeGasStation {
       const transaction = createTransaction({
         version: 'legacy',
         feePayer,
-        instructions: [ ...tokenInstructions],
+        instructions: [...computeInstructions, ...tokenInstructions],
         latestBlockhash,
       })
 
