@@ -163,7 +163,7 @@ export class AltudeGasStation {
     }
   }
 
-  /** Fetch a recent blockhash from the Altude relay. */
+  /** Fetch a recent blockhash from the configured RPC endpoint. */
   async getBlockhash(): Promise<BlockhashResponse> {
     return this.client.getBlockhash()
   }
@@ -235,7 +235,7 @@ export class AltudeGasStation {
 
     const config = await this.getConfig()
     const rpc = await this.getRpcClient()
-    const latestBlockhash = (await rpc.rpc.getLatestBlockhash().send()).value
+    const latestBlockhash = (await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()).value
     const feePayer = (options.feePayer ?? config.FeePayer) as unknown as Address
 
     const transaction = createTransaction({
@@ -306,13 +306,12 @@ export class AltudeGasStation {
     const execute = async (): Promise<SendTransactionResponse> => {
       const config = await this.getConfig()
       const rpc = await this.getRpcClient()
-      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
       const feePayer = config.FeePayer as unknown as Address
       const sourceSigner = this.#toTransactionSigner(options.sourceSigner as GaslessTransactionSigner)
       const destinationAddress = destination as unknown as Address
       const computeOptions = options.computeOptions ?? {}
 
-      // Build optional compute budget instructions.
+      // 1) Build instructions / transaction inputs.
       const computeInstructions: Instruction[] = []
       if (options.computeOptions) {
         computeInstructions.push(
@@ -334,6 +333,8 @@ export class AltudeGasStation {
 
       let signedTransaction: string
       if (options.token?.trim()) {
+        // 2) Resolve a fresh blockhash right before transaction finalisation/signing.
+        const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()
         const transaction = await buildTransferTokensTransaction({
           feePayer,
           latestBlockhash,
@@ -342,6 +343,7 @@ export class AltudeGasStation {
           amount: options.amount,
           destination: destinationAddress,
         })
+        // 3) Partial sign with source signer(s).
         signedTransaction = await transactionToBase64WithSigners(transaction)
       } else {
         const transferInstruction = getTransferSolInstruction({
@@ -349,32 +351,39 @@ export class AltudeGasStation {
           destination: destinationAddress,
           amount: BigInt(options.amount),
         })
+        // 2) Resolve a fresh blockhash right before transaction finalisation/signing.
+        const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()
         const transaction = createTransaction({
           version: 'legacy',
           feePayer,
           instructions: [...computeInstructions, transferInstruction],
           latestBlockhash,
         })
+        // 3) Partial sign with source signer(s).
         signedTransaction = await transactionToBase64WithSigners(transaction)
       }
 
+      // 4) Relay broadcast request.
       return this.client.sendTransaction({
         transaction: signedTransaction,
         ...(options.commitment !== undefined && { commitment: options.commitment }),
       })
     }
 
-    return this.#retryOnBlockhashNotFound(execute)
+    // Avoid duplicate relay submissions from a single user action.
+    // Consumers can explicitly retry at UI level if needed.
+    return execute()
   }
 
   /**
    * Create sponsored token accounts.
    *
-   * Mirrors the Android SDK flow:
-   *   1. Build ATA creation instructions for each requested token mint
-   *   2. Set each ATA owner authority to the relay fee payer
-   *   3. Partial-sign with the user signer
-   *   4. Send the partially-signed transaction to the Altude relay
+  * Mirrors the Android SDK flow:
+  *   1. Build ATA creation instructions for each requested token mint
+  *   2. Set each ATA owner authority to the relay fee payer
+  *   3. Fetch a fresh blockhash
+  *   4. Finalise + partial-sign with the user signer
+  *   5. Send the partially-signed transaction to the Altude relay
    */
   async createAccount(options: CreateAccountOptions = {}, signer?: GaslessTransactionSigner): Promise<CreateAccountResponse> {
     const signerToUse = signer ?? options.signer
@@ -439,8 +448,7 @@ export class AltudeGasStation {
         )
         tokenInstructions.push(createAssociatedTokenInstruction, setAuthorityInstruction)
       }
-      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
-      console.log('createAccount() latestBlockhash:', latestBlockhash, 'feePayer:', feePayer, 'owner:', ownerAddress, 'tokens:', tokens)
+      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()
       const transaction = createTransaction({
         version: 'legacy',
         feePayer,
@@ -452,7 +460,9 @@ export class AltudeGasStation {
       return this.client.createAccount({ signedTransaction })
     }
 
-    return this.#retryOnBlockhashNotFound(execute)
+    // Avoid duplicate create-account relay submissions from a single user action.
+    // Consumers can explicitly retry at UI level if needed.
+    return execute()
   }
 
   /** Relay a batch transaction payload. */
@@ -468,10 +478,11 @@ export class AltudeGasStation {
   /**
    * Close a token account and reclaim its rent lamports.
    *
-   * Mirrors the Android SDK flow:
-   *   1. Generate `Token.closeAccount` instruction
-   *   2. Partial-sign with the close authority's signer (if provided)
-   *   3. Send the partially-signed transaction to the Altude relay
+  * Mirrors the Android SDK flow:
+  *   1. Generate `Token.closeAccount` instruction(s)
+  *   2. Fetch a fresh blockhash
+  *   3. Finalise + partial-sign with the close authority's signer (if provided)
+  *   4. Send the partially-signed transaction to the Altude relay
    *
    * When the fee payer (Altude relay) is the close authority — as set during
    * account creation — omit `signer`; the relay adds its own signature
@@ -481,7 +492,6 @@ export class AltudeGasStation {
     const execute = async (): Promise<SendTransactionResponse> => {
       const config = await this.getConfig()
       const rpc = await this.getRpcClient()
-      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash().send()
       const feePayer = config.FeePayer as unknown as Address
 
       // Resolve the close authority: user-provided signer or noop for relay.
@@ -546,6 +556,7 @@ export class AltudeGasStation {
         throw new Error('closeAccount() requires either accountAddress or account (+ optional tokens).')
       }
 
+      const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()
       const transaction = createTransaction({
         version: 'legacy',
         feePayer,
@@ -557,7 +568,9 @@ export class AltudeGasStation {
       return this.client.closeAccount({ signedTransaction })
     }
 
-    return this.#retryOnBlockhashNotFound(execute)
+    // Avoid duplicate close-account relay submissions from a single user action.
+    // Consumers can explicitly retry at UI level if needed.
+    return execute()
   }
 
   /**
@@ -616,19 +629,4 @@ export class AltudeGasStation {
       : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   }
 
-  async #retryOnBlockhashNotFound<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation()
-    } catch (error) {
-      if (!this.#isBlockhashNotFoundError(error)) {
-        throw error
-      }
-      return operation()
-    }
-  }
-
-  #isBlockhashNotFoundError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error)
-    return /BlockhashNotFound|Blockhash not found/i.test(message)
-  }
 }

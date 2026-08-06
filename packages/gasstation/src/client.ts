@@ -3,7 +3,6 @@
  *
  * Endpoints surfaced by the altude-dynamic-gas-station-demo:
  *   GET  /api/transaction/config     → relay runtime config
- *   POST /api/Transaction/blockhash  → { Blockhash: string }
  *   POST /api/Transaction/send       → relay a signed transaction
  *   POST /api/transaction/sendbatch  → relay a batch transaction
  *   POST /api/Account/create         → sponsored account creation
@@ -194,6 +193,7 @@ export class AltudeHttpClient {
   readonly baseUrl: string = ALTUDE_API_URL
   readonly isMockMode: boolean
   readonly network: SolanaNetwork
+  readonly #configRefreshSkewMs = 30_000
   #configCache: ConfigResponse | undefined
   #configPromise: Promise<ConfigResponse> | undefined
   #rpcClient: ReturnType<typeof createAltudeClient> | undefined
@@ -212,7 +212,13 @@ export class AltudeHttpClient {
     if (this.isMockMode) {
       return this.#getMockConfig()
     }
+    const hasExpiredConfig = this.#configCache ? this.#isConfigExpired(this.#configCache) : false
     if (forceRefresh) {
+      this.#configCache = undefined
+      this.#configPromise = undefined
+      this.#rpcClient = undefined
+    } else if (hasExpiredConfig) {
+      // Token returned by /api/transaction/config is short-lived, so clear caches and reload before use.
       this.#configCache = undefined
       this.#configPromise = undefined
       this.#rpcClient = undefined
@@ -253,8 +259,9 @@ export class AltudeHttpClient {
     if (this.isMockMode) {
       return { Blockhash: 'MockBlockhash11111111111111111111111111111111' }
     }
-    await this.#ensureConfig()
-    return this.#post<BlockhashResponse>('/api/Transaction/blockhash', {})
+    const rpc = await this.getRpcClient()
+    const { value } = await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()
+    return { Blockhash: String(value.blockhash) }
   }
 
   async sendTransaction(options: SendTransactionOptions): Promise<SendTransactionResponse> {
@@ -525,6 +532,8 @@ export class AltudeHttpClient {
     }
 
     let lastError: unknown
+    let hasRefreshedConfigAfterAuthError = false
+    const isConfigEndpoint = path.startsWith('/api/transaction/config')
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
         const response = await fetch(url, {
@@ -535,6 +544,13 @@ export class AltudeHttpClient {
 
         if (!response.ok) {
           const text = await response.text()
+          const isAuthError = response.status === 401 || response.status === 403
+          if (!this.isMockMode && !isConfigEndpoint && isAuthError && !hasRefreshedConfigAfterAuthError) {
+            hasRefreshedConfigAfterAuthError = true
+            await this.getConfig(true)
+            continue
+          }
+
           throw new AltudeError({
             code: 'RELAY_ERROR',
             message: `Altude relay returned ${response.status.toString()}: ${text}`,
@@ -573,6 +589,20 @@ export class AltudeHttpClient {
       ...(config.Token ? { rpcToken: config.Token } : {}),
     })
     return config
+  }
+
+  #isConfigExpired(config: ConfigResponse): boolean {
+    const expiration = config.TokenExpiration
+    if (!expiration) {
+      return false
+    }
+
+    const expirationMs = Date.parse(expiration)
+    if (Number.isNaN(expirationMs)) {
+      return false
+    }
+
+    return Date.now() >= expirationMs - this.#configRefreshSkewMs
   }
 
   #getMockConfig(): ConfigResponse {
