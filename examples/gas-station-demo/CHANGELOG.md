@@ -1,5 +1,12 @@
 # gas-station-demo
 
+## 0.0.4
+
+### Patch Changes
+
+- Updated dependencies [b1478d5]
+  - @altude/gasstation@1.0.0
+
 ## 0.0.3
 
 ### Patch Changes
