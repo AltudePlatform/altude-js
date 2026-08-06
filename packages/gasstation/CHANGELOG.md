@@ -1,5 +1,11 @@
 # @altude/gasstation
 
+## 1.0.0
+
+### Major Changes
+
+- b1478d5: fix "blockhas not found error" and improved partial transaction generation
+
 ## 0.0.2
 
 ### Patch Changes
