@@ -20,6 +20,14 @@ You'll need an Altude API key. Get one at
 [altude.io](https://altude.io) (or set `ALTUDE_API_KEY_DEVNET` for devnet
 testing).
 
+## React Native
+
+The package includes a dedicated React Native/Hermes entrypoint selected by
+Metro. HTTP operations and transaction-building flows use React Native-safe
+Gill and Solana program entrypoints and do not require global `Buffer` or
+`DOMException` polyfills. No Metro `extraNodeModules` override for Gill is
+needed.
+
 ## Usage
 
 ```typescript

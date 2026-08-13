@@ -13,18 +13,26 @@
 import type { SolanaNetwork } from '@altude/core'
 import type { createAltudeClient } from '@altude/core'
 import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
-import { createTransaction, transactionToBase64WithSigners, createNoopSigner } from 'gill'
-import type { Address, Instruction, TransactionSigner } from 'gill'
 import {
-  buildTransferTokensTransaction,
+  createTransaction,
+  transactionToBase64WithSigners,
+  createNoopSigner,
+  address,
+  type Address,
+  type Instruction,
+  type TransactionSigner,
+  findAssociatedTokenPda,
   getCreateAssociatedTokenInstructionAsync,
-  getAssociatedTokenAccountAddress,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getTransferInstruction,
   getSetAuthorityInstruction,
-  TOKEN_PROGRAM_ADDRESS,
   AuthorityType,
-} from 'gill/programs/token'
-import { getTransferSolInstruction, getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction, getRequestHeapFrameInstruction } from 'gill/programs'
-import { getCloseAccountInstruction } from 'gill/programs/token'
+  getCloseAccountInstruction,
+  getSetComputeUnitLimitInstruction,
+  getSetComputeUnitPriceInstruction,
+  getRequestHeapFrameInstruction,
+  getTransferSolInstruction,
+} from './solana.js'
 import type {
   ConfigResponse,
   SendTransactionResponse,
@@ -145,6 +153,18 @@ export interface CloseAccountOptions {
    *   relay will add its signature server-side.
    */
   signer?: GaslessTransactionSigner
+}
+
+const TOKEN_PROGRAM_ADDRESS = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+
+async function getAssociatedTokenAccountAddress(mint: Address, owner: Address) {
+  return (
+    await findAssociatedTokenPda({
+      mint,
+      owner,
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    })
+  )[0]
 }
 
 export class AltudeGasStation {
@@ -335,13 +355,34 @@ export class AltudeGasStation {
       if (options.token?.trim()) {
         // 2) Resolve a fresh blockhash right before transaction finalisation/signing.
         const { value: latestBlockhash } = await rpc.rpc.getLatestBlockhash({ commitment: 'finalized' }).send()
-        const transaction = await buildTransferTokensTransaction({
+        const mint = options.token.trim() as unknown as Address
+        const [destinationAta, sourceAta] = await Promise.all([
+          getAssociatedTokenAccountAddress(mint, destinationAddress),
+          getAssociatedTokenAccountAddress(mint, sourceSigner.address),
+        ])
+        const transaction = createTransaction({
+          version: 'legacy',
           feePayer,
           latestBlockhash,
-          mint: options.token.trim() as unknown as Address,
-          authority: sourceSigner,
-          amount: options.amount,
-          destination: destinationAddress,
+          computeUnitLimit: 31_000,
+          instructions: [
+            getCreateAssociatedTokenIdempotentInstruction({
+              owner: destinationAddress,
+              mint,
+              ata: destinationAta,
+              payer: createNoopSigner(feePayer),
+              tokenProgram: TOKEN_PROGRAM_ADDRESS,
+            }),
+            getTransferInstruction(
+              {
+                authority: sourceSigner,
+                source: sourceAta,
+                destination: destinationAta,
+                amount: options.amount,
+              },
+              { programAddress: TOKEN_PROGRAM_ADDRESS },
+            ),
+          ],
         })
         // 3) Partial sign with source signer(s).
         signedTransaction = await transactionToBase64WithSigners(transaction)
@@ -429,7 +470,7 @@ export class AltudeGasStation {
 
       for (const token of tokens) {
         const mint = token as unknown as Address
-        const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress, TOKEN_PROGRAM_ADDRESS)
+        const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress)
         const createAssociatedTokenInstruction = await getCreateAssociatedTokenInstructionAsync({
           payer: feePayerNoop,
           owner: ownerAddress,
@@ -530,7 +571,7 @@ export class AltudeGasStation {
 
         for (const token of tokens) {
           const mint = token as unknown as Address
-          const ata = await getAssociatedTokenAccountAddress(mint, walletAddress, TOKEN_PROGRAM_ADDRESS)
+          const ata = await getAssociatedTokenAccountAddress(mint, walletAddress)
           closeInstructions.push(
             getCloseAccountInstruction({
               account: ata,

@@ -13,12 +13,16 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "react-native": "./dist/index.native.js",
+      "browser": "./dist/index.browser.js",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     }
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
+  "react-native": "./dist/index.native.js",
+  "browser": "./dist/index.browser.js",
   "types": "./dist/index.d.ts",
   "files": [
     "dist"
@@ -35,7 +39,7 @@
     "@noble/curves": "^2.2.0",
     "@scure/bip32": "^1.5.0",
     "@scure/bip39": "^1.4.0",
-    "gill": "^0.8.0"
+    "gill": "0.8.3"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

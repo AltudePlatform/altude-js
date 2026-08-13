@@ -508,6 +508,41 @@ describe('AltudeGasStation facade', () => {
     expect(result.Signature).toBeTruthy()
   })
 
+  it('send builds and signs a token transfer without Gill program subpaths', async () => {
+    const gs = new AltudeGasStation()
+    const sendTransactionSpy = vi.spyOn(gs.client, 'sendTransaction')
+    const signer = {
+      address: 'So11111111111111111111111111111111111111112',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(1)),
+    }
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.send({
+      sourceSigner: signer,
+      toAddress: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      token: 'So11111111111111111111111111111111111111112',
+      amount: 1_000,
+    })
+
+    expect(signer.signTransactionMessage).toHaveBeenCalled()
+    expect(sendTransactionSpy).toHaveBeenCalledOnce()
+    expect(sendTransactionSpy.mock.calls[0]?.[0]?.transaction.length).toBeGreaterThan(0)
+    expect(result.Signature).toBeTruthy()
+  })
+
   it('send does not retry when relay throws blockhash not found', async () => {
     const gs = new AltudeGasStation()
     const sendTransactionSpy = vi

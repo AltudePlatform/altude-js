@@ -27,6 +27,17 @@ npm install @altude/core
 - **RPC** — a thin RPC client built on [Gill](https://gill.web3.builders/) with
   support for propagating an Altude auth token via `Authorization` headers.
 
+## React Native
+
+The package publishes dedicated `react-native` and `browser` entrypoints. Metro
+selects Gill's React Native build instead of its Node/WebSocket build, so
+creating a client and using HTTP RPC methods does not require Node polyfills.
+
+`createAltudeClient` creates its HTTP RPC transport immediately and initializes
+RPC subscriptions only when `rpcSubscriptions` or a subscription-dependent
+helper is accessed. Subscription use still requires the WebSocket capabilities
+expected by Gill in the target runtime.
+
 ## Usage
 
 ```typescript
