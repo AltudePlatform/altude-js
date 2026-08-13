@@ -25,7 +25,7 @@ npm install @altude/core
   [`@scure/bip39`](https://github.com/paulmillr/scure-bip39) and
   [`@scure/bip32`](https://github.com/paulmillr/scure-bip32).
 - **RPC** — a thin RPC client built on [Gill](https://gill.web3.builders/) with
-  support for propagating an Altude auth token via `Authorization` headers.
+  support for the API-key-scoped node URL and RPC JWT returned by Altude.
 
 ## React Native
 
@@ -37,6 +37,10 @@ creating a client and using HTTP RPC methods does not require Node polyfills.
 RPC subscriptions only when `rpcSubscriptions` or a subscription-dependent
 helper is accessed. Subscription use still requires the WebSocket capabilities
 expected by Gill in the target runtime.
+
+RPC clients must be constructed from the `RpcUrl` and `Token` returned by the
+Altude transaction config API. The SDK intentionally does not fall back to
+public Solana endpoints because the API key determines the cluster and JWT.
 
 ## Usage
 

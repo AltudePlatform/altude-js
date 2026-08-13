@@ -140,11 +140,13 @@ describe('AltudeHttpClient — mock mode', () => {
     expect(result.Signature).toBeTruthy()
   })
 
-  it('getRpcClient returns a Gill SolanaClient in mock mode', async () => {
+  it('getRpcClient requires an API key instead of using a public RPC fallback', async () => {
     const client = new AltudeHttpClient()
-    const rpc = await client.getRpcClient()
-    expect(rpc).toHaveProperty('rpc')
-    expect(rpc).toHaveProperty('rpcSubscriptions')
+
+    await expect(client.getRpcClient()).rejects.toMatchObject({
+      code: 'RPC_ERROR',
+      message: 'An Altude API key is required to resolve RPC node configuration.',
+    })
   })
 })
 
@@ -256,6 +258,25 @@ describe('AltudeHttpClient — live mode', () => {
     expect(first).toBe(second)
   })
 
+  it('rejects success-shaped API fallback config', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        RpcUrl: 'https://rpc.altude.so',
+        Token: 'jwt_unavailable',
+        RpcEnvironment: 'devnet',
+        TokenExpiration: null,
+      }),
+    )
+
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+
+    await expect(client.getConfig()).rejects.toMatchObject({
+      code: 'RPC_ERROR',
+      message: 'Altude transaction config did not return a usable RPC JWT.',
+    })
+  })
+
   it('sendTransaction sends { SignedTransaction } body matching Android SDK', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -334,18 +355,20 @@ describe('AltudeGasStation facade', () => {
     expect(result.FeePayer).toBeTruthy()
   })
 
-  it('getRpcClient returns a Gill SolanaClient in mock mode', async () => {
+  it('getRpcClient requires an API key instead of using a public RPC fallback', async () => {
     const gs = new AltudeGasStation()
-    const rpc = await gs.getRpcClient()
-    expect(rpc).toHaveProperty('rpc')
-    expect(rpc).toHaveProperty('rpcSubscriptions')
+
+    await expect(gs.getRpcClient()).rejects.toMatchObject({
+      code: 'RPC_ERROR',
+      message: 'An Altude API key is required to resolve RPC node configuration.',
+    })
   })
 
-  it('getRpcClient returns same instance on repeated calls in mock mode', async () => {
+  it('does not initialize an RPC client without API-provided config', async () => {
     const gs = new AltudeGasStation()
-    const first = await gs.getRpcClient()
-    const second = await gs.getRpcClient()
-    expect(first).toBe(second)
+
+    await expect(gs.getRpcClient()).rejects.toMatchObject({ code: 'RPC_ERROR' })
+    await expect(gs.getRpcClient()).rejects.toMatchObject({ code: 'RPC_ERROR' })
   })
 
   it('exposes additional missing endpoints through the facade', async () => {
@@ -367,7 +390,16 @@ describe('AltudeGasStation facade', () => {
   })
 
   it('init preloads relay config and rpc client', async () => {
-    const gs = new AltudeGasStation()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        RpcUrl: 'https://rpc.altude.so',
+        Token: 'runtime-token',
+        RpcEnvironment: 'devnet',
+        TokenExpiration: '2099-01-01T00:00:00Z',
+      }),
+    )
+    const gs = new AltudeGasStation({ apiKey: 'test-key', network: 'devnet' })
     const configSpy = vi.spyOn(gs, 'getConfig')
     const rpcSpy = vi.spyOn(gs, 'getRpcClient')
 

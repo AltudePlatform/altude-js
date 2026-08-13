@@ -38,6 +38,9 @@ const gasStation = new AltudeGasStation({
   network: 'devnet',
 })
 
+// Resolves RpcUrl and the short-lived RPC JWT from /api/transaction/config.
+await gasStation.init()
+
 // Recent blockhash from the relay
 const { blockhash } = await gasStation.getBlockhash()
 
@@ -67,6 +70,10 @@ const sig2 = await gasStation.send({
 - `AltudeHttpClient`, `createAltudeDevnetClient`, `createAltudeMainnetClient`
   — low-level HTTP client for the relay API.
 - `ALTUDE_FEE_PAYER` — the relay's fee-payer address.
+
+RPC operations require an API key. The SDK always uses the node URL and JWT
+returned by Altude's transaction config API and never falls back to a public
+Solana endpoint.
 
 See the [monorepo README](https://github.com/AltudePlatform/altude-js) for the full
 SDK overview.

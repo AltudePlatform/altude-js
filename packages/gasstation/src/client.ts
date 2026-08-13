@@ -235,23 +235,24 @@ export class AltudeHttpClient {
    * Altude relay config (`RpcUrl` field).  Mirrors the Android SDK's
    * `AltudeGasStation.init()` behaviour where the RPC connection is
    * initialised from the config API response.
-   *
-   * In mock mode the client falls back to the well-known public endpoint for
-   * the configured network.
    */
   async getRpcClient(): Promise<ReturnType<typeof createAltudeClient>> {
     if (this.isMockMode) {
-      this.#rpcClient ??= createAltudeClient({ network: this.network })
-      return this.#rpcClient
+      throw new AltudeError({
+        code: 'RPC_ERROR',
+        message: 'An Altude API key is required to resolve RPC node configuration.',
+        remediation: 'Create the client with an API key, then retry the RPC operation.',
+      })
     }
-    // #loadConfig() sets #rpcClient from config.RpcUrl; just ensure it ran.
+
     await this.#ensureConfig()
-    // Fallback should never be reached, but keeps TypeScript happy.
-    this.#rpcClient ??= createAltudeClient({
-      network: this.network,
-      ...(this.#configCache?.RpcUrl ? { rpcUrl: this.#configCache.RpcUrl } : {}),
-      ...(this.#configCache?.Token ? { rpcToken: this.#configCache.Token } : {}),
-    })
+    if (!this.#rpcClient) {
+      throw new AltudeError({
+        code: 'RPC_ERROR',
+        message: 'Altude transaction config did not initialize an RPC client.',
+        remediation: 'Request fresh transaction config and retry the RPC operation.',
+      })
+    }
     return this.#rpcClient
   }
 
@@ -581,13 +582,12 @@ export class AltudeHttpClient {
 
   async #loadConfig(): Promise<ConfigResponse> {
     const config = await this.#get<ConfigResponse>('/api/transaction/config')
-    this.#configCache = config
-    // Initialise the RPC client from the relay-resolved RpcUrl (mirrors Android SDK behaviour).
-    this.#rpcClient = createAltudeClient({
+    const rpcClient = createAltudeClient({
       rpcUrl: config.RpcUrl,
-      network: this.network,
-      ...(config.Token ? { rpcToken: config.Token } : {}),
+      rpcToken: config.Token,
     })
+    this.#configCache = config
+    this.#rpcClient = rpcClient
     return config
   }
 
