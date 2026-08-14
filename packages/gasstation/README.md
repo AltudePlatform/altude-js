@@ -20,6 +20,14 @@ You'll need an Altude API key. Get one at
 [altude.io](https://altude.io) (or set `ALTUDE_API_KEY_DEVNET` for devnet
 testing).
 
+## React Native
+
+The package includes a dedicated React Native/Hermes entrypoint selected by
+Metro. HTTP operations and transaction-building flows use React Native-safe
+Gill and Solana program entrypoints and do not require global `Buffer` or
+`DOMException` polyfills. No Metro `extraNodeModules` override for Gill is
+needed.
+
 ## Usage
 
 ```typescript
@@ -29,6 +37,9 @@ const gasStation = new AltudeGasStation({
   apiKey: process.env.ALTUDE_API_KEY!,
   network: 'devnet',
 })
+
+// Resolves RpcUrl and the short-lived RPC JWT from /api/transaction/config.
+await gasStation.init()
 
 // Recent blockhash from the relay
 const { blockhash } = await gasStation.getBlockhash()
@@ -59,6 +70,10 @@ const sig2 = await gasStation.send({
 - `AltudeHttpClient`, `createAltudeDevnetClient`, `createAltudeMainnetClient`
   — low-level HTTP client for the relay API.
 - `ALTUDE_FEE_PAYER` — the relay's fee-payer address.
+
+RPC operations require an API key. The SDK always uses the node URL and JWT
+returned by Altude's transaction config API and never falls back to a public
+Solana endpoint.
 
 See the [monorepo README](https://github.com/AltudePlatform/altude-js) for the full
 SDK overview.

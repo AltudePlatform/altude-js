@@ -20,6 +20,9 @@ importers:
       '@typescript-eslint/parser':
         specifier: ^8.0.0
         version: 8.59.0(eslint@9.39.4)(typescript@5.9.3)
+      esbuild:
+        specifier: ^0.27.0
+        version: 0.27.7
       eslint:
         specifier: ^9.0.0
         version: 9.39.4
@@ -110,7 +113,7 @@ importers:
         specifier: ^1.4.0
         version: 1.6.0
       gill:
-        specifier: ^0.8.0
+        specifier: 0.8.3
         version: 0.8.3(@solana/sysvars@2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))
     devDependencies:
       tsup:
@@ -128,8 +131,17 @@ importers:
       '@altude/core':
         specifier: workspace:*
         version: link:../core
+      '@solana-program/compute-budget':
+        specifier: ^0.7.0
+        version: 0.7.0(@solana/kit@2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)))
+      '@solana-program/system':
+        specifier: ^0.7.0
+        version: 0.7.0(@solana/kit@2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)))
+      '@solana-program/token-2022':
+        specifier: ^0.4.2
+        version: 0.4.2(@solana/kit@2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)))(@solana/sysvars@2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))
       gill:
-        specifier: ^0.8.0
+        specifier: 0.8.3
         version: 0.8.3(@solana/sysvars@2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))
     devDependencies:
       tsup:

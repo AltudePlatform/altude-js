@@ -11,6 +11,7 @@
     "clean": "turbo clean",
     "manifest:check": "node scripts/release-manifest.mjs check",
     "manifest:sync": "node scripts/release-manifest.mjs sync",
+    "test:react-native": "pnpm --filter @altude/core build && pnpm --filter @altude/gasstation build && node --conditions=react-native scripts/check-react-native-exports.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .gitignore",
     "version-packages": "changeset version",
     "release": "changeset publish"
@@ -20,6 +21,7 @@
     "@eslint/js": "^9.39.4",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "esbuild": "^0.27.0",
     "eslint": "^9.0.0",
     "prettier": "^3.3.3",
     "turbo": "^2.9.6",

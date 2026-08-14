@@ -1,4 +1,4 @@
-import { createSolanaClient, createSolanaRpc } from 'gill'
+import { createSolanaClient, createSolanaRpc } from 'gill/react-native'
 import { createAltudeClientWith } from './rpc.shared.js'
 import type { AltudeClientConfig } from './rpc.shared.js'
 
