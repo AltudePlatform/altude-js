@@ -60,6 +60,9 @@ jobs:
       - name: Build
         run: pnpm turbo build ${{ steps.manifest.outputs.filters }}
 
+      - name: React Native exports
+        run: node --conditions=react-native scripts/check-react-native-exports.mjs
+
       - name: Test
         run: pnpm turbo test ${{ steps.manifest.outputs.filters }}
         env:
