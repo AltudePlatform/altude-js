@@ -203,9 +203,6 @@ export class AltudeHttpClient {
     this.network = network
     this.baseUrl = baseUrl ?? ALTUDE_API_URL
     this.isMockMode = !apiKey
-    if (!this.isMockMode) {
-      this.#configPromise = this.#loadConfig()
-    }
   }
 
   async getConfig(forceRefresh = false): Promise<ConfigResponse> {

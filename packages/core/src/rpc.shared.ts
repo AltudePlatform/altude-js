@@ -61,7 +61,15 @@ export function createAltudeClientWith(
   }
 }
 
-function validateRpcUrl(rpcUrl: string): string {
+function validateRpcUrl(rpcUrl: unknown): string {
+  if (typeof rpcUrl !== 'string') {
+    throw new AltudeError({
+      code: 'RPC_ERROR',
+      message: 'Altude transaction config returned an invalid RPC URL.',
+      remediation: 'Verify the API key cluster configuration and request fresh transaction config.',
+    })
+  }
+
   const value = rpcUrl.trim()
   let parsedUrl: URL
   try {
@@ -86,7 +94,15 @@ function validateRpcUrl(rpcUrl: string): string {
   return value
 }
 
-function validateRpcToken(rpcToken: string): string {
+function validateRpcToken(rpcToken: unknown): string {
+  if (typeof rpcToken !== 'string') {
+    throw new AltudeError({
+      code: 'RPC_ERROR',
+      message: 'Altude transaction config did not return a usable RPC JWT.',
+      remediation: 'Request fresh transaction config with a valid API key.',
+    })
+  }
+
   const value = rpcToken.trim()
   if (!value || value === 'jwt_unavailable') {
     throw new AltudeError({

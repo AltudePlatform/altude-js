@@ -70,6 +70,20 @@ describe('createAltudeClient', () => {
       }),
     ).toThrow('Altude transaction config did not return a usable RPC JWT.')
 
+    expect(() =>
+      createAltudeClient({
+        rpcUrl: null as unknown as string,
+        rpcToken: 'runtime-token',
+      }),
+    ).toThrow('Altude transaction config returned an invalid RPC URL.')
+
+    expect(() =>
+      createAltudeClient({
+        rpcUrl: 'https://rpc.example.com',
+        rpcToken: null as unknown as string,
+      }),
+    ).toThrow('Altude transaction config did not return a usable RPC JWT.')
+
     expect(mocks.createSolanaRpc).not.toHaveBeenCalled()
     expect(mocks.createSolanaClient).not.toHaveBeenCalled()
   })

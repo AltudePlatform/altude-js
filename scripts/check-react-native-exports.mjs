@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
-const root = join(import.meta.dirname, '..')
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const packageDirectories = ['core', 'gasstation']
 
 for (const directory of packageDirectories) {

@@ -573,11 +573,14 @@ export class AltudeGasStation {
           const mint = token as unknown as Address
           const ata = await getAssociatedTokenAccountAddress(mint, walletAddress)
           closeInstructions.push(
-            getCloseAccountInstruction({
-              account: ata,
-              destination: destinationAddress,
-              owner: closeAuthority,
-            }),
+            getCloseAccountInstruction(
+              {
+                account: ata,
+                destination: destinationAddress,
+                owner: closeAuthority,
+              },
+              { programAddress: TOKEN_PROGRAM_ADDRESS },
+            ),
           )
         }
       } else if (options.accountAddress) {
@@ -587,11 +590,14 @@ export class AltudeGasStation {
           throw new Error('closeAccount() requires a destination address when using accountAddress.')
         }
         closeInstructions.push(
-          getCloseAccountInstruction({
-            account: options.accountAddress as unknown as Address,
-            destination,
-            owner: closeAuthority,
-          }),
+          getCloseAccountInstruction(
+            {
+              account: options.accountAddress as unknown as Address,
+              destination,
+              owner: closeAuthority,
+            },
+            { programAddress: TOKEN_PROGRAM_ADDRESS },
+          ),
         )
       } else {
         throw new Error('closeAccount() requires either accountAddress or account (+ optional tokens).')

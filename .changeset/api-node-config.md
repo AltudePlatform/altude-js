@@ -1,6 +1,6 @@
 ---
-"@altude/core": patch
-"@altude/gasstation": patch
+"@altude/core": minor
+"@altude/gasstation": major
 ---
 
 Require RPC node URLs and JWTs from Altude's API-key-scoped transaction config

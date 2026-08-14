@@ -151,7 +151,7 @@ describe('AltudeHttpClient — mock mode', () => {
 })
 
 describe('AltudeHttpClient — live mode', () => {
-  it('prefetches and caches runtime config', async () => {
+  it('loads and caches runtime config on demand', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       jsonResponse({
         FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
@@ -163,6 +163,8 @@ describe('AltudeHttpClient — live mode', () => {
     )
 
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+    expect(fetchSpy).not.toHaveBeenCalled()
+
     const first = await client.getConfig()
     const second = await client.getConfig()
     const requestInit = fetchSpy.mock.calls[0]?.[1]
@@ -711,7 +713,7 @@ describe('AltudeGasStation facade', () => {
     } as never)
 
     const result = await gs.closeAccount({
-      accountAddress: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+      accountAddress: 'So11111111111111111111111111111111111111112',
       destination: '11111111111111111111111111111111',
     })
 
@@ -749,7 +751,7 @@ describe('AltudeGasStation facade', () => {
     } as never)
 
     const result = await gs.closeAccount({
-      accountAddress: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+      accountAddress: 'So11111111111111111111111111111111111111112',
       destination: '11111111111111111111111111111111',
       signer,
     })
