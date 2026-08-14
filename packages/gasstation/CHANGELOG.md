@@ -1,5 +1,20 @@
 # @altude/gasstation
 
+## 2.0.0
+
+### Major Changes
+
+- 6a6f41c: Require RPC node URLs and JWTs from Altude's API-key-scoped transaction config
+  instead of falling back to public Solana endpoints.
+
+### Patch Changes
+
+- ec540e9: Add dedicated browser and React Native/Hermes entrypoints, lazy RPC subscription
+  initialization, and Buffer-free native transaction construction.
+- Updated dependencies [6a6f41c]
+- Updated dependencies [ec540e9]
+  - @altude/core@0.1.0
+
 ## 1.0.0
 
 ### Major Changes

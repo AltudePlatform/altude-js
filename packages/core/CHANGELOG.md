@@ -1,5 +1,17 @@
 # @altude/core
 
+## 0.1.0
+
+### Minor Changes
+
+- 6a6f41c: Require RPC node URLs and JWTs from Altude's API-key-scoped transaction config
+  instead of falling back to public Solana endpoints.
+
+### Patch Changes
+
+- ec540e9: Add dedicated browser and React Native/Hermes entrypoints, lazy RPC subscription
+  initialization, and Buffer-free native transaction construction.
+
 ## 0.0.2
 
 ### Patch Changes
