@@ -2,6 +2,12 @@
 
 [![CI](https://github.com/AltudePlatform/altude-js/actions/workflows/ci.yml/badge.svg)](https://github.com/AltudePlatform/altude-js/actions/workflows/ci.yml)
 
+> [!WARNING]
+> **Incubation only — unsupported and not for production.**
+> `@altude/vault`, `@altude/nft`, and `@altude/solana-adapter` are experimental,
+> unsupported packages. They are excluded from production releases and may never
+> ship. The `main` branch is the source of truth for production-supported packages.
+
 TypeScript SDK for Altude — gasless Solana infrastructure with an OWS-conformant vault.
 
 ## Packages
@@ -9,10 +15,15 @@ TypeScript SDK for Altude — gasless Solana infrastructure with an OWS-conforma
 | Package | Description |
 |---|---|
 | [`@altude/core`](./packages/core) | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
-| [`@altude/vault`](./packages/vault) | **OWS vault** — encrypted key storage, API key management, policy engine |
-| [`@altude/solana-adapter`](./packages/solana-adapter) | Bridge: OWS vault → Gill / `@solana/web3.js` signer |
 | [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API |
-| [`@altude/nft`](./packages/nft) | Gasless NFT ops — Metaplex Core, compressed NFTs (cNFTs) |
+
+### Incubating packages
+
+These packages are preserved for evaluation only and are not release candidates:
+
+- [`@altude/vault`](./packages/vault)
+- [`@altude/solana-adapter`](./packages/solana-adapter)
+- [`@altude/nft`](./packages/nft)
 
 ## Quick Start
 
