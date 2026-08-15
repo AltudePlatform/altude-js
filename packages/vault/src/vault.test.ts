@@ -172,7 +172,7 @@ describe('signing', () => {
 
     await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toMatchObject({
       code: 'POLICY_DENIED',
-      message: expect.stringContaining(policy.id),
+      message: expect.stringContaining(policy.id) as string,
     })
   })
 
@@ -201,7 +201,7 @@ describe('signing', () => {
 
     await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toMatchObject({
       code: 'POLICY_DENIED',
-      message: expect.stringContaining(missingPolicyId),
+      message: expect.stringContaining(missingPolicyId) as string,
     })
   })
 
