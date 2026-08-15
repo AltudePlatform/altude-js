@@ -147,6 +147,58 @@ describe('signing', () => {
     })
   })
 
+  it('rejects signing when a referenced policy has been deleted', async () => {
+    const passphrase = 'deleted-policy-pass'
+    const wallet = await vault.createWallet({ name: 'deleted-policy-wallet', passphrase })
+    const policy: OWSPolicy = {
+      id: 'deleted-policy',
+      name: 'Deleted Policy',
+      version: 1,
+      created_at: new Date().toISOString(),
+      rules: [{ type: 'allowed_chains', chain_ids: ['solana'] }],
+      executable: null,
+      config: null,
+      action: 'deny',
+    }
+    await vault.savePolicy(policy)
+
+    const { token } = await vault.createApiKey({
+      name: 'deleted-policy-agent',
+      walletId: wallet.id,
+      passphrase,
+      policyIds: [policy.id],
+    })
+    await vault.storage.delete(vault.storage.policyPath(policy.id))
+
+    await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toThrow(policy.id)
+  })
+
+  it('rejects signing when only some referenced policies can be loaded', async () => {
+    const passphrase = 'partial-policy-pass'
+    const wallet = await vault.createWallet({ name: 'partial-policy-wallet', passphrase })
+    const policy: OWSPolicy = {
+      id: 'available-policy',
+      name: 'Available Policy',
+      version: 1,
+      created_at: new Date().toISOString(),
+      rules: [{ type: 'allowed_chains', chain_ids: ['solana'] }],
+      executable: null,
+      config: null,
+      action: 'deny',
+    }
+    await vault.savePolicy(policy)
+
+    const missingPolicyId = 'missing-policy'
+    const { token } = await vault.createApiKey({
+      name: 'partial-policy-agent',
+      walletId: wallet.id,
+      passphrase,
+      policyIds: [policy.id, missingPolicyId],
+    })
+
+    await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toThrow(missingPolicyId)
+  })
+
   it('enforces expires_at policy', async () => {
     const passphrase = 'exp-pass'
     const wallet = await vault.createWallet({ name: 'exp-wallet', passphrase })
