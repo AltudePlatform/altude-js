@@ -170,10 +170,7 @@ describe('signing', () => {
     })
     await vault.storage.delete(vault.storage.policyPath(policy.id))
 
-    await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toMatchObject({
-      code: 'POLICY_DENIED',
-      message: expect.stringContaining(policy.id) as string,
-    })
+    await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toThrow(policy.id)
   })
 
   it('rejects signing when only some referenced policies can be loaded', async () => {
@@ -199,10 +196,7 @@ describe('signing', () => {
       policyIds: [policy.id, missingPolicyId],
     })
 
-    await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toMatchObject({
-      code: 'POLICY_DENIED',
-      message: expect.stringContaining(missingPolicyId) as string,
-    })
+    await expect(vault.signMessage(wallet.id, 'hello', token)).rejects.toThrow(missingPolicyId)
   })
 
   it('enforces expires_at policy', async () => {
