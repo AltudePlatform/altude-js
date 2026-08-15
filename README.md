@@ -2,107 +2,43 @@
 
 [![CI](https://github.com/AltudePlatform/altude-js/actions/workflows/ci.yml/badge.svg)](https://github.com/AltudePlatform/altude-js/actions/workflows/ci.yml)
 
-> [!WARNING]
-> **Incubation only — unsupported and not for production.**
-> `@altude/vault`, `@altude/nft`, and `@altude/solana-adapter` are experimental,
-> unsupported packages. They are excluded from production releases and may never
-> ship. The `main` branch is the source of truth for production-supported packages.
+Production TypeScript SDK for Altude gasless Solana infrastructure.
 
-TypeScript SDK for Altude — gasless Solana infrastructure with an OWS-conformant vault.
-
-## Packages
+## Production packages
 
 | Package | Description |
 |---|---|
 | [`@altude/core`](./packages/core) | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
 | [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API |
 
-### Incubating packages
-
-These packages are preserved for evaluation only and are not release candidates:
-
-- [`@altude/vault`](./packages/vault)
-- [`@altude/solana-adapter`](./packages/solana-adapter)
-- [`@altude/nft`](./packages/nft)
+Only packages in this table are supported and published. Experimental package
+work does not live on the production branch and carries no release commitment.
 
 ## Quick Start
 
 ```bash
-pnpm add @altude/vault @altude/gasstation @altude/solana-adapter
+pnpm add @altude/gasstation
 ```
 
 ```typescript
-import { AltudeVault } from '@altude/vault'
 import { AltudeGasStation } from '@altude/gasstation'
-import { createOWSGillSigner } from '@altude/solana-adapter'
 
-// 1. Initialize the OWS vault (uses ~/.ows by default)
-const vault = new AltudeVault()
-
-// 2. Create a wallet
-const wallet = await vault.createWallet({
-  name: 'my-wallet',
-  passphrase: 'your-strong-passphrase',
-})
-console.log('Solana address:', wallet.accounts[0].address)
-
-// 3. Create an API key for agent use (no passphrase required at sign time)
-const { token } = await vault.createApiKey({
-  name: 'my-agent',
-  walletId: wallet.id,
-  passphrase: 'your-strong-passphrase',
-})
-console.log('Agent token (store securely):', token)
-
-// 4. Sign with the agent token (policies enforced)
-const sig = await vault.signMessage(wallet.id, 'Hello Altude', token)
-console.log('Signature:', sig.signature)
-
-// 5. Gasless transaction relay
 const gasStation = new AltudeGasStation({
   apiKey: process.env.ALTUDE_API_KEY,
   network: 'devnet',
 })
-const blockhash = await gasStation.getBlockhash()
-const balance = await gasStation.getBalance({ address: wallet.accounts[0].address })
+
+await gasStation.init()
+
+const balance = await gasStation.getBalance({
+  address: 'YOUR_WALLET_ADDRESS',
+})
 console.log('Balance:', balance.uiAmount, 'SOL')
 ```
 
-## OWS Vault
-
-`@altude/vault` is a TypeScript implementation of the [Open Wallet Standard (OWS)](https://github.com/AltudePlatform/OWS-core) vault component.
-
-### What it implements
-
-- **Storage format v2** — `~/.ows/wallets/`, `~/.ows/keys/`, `~/.ows/policies/`, `~/.ows/logs/` with OWS-mandated filesystem permissions (`chmod 700`/`600`)
-- **AES-256-GCM + scrypt** — passphrase-derived wallet encryption (`N=65536, r=8, p=1`)
-- **HKDF-SHA256** — API key token encryption (`info = "ows-api-key-v1"`)
-- **Policy engine** — `allowed_chains`, `expires_at`, `allowed_typed_data_contracts` declarative rules; custom executable policies (Node.js)
-- **Audit log** — append-only JSONL at `~/.ows/logs/audit.jsonl`
-- **Backup/restore** — AES-256-GCM encrypted tar archive
-- **Signing interface** — `sign()`, `signMessage()` (Ed25519)
-
-### Vault file compatibility
-
-Wallet files created by `@altude/vault` are **byte-for-byte compatible** with those produced by the `ows` CLI and `@open-wallet-standard/core` Node.js bindings.
-
-### Access model
-
-| Mode | Credential | Policies enforced |
-|---|---|---|
-| Owner | Passphrase | ❌ No — full access |
-| Agent | OWS API token (`ows_key_*`) | ✅ Yes |
-
-### API key creation protocol
-
-Follows the 9-step OWS protocol:
-
-1. Owner enters passphrase → vault decrypts wallet secret
-2. Generates random token: `ows_key_<256 random bits>`
-3. `HKDF-SHA256(salt, token, "ows-api-key-v1")` → 32-byte key
-4. Re-encrypts wallet secret with derived key (AES-256-GCM)
-5. Writes key file with `token_hash: SHA256(token)` and encrypted copy
-6. Returns token **once** — never stored in plaintext
+Applications retain custody of user keys and provide the signer used for
+transaction-building operations. Altude supplies the fee payer and relays the
+locally signed transaction.
 
 ## Development
 
@@ -135,7 +71,8 @@ pnpm typecheck
 { "publish": ["@altude/core", "@altude/gasstation"] }
 ```
 
-Everything else in `packages/*` is treated as work-in-progress: it is marked `"private": true` and added to the Changesets `ignore` list, so it is never published — while still being built and tested locally and in CI.
+The manifest is an explicit release allowlist. A workspace package is not
+publishable unless it is listed there.
 
 To promote a package, add its name to `publish` and run:
 
