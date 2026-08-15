@@ -17,6 +17,14 @@ TypeScript SDK for Altude — gasless Solana infrastructure with an OWS-conforma
 | [`@altude/core`](./packages/core) | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
 | [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API |
 
+### Incubating packages
+
+These packages are preserved for evaluation only and are not release candidates:
+
+- [`@altude/vault`](./packages/vault)
+- [`@altude/solana-adapter`](./packages/solana-adapter)
+- [`@altude/nft`](./packages/nft)
+
 ## Quick Start
 
 ```bash
