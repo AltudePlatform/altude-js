@@ -60,6 +60,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: React Native exports
+        run: node --conditions=react-native scripts/check-react-native-exports.mjs
+
       - name: Test
         run: pnpm test
         env:
