@@ -2,6 +2,12 @@
 
 [![CI](https://github.com/AltudePlatform/altude-js/actions/workflows/ci.yml/badge.svg)](https://github.com/AltudePlatform/altude-js/actions/workflows/ci.yml)
 
+> [!WARNING]
+> **Incubation only — unsupported and not for production.**
+> `@altude/vault`, `@altude/nft`, and `@altude/solana-adapter` are experimental,
+> unsupported packages. They are excluded from production releases and may never
+> ship. The `main` branch is the source of truth for production-supported packages.
+
 TypeScript SDK for Altude — gasless Solana infrastructure with an OWS-conformant vault.
 
 ## Packages
