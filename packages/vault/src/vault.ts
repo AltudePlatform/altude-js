@@ -22,7 +22,7 @@
  */
 
 import type { WalletInfo, OWSPolicy, SignResult, SignMessageResult } from '@altude/core'
-import { apiKeyNotFound } from '@altude/core'
+import { apiKeyNotFound, policyDenied } from '@altude/core'
 import { NodeVaultStorage } from './storage/index.js'
 import type { CreateWalletOptions } from './wallet/index.js'
 import {
@@ -267,7 +267,10 @@ export class AltudeVault {
     const policies: OWSPolicy[] = []
     for (const policyId of key.policy_ids) {
       const policy = await this.loadPolicy(policyId)
-      if (policy) policies.push(policy)
+      if (!policy) {
+        throw policyDenied(`Policy "${policyId}" could not be loaded`)
+      }
+      policies.push(policy)
     }
 
     const context = {
