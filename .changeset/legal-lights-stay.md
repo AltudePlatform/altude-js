@@ -1,5 +1,5 @@
 ---
-'@altude/core': major
+'@altude/core': patch
 '@altude/gasstation': minor
 ---
 
