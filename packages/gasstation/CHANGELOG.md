@@ -1,5 +1,16 @@
 # @altude/gasstation
 
+## 2.1.0
+
+### Minor Changes
+
+- d70d947: React Native / Hermes compatibility fix for Altude SDK package exports and Node-only runtime assumptions
+
+### Patch Changes
+
+- Updated dependencies [d70d947]
+  - @altude/core@0.1.1
+
 ## 2.0.0
 
 ### Major Changes

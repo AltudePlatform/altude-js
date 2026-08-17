@@ -1,6 +1,6 @@
 {
   "name": "gas-station-demo",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "private": true,
   "description": "Minimal example demonstrating gasless Solana transactions with @altude/vault + @altude/gasstation",
   "type": "module",
