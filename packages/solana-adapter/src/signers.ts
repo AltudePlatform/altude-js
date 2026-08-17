@@ -151,11 +151,11 @@ function decodeHex(hex: string): Uint8Array {
 
   const bytes = new Uint8Array(hex.length / 2)
   for (let i = 0; i < hex.length; i += 2) {
-    const byte = Number.parseInt(hex.slice(i, i + 2), 16)
-    if (Number.isNaN(byte)) {
+    const chunk = hex.slice(i, i + 2)
+    if (!/^[0-9a-fA-F]{2}$/.test(chunk)) {
       throw new Error('Invalid hex string')
     }
-    bytes[i / 2] = byte
+    bytes[i / 2] = Number.parseInt(chunk, 16)
   }
 
   return bytes
