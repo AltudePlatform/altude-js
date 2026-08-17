@@ -12,15 +12,15 @@ describe('createOWSGillSigner and createOWSWeb3Signer exports', () => {
 
   it('decodes hex signatures without Buffer polyfills', async () => {
     const vault = {
-      getWallet: async () => ({
+      getWallet: () => Promise.resolve({
         id: 'wallet-1',
         accounts: [{ address: '11111111111111111111111111111111' }],
       }),
-      sign: async () => ({ signature: '00ff10' }),
-      signMessage: async () => ({ signature: 'abcd' }),
+      sign: () => Promise.resolve({ signature: '00ff10' }),
+      signMessage: () => Promise.resolve({ signature: 'abcd' }),
     }
 
-    const signer = await createOWSGillSigner(vault as never, 'wallet-1', 'token')
+    const signer = await createOWSGillSigner(vault, 'wallet-1', 'token')
 
     await expect(signer.signTransactionMessage(new Uint8Array([1, 2, 3]))).resolves.toEqual(new Uint8Array([0, 255, 16]))
     await expect(signer.signMessage(new Uint8Array([4, 5]))).resolves.toEqual(new Uint8Array([0xab, 0xcd]))
