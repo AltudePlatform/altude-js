@@ -3,10 +3,8 @@
 Gasless Solana transaction relay via the Altude relay API.
 
 `@altude/gasstation` lets you build, submit, and query Solana transactions where
-the Altude relay pays the network fee. It works with any signer (including
-[`@altude/vault`](https://www.npmjs.com/package/@altude/vault) via
-[`@altude/solana-adapter`](https://www.npmjs.com/package/@altude/solana-adapter))
-and with pre-signed transaction bytes.
+the Altude relay pays the network fee. It works with an application-provided
+signer or with pre-signed transaction bytes.
 
 ## Install
 

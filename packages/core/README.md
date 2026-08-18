@@ -2,12 +2,9 @@
 
 Shared types, cryptographic primitives, and RPC client for the Altude SDK.
 
-`@altude/core` is the foundational package used by the other `@altude/*` packages. Most
-consumers install one of the higher-level packages ([`@altude/vault`](https://www.npmjs.com/package/@altude/vault),
-[`@altude/gasstation`](https://www.npmjs.com/package/@altude/gasstation),
-[`@altude/solana-adapter`](https://www.npmjs.com/package/@altude/solana-adapter),
-[`@altude/nft`](https://www.npmjs.com/package/@altude/nft)) rather than depending on
-`@altude/core` directly.
+`@altude/core` is the foundational package used by
+[`@altude/gasstation`](https://www.npmjs.com/package/@altude/gasstation). Most
+consumers install Gas Station rather than depending on `@altude/core` directly.
 
 ## Install
 
