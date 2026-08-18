@@ -1,5 +1,11 @@
 # @altude/core
 
+## 0.1.1
+
+### Patch Changes
+
+- d70d947: React Native / Hermes compatibility fix for Altude SDK package exports and Node-only runtime assumptions
+
 ## 0.1.0
 
 ### Minor Changes
