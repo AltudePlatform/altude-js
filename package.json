@@ -11,7 +11,7 @@
     "clean": "turbo clean",
     "manifest:check": "node scripts/release-manifest.mjs check",
     "manifest:sync": "node scripts/release-manifest.mjs sync",
-    "test:react-native": "pnpm --filter @altude/core build && pnpm --filter @altude/gasstation build && node --conditions=react-native scripts/check-react-native-exports.mjs",
+    "test:react-native": "corepack pnpm --filter @altude/core build && corepack pnpm --filter @altude/gasstation build && corepack pnpm --filter @altude/nft build && corepack pnpm --filter @altude/vault build && corepack pnpm --filter @altude/solana-adapter build && node --conditions=react-native scripts/check-react-native-exports.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .gitignore",
     "version-packages": "changeset version",
     "release": "changeset publish"

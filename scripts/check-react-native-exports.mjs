@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const packageDirectories = ['core', 'gasstation']
+const packageDirectories = ['core', 'gasstation', 'nft', 'solana-adapter']
 
 for (const directory of packageDirectories) {
   const packageRoot = join(root, 'packages', directory)
@@ -19,10 +19,14 @@ for (const directory of packageDirectories) {
   const nativeArtifact = await readFile(join(packageRoot, nativeEntry), 'utf8')
   const browserArtifact = await readFile(join(packageRoot, browserEntry), 'utf8')
 
-  assert.match(nativeArtifact, /from 'gill\/react-native'/)
-  assert.match(browserArtifact, /from 'gill\/browser'/)
-  assert.doesNotMatch(nativeArtifact, /(?:from|require\() ['"]gill['"]/)
+  if (directory === 'core' || directory === 'gasstation') {
+    assert.match(nativeArtifact, /from 'gill\/react-native'/)
+    assert.match(browserArtifact, /from 'gill\/browser'/)
+    assert.doesNotMatch(nativeArtifact, /(?:from|require\() ['"]gill['"]/)
+  }
+
   assert.doesNotMatch(nativeArtifact, /\b(?:Buffer|ws)\b/)
+  assert.doesNotMatch(browserArtifact, /\b(?:Buffer|ws)\b/)
 }
 
 async function bundleNativePackage(directory) {
@@ -46,6 +50,8 @@ async function bundleNativePackage(directory) {
 
 await bundleNativePackage('core')
 const bundledSource = await bundleNativePackage('gasstation')
+await bundleNativePackage('nft')
+await bundleNativePackage('solana-adapter')
 
 const hermesLikeSource = `const Buffer = undefined;\nconst DOMException = undefined;\n${bundledSource}`
 const bundledModuleUrl = `data:text/javascript;base64,${Buffer.from(hermesLikeSource).toString('base64')}`

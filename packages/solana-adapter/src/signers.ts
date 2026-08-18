@@ -38,12 +38,12 @@ export async function createOWSGillSigner(
 
     async signTransactionMessage(txBytes: Uint8Array): Promise<Uint8Array> {
       const result = await vault.sign(walletInfo.id, 'solana', txBytes, credential)
-      return Buffer.from(result.signature, 'hex')
+      return decodeHex(result.signature)
     },
 
     async signMessage(message: Uint8Array): Promise<Uint8Array> {
       const result = await vault.signMessage(walletInfo.id, message, credential)
-      return Buffer.from(result.signature, 'hex')
+      return decodeHex(result.signature)
     },
   }
 }
@@ -92,14 +92,14 @@ export async function createOWSWeb3Signer(
     }
     const msgBytes = message.serialize()
     const sigResult = await vault.sign(walletInfo.id, 'solana', msgBytes, credential)
-    const sigBytes = Buffer.from(sigResult.signature, 'hex')
+    const sigBytes = decodeHex(sigResult.signature)
 
     // Add signature to transaction (web3.js Transaction shape)
     const tx = { ...transaction } as Record<string, unknown>
-    const sigs = (tx['signatures'] as Array<{ publicKey: typeof publicKeyObj; signature: Buffer | null }> | undefined) ?? []
+    const sigs = (tx['signatures'] as Array<{ publicKey: typeof publicKeyObj; signature: Uint8Array | null }> | undefined) ?? []
     const existing = sigs.findIndex((s) => s.publicKey.toBase58() === address)
     if (existing >= 0) {
-      (sigs[existing] as { signature: Buffer }).signature = sigBytes
+      (sigs[existing] as { signature: Uint8Array }).signature = sigBytes
     } else {
       sigs.push({ publicKey: publicKeyObj, signature: sigBytes })
     }
@@ -142,4 +142,21 @@ function decodeBase58(encoded: string): Uint8Array {
     else break
   }
   return new Uint8Array(bytes)
+}
+
+function decodeHex(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new Error('Invalid hex string length')
+  }
+
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < hex.length; i += 2) {
+    const chunk = hex.slice(i, i + 2)
+    if (!/^[0-9a-fA-F]{2}$/.test(chunk)) {
+      throw new Error('Invalid hex string')
+    }
+    bytes[i / 2] = Number.parseInt(chunk, 16)
+  }
+
+  return bytes
 }
