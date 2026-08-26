@@ -252,7 +252,6 @@ type TransactionMetaBase = Readonly<{
      * future
      */
     rewards: readonly Reward[] | null;
-    /** @deprecated */
     status: TransactionStatus;
 }>;
 
