@@ -853,9 +853,7 @@ export class AltudeHttpClient {
     }
 
 
-    const accountKeys = tx.transaction.message.accountKeys;
-    console.log('Account keys:', accountKeys);
-
+    const accountKeys = tx.transaction.message.accountKeys
     const index = accountKeys.findIndex(
       (key: string) => key === walletAddress,
     );
