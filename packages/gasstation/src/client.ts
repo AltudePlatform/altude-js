@@ -135,7 +135,7 @@ export interface GetHistoryResponse{
 export interface GetHistorySummary{
   signature: string;
   slot: number;
-  blockTime: number | null;
+  blockTime: UnixTimestamp | null;
   status: 'success' | 'failed';
   type: 'send' | 'receive' | 'unknown';
   amount: number;
@@ -678,7 +678,7 @@ export class AltudeHttpClient {
         accountIndex: item.accountIndex,
         mint: item.mint,
         owner: item.owner ?? '',
-        preAmount:  Number(item.uiTokenAmount.uiAmountString) ?? 0,
+        preAmount:  Number(item.uiTokenAmount.uiAmountString),
         postAmount: 0,
         decimals: 0
       });
@@ -690,14 +690,14 @@ export class AltudeHttpClient {
       const existing = balances.get(key);
 
       if (existing) {
-        existing.postAmount =  Number(item.uiTokenAmount.uiAmountString) ?? 0;
+        existing.postAmount =  Number(item.uiTokenAmount.uiAmountString);
       } else {
         balances.set(key, {
           accountIndex: item.accountIndex,
           mint: item.mint,
           owner: item.owner ?? '',
           preAmount: 0,
-          postAmount: Number(item.uiTokenAmount.uiAmountString) ?? 0,
+          postAmount: Number(item.uiTokenAmount.uiAmountString) ,
           decimals: 0
         });
       }
@@ -787,7 +787,7 @@ export class AltudeHttpClient {
       const summary: GetHistorySummary = {
         signature,
         slot: Number(tx.slot),
-        blockTime: Number(tx.blockTime) ?? null,
+        blockTime: tx.blockTime,
         status: meta?.err ? 'failed' : 'success',
         type: tokenTransfer.type,
         amount: tokenTransfer.amount,
@@ -824,10 +824,10 @@ export class AltudeHttpClient {
     const summary: GetHistorySummary = {
       signature,
       slot: Number(tx.slot),
-      blockTime: Number(tx.blockTime) ?? null,
+      blockTime: tx.blockTime,
       status: meta?.err ? 'failed' : 'success',
       type,
-      amount: Math.abs(Number(change)) / 1_000_000_000,
+      amount: Math.abs(change) / 1_000_000_000,
     };
 
     if (type === 'send') {
@@ -863,8 +863,8 @@ export class AltudeHttpClient {
     }
 
     return (
-      (Number (meta.postBalances[index]) ?? 0) -
-      (Number(meta.preBalances[index]) ?? 0)
+      Number (meta.postBalances[index]) -
+      Number(meta.preBalances[index])
     );
   }
 
