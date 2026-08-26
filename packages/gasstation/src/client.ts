@@ -16,6 +16,7 @@
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 import type { Address } from './solana.native.js'
+import { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, TransactionStatus, UnixTimestamp } from 'gill/react-native'
 
 export { ALTUDE_FEE_PAYER }
 
@@ -208,6 +209,88 @@ export interface SwapResponse {
 // AltudeHttpClient
 // ---------------------------------------------------------------------------
 
+type GetTransactionApiResponseBase = Readonly<{
+    /**
+     * The estimated production time at which the transaction was processed. `null` if not
+     * available.
+     */
+    blockTime: UnixTimestamp | null;
+    /** The slot during which this transaction was processed */
+    slot: Slot;
+    meta: TransactionMetaBase;
+    transaction: TransactionJson;
+}>;
+type TransactionMetaBase = Readonly<{
+    /** Number of compute units consumed by the transaction */
+    computeUnitsConsumed?: bigint;
+    /** Error if transaction failed, `null` if transaction succeeded. */
+    err: TransactionError | null;
+    /** The fee this transaction was charged, in {@link Lamports} */
+    fee: Lamports;
+    /**
+     * String log messages or `null` if log message recording was not enabled during this
+     * transaction
+     */
+    logMessages: readonly string[] | null;
+    /** Account balances after the transaction was processed */
+    postBalances: readonly bigint[];
+    /**
+     * List of token balances from after the transaction was processed or omitted if token balance
+     * recording was not yet enabled during this transaction
+     */
+    postTokenBalances?: readonly TokenBalance[];
+    /** Account balances from before the transaction was processed */
+    preBalances: readonly bigint[];
+    /**
+     * List of token balances from before the transaction was processed or omitted if token balance
+     * recording was not yet enabled during this transaction
+     */
+    preTokenBalances?: readonly TokenBalance[];
+    
+    /**
+     * Transaction-level rewards; currently only `"Rent"`, but other types may be added in the
+     * future
+     */
+    rewards: readonly Reward[] | null;
+    /** @deprecated */
+    status: TransactionStatus;
+}>;
+
+type TransactionJson = Readonly<{
+    message: {
+        /** An ordered list of addresses belonging to the accounts loaded by this transaction */
+        accountKeys: readonly Address[];
+        header: {
+            /**
+             * The number of read-only accounts in the static accounts list that must sign this
+             * transaction.
+             *
+             * Subtracting this number from `numRequiredSignatures` yields the index of the first
+             * read-only signer account in the static accounts list.
+             */
+            numReadonlySignedAccounts: number;
+            /**
+             * The number of accounts in the static accounts list that are neither writable nor
+             * signers.
+             *
+             * Adding this number to `numRequiredSignatures` yields the index of the first read-only
+             * non-signer account in the static accounts list.
+             */
+            numReadonlyUnsignedAccounts: number;
+            /**
+             * The number of accounts in the static accounts list that must sign this transaction.
+             *
+             * Subtracting `numReadonlySignedAccounts` from this number yields the number of
+             * writable signer accounts in the static accounts list. Writable signer accounts always
+             * begin at index zero in the static accounts list.
+             *
+             * This number itself is the index of the first non-signer account in the static
+             * accounts list.
+             */
+            numRequiredSignatures: number;
+        };
+    };
+}> 
 export class AltudeHttpClient {
   readonly apiKey: string | undefined
   readonly baseUrl: string = ALTUDE_API_URL
@@ -517,7 +600,7 @@ export class AltudeHttpClient {
     
     const client = await this.getRpcClient()
     const signatures = await client.rpc.getSignaturesForAddress(walletAddr as Address).send()
-    const signaturelist = signatures.map((sig: { signature: any }) => sig.signature).slice(options.offset ?? 0, options.offset ?? 0 + (options.limit ?? 10) )
+    const signaturelist = signatures.map((sig: { signature: Signature }) => sig.signature).slice(options.offset ?? 0, options.offset ?? 0 + (options.limit ?? 10) )
     
     
     
@@ -531,13 +614,11 @@ export class AltudeHttpClient {
       total: signatures.length
     };
     for (const sig of signaturelist) {
-      const transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send()
-      
+      const transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send() as GetTransactionApiResponseBase
+     
       if (!transaction) continue
-
       try {
-        console.table([`Summarizing transaction ${transaction  }`], sig)
-        transactionlist.data .push(this.summarizeTransaction(transaction, sig, walletAddr))
+        transactionlist.data.push(this.summarizeTransaction(transaction, sig, walletAddr))
       } catch (err) {
         console.error(`Failed to summarize transaction ${sig}:`, err)
       }
@@ -547,7 +628,7 @@ export class AltudeHttpClient {
   }
 
   private getTokenTransfer(
-    tx: any,
+    tx: GetTransactionApiResponseBase,
     walletAddress: string,
   ): {
     amount: number;
@@ -690,7 +771,7 @@ export class AltudeHttpClient {
   }
 
   private summarizeTransaction(
-    tx: any,
+    tx: GetTransactionApiResponseBase,
     signature: string,
     walletAddress: string,
   ): GetHistorySummary {
@@ -761,7 +842,7 @@ export class AltudeHttpClient {
   }
 
   private getWalletBalanceChange(
-    tx: any,
+    tx: GetTransactionApiResponseBase,
     walletAddress: string,
   ): number {
     const { meta } = tx;
@@ -784,8 +865,8 @@ export class AltudeHttpClient {
     }
 
     return (
-      (meta.postBalances[index] ?? 0) -
-      (meta.preBalances[index] ?? 0)
+      (Number (meta.postBalances[index]) ?? 0) -
+      (Number(meta.preBalances[index]) ?? 0)
     );
   }
 
