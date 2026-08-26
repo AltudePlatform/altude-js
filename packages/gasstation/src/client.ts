@@ -16,7 +16,7 @@
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 import type { Address } from './solana.native.js'
-import { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, TransactionStatus, UnixTimestamp } from 'gill/react-native'
+import type { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, TransactionStatus, UnixTimestamp } from 'gill/react-native'
 
 export { ALTUDE_FEE_PAYER }
 
