@@ -123,25 +123,25 @@ export interface GetHistoryOptions {
   offset?: number
 }
 
-export interface GetHistoryResponse{
-  data: GetHistorySummary[];
-  page: number | string;
-  pageSize: number | string;
-  limit: number;
-  offset: number;
-  total: number;
-  
+export interface GetHistoryResponse {
+  data: GetHistorySummary[]
+  page: number | string
+  pageSize: number | string
+  limit: number
+  offset: number
+  total: number
 }
-export interface GetHistorySummary{
-  signature: string;
-  slot: number;
-  blockTime: number | null;
-  status: 'success' | 'failed';
-  type: 'send' | 'receive' | 'unknown';
-  amount: number;
-  mint?: string;
-  from?: string;
-  to?: string;
+
+export interface GetHistorySummary {
+  signature: string
+  slot: number
+  blockTime: number | null
+  status: 'success' | 'failed'
+  type: 'send' | 'receive' | 'unknown'
+  amount: number
+  mint?: string
+  from?: string
+  to?: string
 }
 export interface GetWalletHistoryResponse {
   [key: string]: unknown
