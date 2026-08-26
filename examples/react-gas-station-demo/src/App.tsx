@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { deriveSolanaKeypair, generateMnemonic } from '@altude/core'
 import { AltudeGasStation } from '@altude/gasstation'
 import type {
   BalanceResponse,
@@ -20,6 +21,7 @@ const DEFAULT_MINT_SOL = 'So11111111111111111111111111111111111111112'
 const DEFAULT_MINT_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
 export function App() {
+  const [ownerMnemonic, setOwnerMnemonic] = useState('')
   const [ownerPublicKey, setOwnerPublicKey] = useState('')
   const [ownerPrivateKeyHex, setOwnerPrivateKeyHex] = useState('')
   const [ownerPrivateKeyBytes, setOwnerPrivateKeyBytes] = useState<Uint8Array | null>(null)
@@ -73,14 +75,15 @@ export function App() {
   const [output, setOutput] = useState('Ready.')
   const [busy, setBusy] = useState(false)
 
-  const generateOwnerKeypair = useCallback(() => {
-    const privateKey = crypto.getRandomValues(new Uint8Array(32))
-    const publicKey = ed25519.getPublicKey(privateKey)
+  const generateOwnerKeypair = useCallback(async () => {
+    const mnemonic = generateMnemonic()
+    const { privateKey, publicKey } = await deriveSolanaKeypair(mnemonic, 0)
     const publicKeyBase58 = base58.encode(publicKey)
     const privateKeyHex = Array.from(privateKey)
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('')
 
+    setOwnerMnemonic(mnemonic)
     setOwnerPublicKey(publicKeyBase58)
     setOwnerPrivateKeyHex(privateKeyHex)
     setOwnerPrivateKeyBytes(privateKey)
@@ -91,7 +94,7 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    generateOwnerKeypair()
+    void generateOwnerKeypair()
   }, [generateOwnerKeypair])
 
   const gasStation = useMemo(() => {
@@ -178,9 +181,15 @@ export function App() {
           Test the SDK from an actual React page. Leave API key empty for mock mode.
         </p>
 
-        <h2 className="section-title">Owner Keypair</h2>
-        <p className="hint">Auto-generated in browser. Public key is used as sender owner by default.</p>
+        <h2 className="section-title">Wallet from mnemonic</h2>
+        <p className="hint">
+          This demo follows the public SDK flow: generateMnemonic() → deriveSolanaKeypair(mnemonic, 0) → signer.
+        </p>
         <div className="keypair-card">
+          <div>
+            <strong>Mnemonic</strong>
+            <p className="mono">{ownerMnemonic || '(generating...)'}</p>
+          </div>
           <div>
             <strong>Public Key</strong>
             <p className="mono">{ownerPublicKey || '(generating...)'}</p>
@@ -190,8 +199,8 @@ export function App() {
             <p className="mono">{ownerPrivateKeyHex || '(generating...)'}</p>
           </div>
           <div className="actions">
-            <button type="button" disabled={busy} onClick={generateOwnerKeypair}>
-              Regenerate Keypair
+            <button type="button" disabled={busy} onClick={() => void generateOwnerKeypair()}>
+              Generate New Wallet
             </button>
           </div>
         </div>
@@ -664,6 +673,7 @@ export function App() {
                   pageSize: Number(historyPageSize || '10'),
                   walletAddress: historyWalletAddress.trim() || DEFAULT_ADDRESS,
                 })
+                console.log(result)
                 setHistoryResult(result)
                 return result
               })
@@ -672,7 +682,7 @@ export function App() {
             Get History
           </button>
         </div>
-        {historyResult && (
+        { (
           <div className="result-card">
             <h3 className="result-title">Latest History Result</h3>
             <pre className="result-json">{JSON.stringify(historyResult, null, 2)}</pre>
