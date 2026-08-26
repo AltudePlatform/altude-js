@@ -597,23 +597,26 @@ export class AltudeHttpClient {
     }
     
     const client = await this.getRpcClient()
-    const signatures = await client.rpc.getSignaturesForAddress(walletAddr as Address).send()
-    const signaturelist = signatures.map((sig: { signature: Signature }) => sig.signature).slice(options.offset ?? 0, options.offset ?? 0 + (options.limit ?? 10) )
-    
-    
-    
-    
+    const signatures = await client.rpc.getSignaturesForAddress(address(walletAddr)).send()
+
+    const offset = options.offset ?? 0
+    const limit = options.limit ?? 10
+    const signatureList = signatures
+      .map((sig: { signature: Signature }) => sig.signature)
+      .slice(offset, offset + limit)
+
     const transactionlist: GetHistoryResponse = {
       data: [],
       page: options.page ?? 0,
       pageSize: options.pageSize ?? 0,
-      limit: options.limit ?? 0,
-      offset: options.offset ?? 0,
-      total: signatures.length
-    };
-    for (const sig of signaturelist) {
-      const transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send()
-     
+      limit,
+      offset,
+      total: signatures.length,
+    }
+    for (const sig of signatureList) {
+      const transaction = await client.rpc
+        .getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+        .send()
       if (!transaction) continue
       try {
         transactionlist.data.push(this.summarizeTransaction(transaction  as GetTransactionApiResponseBase, sig, walletAddr))
