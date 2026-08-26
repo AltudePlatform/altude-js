@@ -650,7 +650,7 @@ export class AltudeGasStation {
   }
 
   /** Fetch paginated account history for a wallet address. */
-  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse[]> {
     return this.client.getHistory(options)
   }
 

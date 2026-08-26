@@ -41,6 +41,7 @@
     "@solana-program/compute-budget": "^0.7.0",
     "@solana-program/system": "^0.7.0",
     "@solana-program/token-2022": "^0.4.2",
+    "buffer": "^6.0.3",
     "gill": "0.8.3"
   },
   "devDependencies": {

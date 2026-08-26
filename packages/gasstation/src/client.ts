@@ -15,6 +15,8 @@
 
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
+import { Address } from './solana.native.js'
+import { PublicKey } from '@solana/web3.js'
 
 export { ALTUDE_FEE_PAYER }
 
@@ -121,7 +123,19 @@ export interface GetHistoryOptions {
   offset?: number
 }
 
-export interface GetHistoryResponse {
+export interface GetHistoryResponse{
+  signature: string;
+  slot: number;
+  blockTime: number | null;
+  status: 'success' | 'failed';
+  type: 'send' | 'receive' | 'unknown';
+  amount: number;
+  mint?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface GetWalletHistoryResponse {
   [key: string]: unknown
 }
 
@@ -183,7 +197,6 @@ export interface SwapResponse {
   status?: string
   message?: string
 }
-
 // ---------------------------------------------------------------------------
 // AltudeHttpClient
 // ---------------------------------------------------------------------------
@@ -399,75 +412,356 @@ export class AltudeHttpClient {
     }
   }
 
-  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+  // async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+  //   const walletAddr = options.walletAddress ?? options.account ?? ''
+  //   // Android-style pagination (limit/offset) takes precedence over page/pageSize.
+  //   const useAndroidStyle = options.limit !== undefined || options.offset !== undefined
+  //   if (this.isMockMode) {
+  //     if (useAndroidStyle) {
+  //       return {
+  //         items: [],
+  //         limit: options.limit ?? 10,
+  //         offset: options.offset ?? 0,
+  //         walletAddress: walletAddr,
+  //       }
+  //     }
+  //     return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: walletAddr }
+  //   }
+  //   await this.#ensureConfig()
+  //   if (useAndroidStyle) {
+  //     // Android SDK-style: { account, limit, offset, walletAddress }
+  //     const account = options.account ?? options.walletAddress ?? ''
+  //     try {
+  //       return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //         account,
+  //         limit: options.limit ?? 10,
+  //         offset: options.offset ?? 0,
+  //         walletAddress: walletAddr,
+  //       })
+  //     } catch (err) {
+  //       if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+  //         throw err
+  //       }
+  //       return this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //         Account: account,
+  //         Limit: options.limit ?? 10,
+  //         Offset: options.offset ?? 0,
+  //         WalletAddress: walletAddr,
+  //       })
+  //     }
+  //   }
+  //   try {
+  //     return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //       page: options.page,
+  //       pageSize: options.pageSize,
+  //       walletAddress: walletAddr,
+  //     })
+  //   } catch (err) {
+  //     if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+  //       throw err
+  //     }
+
+  //     try {
+  //       return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //         Page: options.page,
+  //         PageSize: options.pageSize,
+  //         WalletAddress: walletAddr,
+  //       })
+  //     } catch (fallbackErr) {
+  //       if (!(fallbackErr instanceof AltudeError) || fallbackErr.code !== 'RELAY_ERROR') {
+  //         throw fallbackErr
+  //       }
+
+  //       // Final fallback for relays that still expect query parameters.
+  //       const params = new URLSearchParams({
+  //         Page: options.page?.toString() ?? '',
+  //         PageSize: options.pageSize?.toString() ?? '',
+  //         walletAddress: walletAddr,
+  //       })
+  //       return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
+  //     }
+  //   }
+  // }
+
+  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse[]> {
     const walletAddr = options.walletAddress ?? options.account ?? ''
     // Android-style pagination (limit/offset) takes precedence over page/pageSize.
     const useAndroidStyle = options.limit !== undefined || options.offset !== undefined
     if (this.isMockMode) {
       if (useAndroidStyle) {
-        return {
-          items: [],
-          limit: options.limit ?? 10,
-          offset: options.offset ?? 0,
-          walletAddress: walletAddr,
-        }
+        return []
       }
-      return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: walletAddr }
+      return []
     }
-    await this.#ensureConfig()
-    if (useAndroidStyle) {
-      // Android SDK-style: { account, limit, offset, walletAddress }
-      const account = options.account ?? options.walletAddress ?? ''
+    
+    const client = await this.getRpcClient()
+    var signatures = await client.rpc.getSignaturesForAddress(walletAddr as Address, {
+      limit: options.limit ?? 10,      
+    }).send()
+    var signaturelist = signatures.map((sig: { signature: any }) => sig.signature).slice(options.offset ?? 0, options.offset ?? 0 + (options.limit ?? 10) )
+    
+    
+    
+    
+    var transactionlist: GetHistoryResponse[] = []
+    for (const sig of signaturelist) {
+      var transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send()
+      
+      if (!transaction) continue
+
       try {
-        return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
-          account,
-          limit: options.limit ?? 10,
-          offset: options.offset ?? 0,
-          walletAddress: walletAddr,
-        })
+        console.table([`Summarizing transaction ${transaction  }`], sig)
+        transactionlist.push(this.summarizeTransaction(transaction, sig, walletAddr))
       } catch (err) {
-        if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-          throw err
-        }
-        return this.#post<GetHistoryResponse>('/api/account/gethistory', {
-          Account: account,
-          Limit: options.limit ?? 10,
-          Offset: options.offset ?? 0,
-          WalletAddress: walletAddr,
-        })
+        console.error(`Failed to summarize transaction ${sig}:`, err)
       }
     }
-    try {
-      return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
-        page: options.page,
-        pageSize: options.pageSize,
-        walletAddress: walletAddr,
-      })
-    } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
+    return transactionlist
+    
+  }
 
-      try {
-        return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
-          Page: options.page,
-          PageSize: options.pageSize,
-          WalletAddress: walletAddr,
-        })
-      } catch (fallbackErr) {
-        if (!(fallbackErr instanceof AltudeError) || fallbackErr.code !== 'RELAY_ERROR') {
-          throw fallbackErr
-        }
+  private getTokenTransfer(
+    tx: any,
+    walletAddress: string,
+  ): {
+    amount: number;
+    mint: string;
+    type: 'send' | 'receive';
+    from?: string;
+    to?: string;
+  } | null {
+    const meta = tx.meta;
 
-        // Final fallback for relays that still expect query parameters.
-        const params = new URLSearchParams({
-          Page: options.page?.toString() ?? '',
-          PageSize: options.pageSize?.toString() ?? '',
-          walletAddress: walletAddr,
-        })
-        return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
+    if (!meta) {
+      return null;
+    }
+
+    const preTokenBalances = meta.preTokenBalances ?? [];
+    const postTokenBalances = meta.postTokenBalances ?? [];
+
+    if (
+      preTokenBalances.length === 0 &&
+      postTokenBalances.length === 0
+    ) {
+      return null;
+    }
+
+    /**
+     * Combine pre/post balances using:
+     *
+     * accountIndex + mint
+     *
+     * because a token account may only appear in pre OR post
+     * when it was created during this transaction.
+     */
+    const balances = new Map<
+    string,
+    {
+      accountIndex: number;
+      mint: string;
+      owner: string;
+      preAmount: number;
+      postAmount: number;
+      decimals: number;
+    }
+  >();
+
+    for (const item of preTokenBalances) {
+      const key = `${item.accountIndex}:${item.mint}`;
+
+      balances.set(key, {
+        accountIndex: item.accountIndex,
+        mint: item.mint,
+        owner: item.owner ?? '',
+        preAmount:  Number(item.uiTokenAmount.uiAmountString) ?? 0,
+        postAmount: 0,
+        decimals: 0
+      });
+    }
+
+    for (const item of postTokenBalances) {
+      const key = `${item.accountIndex}:${item.mint}`;
+
+      const existing = balances.get(key);
+
+      if (existing) {
+        existing.postAmount =  Number(item.uiTokenAmount.uiAmountString) ?? 0;
+      } else {
+        balances.set(key, {
+          accountIndex: item.accountIndex,
+          mint: item.mint,
+          owner: item.owner ?? '',
+          preAmount: 0,
+          postAmount: Number(item.uiTokenAmount.uiAmountString) ?? 0,
+          decimals: 0
+        });
       }
     }
+
+    const changes = Array.from(balances.values())
+      .map(item => ({
+        ...item,
+        change: item.postAmount - item.preAmount,
+      }))
+      .filter(item => item.change !== 0);
+
+    /**
+     * Find the token balance belonging to our wallet.
+     */
+    const walletChange = changes.find(
+      item => item.owner === walletAddress,
+    );
+
+    if (!walletChange) {
+      return null;
+    }
+
+    /**
+     * Find the opposite token movement.
+     *
+     * Example:
+     *
+     * Wallet A: -10 USDC
+     * Wallet B: +10 USDC
+     */
+    const counterparty = changes.find(
+      item =>
+        item.mint === walletChange.mint &&
+        item.owner !== walletAddress &&
+        Math.sign(item.change) !==
+          Math.sign(walletChange.change),
+    );
+
+    const isSend = walletChange.change < 0;
+
+    const result: {
+      amount: number;
+      mint: string;
+      type: 'send' | 'receive';
+      from?: string;
+      to?: string;
+    } = {
+      amount: Math.abs(walletChange.change),
+      mint: walletChange.mint,
+      type: isSend ? 'send' : 'receive',
+    };
+
+    if (isSend) {
+      result.from = walletAddress;
+
+      if (counterparty?.owner) {
+        result.to = counterparty.owner;
+      }
+    } else {
+      result.to = walletAddress;
+
+      if (counterparty?.owner) {
+        result.from = counterparty.owner;
+      }
+    }
+
+    return result;
+  }
+
+  private summarizeTransaction(
+    tx: any,
+    signature: string,
+    walletAddress: string,
+  ): GetHistoryResponse {
+    const meta = tx.meta;
+
+    /**
+     * First check for an SPL token transfer.
+     */
+    const tokenTransfer = this.getTokenTransfer(
+      tx,
+      walletAddress,
+    );
+
+    if (tokenTransfer) {
+      const summary: GetHistoryResponse = {
+        signature,
+        slot: Number(tx.slot),
+        blockTime: Number(tx.blockTime) ?? null,
+        status: meta?.err ? 'failed' : 'success',
+        type: tokenTransfer.type,
+        amount: tokenTransfer.amount,
+        mint: tokenTransfer.mint,
+      };
+
+      if (tokenTransfer.from) {
+        summary.from = tokenTransfer.from;
+      }
+
+      if (tokenTransfer.to) {
+        summary.to = tokenTransfer.to;
+      }
+
+      return summary;
+    }
+
+    /**
+     * Otherwise treat it as a SOL transaction.
+     */
+    const change = this.getWalletBalanceChange(
+      tx,
+      walletAddress,
+    );
+
+    let type: GetHistoryResponse['type'] = 'unknown';
+
+    if (change > 0) {
+      type = 'receive';
+    } else if (change < 0) {
+      type = 'send';
+    }
+
+    const summary: GetHistoryResponse = {
+      signature,
+      slot: Number(tx.slot),
+      blockTime: Number(tx.blockTime) ?? null,
+      status: meta?.err ? 'failed' : 'success',
+      type,
+      amount: Math.abs(Number(change)) / 1_000_000_000,
+    };
+
+    if (type === 'send') {
+      summary.from = walletAddress;
+    } else if (type === 'receive') {
+      summary.to = walletAddress;
+    }
+
+    return summary;
+  }
+
+  private getWalletBalanceChange(
+    tx: any,
+    walletAddress: string,
+  ): number {
+    const { meta } = tx;
+
+    if (!meta) {
+      return 0;
+    }
+
+    const walletPublicKey = new PublicKey(walletAddress);
+
+    const accountKeys = tx.transaction.message.accountKeys;
+    console.log('Account keys:', accountKeys);
+
+    const index = accountKeys.findIndex(
+      (key: string) => key === walletAddress,
+    );
+
+
+    if (index === -1) {
+      return 0;
+    }
+
+    return (
+      (meta.postBalances[index] ?? 0) -
+      (meta.preBalances[index] ?? 0)
+    );
   }
 
   async swap(options: SwapOptions): Promise<SwapResponse> {
