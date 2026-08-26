@@ -22,22 +22,16 @@ export default defineConfig([
     sourcemap: true,
     treeshake: true,
   },
-    {
-    entry: {
-      'index.browser': 'src/index.ts',
-    },
+  {
+    entry: { 'index.browser': 'src/index.ts' },
     format: ['esm'],
-    platform: 'browser',
-    bundle: true,
-    noExternal: [
-      'buffer',
-      'safe-buffer',
-      '@solana/web3.js',
-      '@solana/buffer-layout',
-    ],
-    dts: false,
+    clean: false,
     sourcemap: true,
     treeshake: true,
+    esbuildPlugins: [platformSolanaAdapter('solana.browser.ts')],
+    esbuildOptions(options) {
+      options.conditions = ['browser']
+    },
   },
   {
     entry: { 'index.native': 'src/index.ts' },
