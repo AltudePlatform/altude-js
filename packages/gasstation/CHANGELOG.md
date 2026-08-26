@@ -1,5 +1,11 @@
 # @altude/gasstation
 
+## 2.2.0
+
+### Minor Changes
+
+- a928905: redirect gethistory to rpc
+
 ## 2.1.0
 
 ### Minor Changes
