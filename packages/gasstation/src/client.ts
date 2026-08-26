@@ -15,6 +15,8 @@
 
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
+import { address, type Address } from './solana.js'
+import type { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, UnixTimestamp } from 'gill'
 
 export { ALTUDE_FEE_PAYER }
 
@@ -122,6 +124,26 @@ export interface GetHistoryOptions {
 }
 
 export interface GetHistoryResponse {
+  data: GetHistorySummary[]
+  page: number | string
+  pageSize: number | string
+  limit: number
+  offset: number
+  total: number
+}
+
+export interface GetHistorySummary {
+  signature: string
+  slot: number
+  blockTime: number | null
+  status: 'success' | 'failed'
+  type: 'send' | 'receive' | 'unknown'
+  amount: number
+  mint?: string
+  from?: string
+  to?: string
+}
+export interface GetWalletHistoryResponse {
   [key: string]: unknown
 }
 
@@ -183,11 +205,90 @@ export interface SwapResponse {
   status?: string
   message?: string
 }
-
 // ---------------------------------------------------------------------------
 // AltudeHttpClient
 // ---------------------------------------------------------------------------
 
+type GetTransactionApiResponseBase = Readonly<{
+    /**
+     * The estimated production time at which the transaction was processed. `null` if not
+     * available.
+     */
+    blockTime: UnixTimestamp | null;
+    /** The slot during which this transaction was processed */
+    slot: Slot;
+    meta?: TransactionMetaBase;
+    transaction: TransactionJson;
+}>;
+type TransactionMetaBase = Readonly<{
+    /** Number of compute units consumed by the transaction */
+    computeUnitsConsumed?: bigint;
+    /** Error if transaction failed, `null` if transaction succeeded. */
+    err: TransactionError | null;
+    /** The fee this transaction was charged, in {@link Lamports} */
+    fee: Lamports;
+    /**
+     * String log messages or `null` if log message recording was not enabled during this
+     * transaction
+     */
+    logMessages: readonly string[] | null;
+    /** Account balances after the transaction was processed */
+    postBalances: readonly bigint[];
+    /**
+     * List of token balances from after the transaction was processed or omitted if token balance
+     * recording was not yet enabled during this transaction
+     */
+    postTokenBalances?: readonly TokenBalance[];
+    /** Account balances from before the transaction was processed */
+    preBalances: readonly bigint[];
+    /**
+     * List of token balances from before the transaction was processed or omitted if token balance
+     * recording was not yet enabled during this transaction
+     */
+    preTokenBalances?: readonly TokenBalance[];
+    
+    /**
+     * Transaction-level rewards; currently only `"Rent"`, but other types may be added in the
+     * future
+     */
+    rewards: readonly Reward[] | null;
+}>;
+
+type TransactionJson = Readonly<{
+    message: {
+        /** An ordered list of addresses belonging to the accounts loaded by this transaction */
+        accountKeys: readonly Address[];
+        header: {
+            /**
+             * The number of read-only accounts in the static accounts list that must sign this
+             * transaction.
+             *
+             * Subtracting this number from `numRequiredSignatures` yields the index of the first
+             * read-only signer account in the static accounts list.
+             */
+            numReadonlySignedAccounts: number;
+            /**
+             * The number of accounts in the static accounts list that are neither writable nor
+             * signers.
+             *
+             * Adding this number to `numRequiredSignatures` yields the index of the first read-only
+             * non-signer account in the static accounts list.
+             */
+            numReadonlyUnsignedAccounts: number;
+            /**
+             * The number of accounts in the static accounts list that must sign this transaction.
+             *
+             * Subtracting `numReadonlySignedAccounts` from this number yields the number of
+             * writable signer accounts in the static accounts list. Writable signer accounts always
+             * begin at index zero in the static accounts list.
+             *
+             * This number itself is the index of the first non-signer account in the static
+             * accounts list.
+             */
+            numRequiredSignatures: number;
+        };
+    };
+}> 
 export class AltudeHttpClient {
   readonly apiKey: string | undefined
   readonly baseUrl: string = ALTUDE_API_URL
@@ -399,6 +500,77 @@ export class AltudeHttpClient {
     }
   }
 
+  // async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
+  //   const walletAddr = options.walletAddress ?? options.account ?? ''
+  //   // Android-style pagination (limit/offset) takes precedence over page/pageSize.
+  //   const useAndroidStyle = options.limit !== undefined || options.offset !== undefined
+  //   if (this.isMockMode) {
+  //     if (useAndroidStyle) {
+  //       return {
+  //         items: [],
+  //         limit: options.limit ?? 10,
+  //         offset: options.offset ?? 0,
+  //         walletAddress: walletAddr,
+  //       }
+  //     }
+  //     return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: walletAddr }
+  //   }
+  //   await this.#ensureConfig()
+  //   if (useAndroidStyle) {
+  //     // Android SDK-style: { account, limit, offset, walletAddress }
+  //     const account = options.account ?? options.walletAddress ?? ''
+  //     try {
+  //       return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //         account,
+  //         limit: options.limit ?? 10,
+  //         offset: options.offset ?? 0,
+  //         walletAddress: walletAddr,
+  //       })
+  //     } catch (err) {
+  //       if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+  //         throw err
+  //       }
+  //       return this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //         Account: account,
+  //         Limit: options.limit ?? 10,
+  //         Offset: options.offset ?? 0,
+  //         WalletAddress: walletAddr,
+  //       })
+  //     }
+  //   }
+  //   try {
+  //     return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //       page: options.page,
+  //       pageSize: options.pageSize,
+  //       walletAddress: walletAddr,
+  //     })
+  //   } catch (err) {
+  //     if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+  //       throw err
+  //     }
+
+  //     try {
+  //       return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
+  //         Page: options.page,
+  //         PageSize: options.pageSize,
+  //         WalletAddress: walletAddr,
+  //       })
+  //     } catch (fallbackErr) {
+  //       if (!(fallbackErr instanceof AltudeError) || fallbackErr.code !== 'RELAY_ERROR') {
+  //         throw fallbackErr
+  //       }
+
+  //       // Final fallback for relays that still expect query parameters.
+  //       const params = new URLSearchParams({
+  //         Page: options.page?.toString() ?? '',
+  //         PageSize: options.pageSize?.toString() ?? '',
+  //         walletAddress: walletAddr,
+  //       })
+  //       return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
+  //     }
+  //   }
+  // }
+
   async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
     const walletAddr = options.walletAddress ?? options.account ?? ''
     // Android-style pagination (limit/offset) takes precedence over page/pageSize.
@@ -406,68 +578,295 @@ export class AltudeHttpClient {
     if (this.isMockMode) {
       if (useAndroidStyle) {
         return {
-          items: [],
-          limit: options.limit ?? 10,
+          data: [],
+          page: options.page ?? 0,
+          pageSize: options.pageSize ?? 0,
+          limit: options.limit ?? 0,
           offset: options.offset ?? 0,
-          walletAddress: walletAddr,
+          total: 0
         }
       }
-      return { items: [], page: options.page, pageSize: options.pageSize, walletAddress: walletAddr }
+      return {
+        data: [],
+        page: options.page ?? 0,
+        pageSize: options.pageSize ?? 0,
+        limit: options.limit ?? 0,
+        offset: options.offset ?? 0,
+        total: 0
+      }
     }
-    await this.#ensureConfig()
-    if (useAndroidStyle) {
-      // Android SDK-style: { account, limit, offset, walletAddress }
-      const account = options.account ?? options.walletAddress ?? ''
+    
+    const client = await this.getRpcClient()
+    const signatures = await client.rpc.getSignaturesForAddress(address(walletAddr)).send()
+
+    const offset = options.offset ?? 0
+    const limit = options.limit ?? 10
+    const signatureList = signatures
+      .map((sig: { signature: Signature }) => sig.signature)
+      .slice(offset, offset + limit)
+
+    const transactionlist: GetHistoryResponse = {
+      data: [],
+      page: options.page ?? 0,
+      pageSize: options.pageSize ?? 0,
+      limit,
+      offset,
+      total: signatures.length,
+    }
+    for (const sig of signatureList) {
+      const transaction = await client.rpc
+        .getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+        .send()
+      if (!transaction) continue
       try {
-        return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
-          account,
-          limit: options.limit ?? 10,
-          offset: options.offset ?? 0,
-          walletAddress: walletAddr,
-        })
+        transactionlist.data.push(this.summarizeTransaction(transaction  as GetTransactionApiResponseBase, sig, walletAddr))
       } catch (err) {
-        if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-          throw err
-        }
-        return this.#post<GetHistoryResponse>('/api/account/gethistory', {
-          Account: account,
-          Limit: options.limit ?? 10,
-          Offset: options.offset ?? 0,
-          WalletAddress: walletAddr,
-        })
+        console.error(`Failed to summarize transaction ${sig}:`, err)
       }
     }
-    try {
-      return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
-        page: options.page,
-        pageSize: options.pageSize,
-        walletAddress: walletAddr,
-      })
-    } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
+    return transactionlist
+    
+  }
 
-      try {
-        return await this.#post<GetHistoryResponse>('/api/account/gethistory', {
-          Page: options.page,
-          PageSize: options.pageSize,
-          WalletAddress: walletAddr,
-        })
-      } catch (fallbackErr) {
-        if (!(fallbackErr instanceof AltudeError) || fallbackErr.code !== 'RELAY_ERROR') {
-          throw fallbackErr
-        }
+  private getTokenTransfer(
+    tx: GetTransactionApiResponseBase,
+    walletAddress: string,
+  ): {
+    amount: number;
+    mint: string;
+    type: 'send' | 'receive';
+    from?: string;
+    to?: string;
+  } | null {
+    const meta = tx.meta;
 
-        // Final fallback for relays that still expect query parameters.
-        const params = new URLSearchParams({
-          Page: options.page?.toString() ?? '',
-          PageSize: options.pageSize?.toString() ?? '',
-          walletAddress: walletAddr,
-        })
-        return this.#post<GetHistoryResponse>(`/api/account/gethistory?${params.toString()}`)
+    if (!meta) {
+      return null;
+    }
+
+    const preTokenBalances = meta.preTokenBalances ?? [];
+    const postTokenBalances = meta.postTokenBalances ?? [];
+
+    if (
+      preTokenBalances.length === 0 &&
+      postTokenBalances.length === 0
+    ) {
+      return null;
+    }
+
+    /**
+     * Combine pre/post balances using:
+     *
+     * accountIndex + mint
+     *
+     * because a token account may only appear in pre OR post
+     * when it was created during this transaction.
+     */
+    const balances = new Map<
+    string,
+    {
+      accountIndex: number;
+      mint: string;
+      owner: string;
+      preAmount: string;
+      postAmount: string;
+      decimals: number;
+    }
+  >();
+
+    for (const item of preTokenBalances) {
+      const key = `${String(item.accountIndex)}:${item.mint}`;
+
+      balances.set(key, {
+        accountIndex: item.accountIndex,
+        mint: item.mint,
+        owner: item.owner ?? '',
+        preAmount:  item.uiTokenAmount.uiAmountString,
+        postAmount: '0',
+        decimals: 0
+      });
+    }
+
+    for (const item of postTokenBalances) {
+      const key = `${String(item.accountIndex)}:${item.mint}`;
+
+      const existing = balances.get(key);
+
+      if (existing) {
+        existing.postAmount =  item.uiTokenAmount.uiAmountString;
+      } else {
+        balances.set(key, {
+          accountIndex: item.accountIndex,
+          mint: item.mint,
+          owner: item.owner ?? '',
+          preAmount: '0',
+          postAmount: item.uiTokenAmount.uiAmountString ,
+          decimals: 0
+        });
       }
     }
+
+    const changes = Array.from(balances.values())
+      .map(item => ({
+        ...item,
+        change: Number(item.postAmount) - Number(item.preAmount),
+      }))
+      .filter(item => item.change !== 0);
+
+    /**
+     * Find the token balance belonging to our wallet.
+     */
+    const walletChange = changes.find(
+      item => item.owner === walletAddress,
+    );
+
+    if (!walletChange) {
+      return null;
+    }
+
+    /**
+     * Find the opposite token movement.
+     *
+     * Example:
+     *
+     * Wallet A: -10 USDC
+     * Wallet B: +10 USDC
+     */
+    const counterparty = changes.find(
+      item =>
+        item.mint === walletChange.mint &&
+        item.owner !== walletAddress &&
+        Math.sign(item.change) !==
+          Math.sign(walletChange.change),
+    );
+
+    const isSend = walletChange.change < 0;
+
+    const result: {
+      amount: number;
+      mint: string;
+      type: 'send' | 'receive';
+      from?: string;
+      to?: string;
+    } = {
+      amount: Math.abs(walletChange.change),
+      mint: walletChange.mint,
+      type: isSend ? 'send' : 'receive',
+    };
+
+    if (isSend) {
+      result.from = walletAddress;
+
+      if (counterparty?.owner) {
+        result.to = counterparty.owner;
+      }
+    } else {
+      result.to = walletAddress;
+
+      if (counterparty?.owner) {
+        result.from = counterparty.owner;
+      }
+    }
+
+    return result;
+  }
+
+  private summarizeTransaction(
+    tx: GetTransactionApiResponseBase,
+    signature: string,
+    walletAddress: string,
+  ): GetHistorySummary {
+    const meta = tx.meta;
+
+    /**
+     * First check for an SPL token transfer.
+     */
+    const tokenTransfer = this.getTokenTransfer(
+      tx,
+      walletAddress,
+    );
+
+    if (tokenTransfer) {
+      const summary: GetHistorySummary = {
+        signature,
+        slot: Number(tx.slot),
+        blockTime: tx.blockTime === null ? null : Number(tx.blockTime),
+        status: meta?.err ? 'failed' : 'success',
+        type: tokenTransfer.type,
+        amount: tokenTransfer.amount,
+        mint: tokenTransfer.mint,
+      };
+
+      if (tokenTransfer.from) {
+        summary.from = tokenTransfer.from;
+      }
+
+      if (tokenTransfer.to) {
+        summary.to = tokenTransfer.to;
+      }
+
+      return summary;
+    }
+
+    /**
+     * Otherwise treat it as a SOL transaction.
+     */
+    const change = this.getWalletBalanceChange(
+      tx,
+      walletAddress,
+    );
+
+    let type: GetHistorySummary['type'] = 'unknown';
+
+    if (change > 0) {
+      type = 'receive';
+    } else if (change < 0) {
+      type = 'send';
+    }
+
+    const summary: GetHistorySummary = {
+      signature,
+      slot: Number(tx.slot),
+      blockTime: Number(tx.blockTime),
+      status: meta?.err ? 'failed' : 'success',
+      type,
+      amount: Math.abs(change) / 1_000_000_000,
+    };
+
+    if (type === 'send') {
+      summary.from = walletAddress;
+    } else if (type === 'receive') {
+      summary.to = walletAddress;
+    }
+
+    return summary;
+  }
+
+  private getWalletBalanceChange(
+    tx: GetTransactionApiResponseBase,
+    walletAddress: string,
+  ): number {
+    const { meta } = tx;
+
+    if (!meta) {
+      return 0;
+    }
+
+
+    const accountKeys = tx.transaction.message.accountKeys
+    const index = accountKeys.findIndex(
+      (key: string) => key === walletAddress,
+    );
+
+
+    if (index === -1) {
+      return 0;
+    }
+
+    return (
+      Number (meta.postBalances[index]) -
+      Number(meta.preBalances[index])
+    );
   }
 
   async swap(options: SwapOptions): Promise<SwapResponse> {
