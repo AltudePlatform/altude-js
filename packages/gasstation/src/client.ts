@@ -124,6 +124,15 @@ export interface GetHistoryOptions {
 }
 
 export interface GetHistoryResponse{
+  data: GetHistorySummary[];
+  page: number | string;
+  pageSize: number | string;
+  limit: number;
+  offset: number;
+  total: number;
+  
+}
+export interface GetHistorySummary{
   signature: string;
   slot: number;
   blockTime: number | null;
@@ -134,7 +143,6 @@ export interface GetHistoryResponse{
   from?: string;
   to?: string;
 }
-
 export interface GetWalletHistoryResponse {
   [key: string]: unknown
 }
@@ -483,27 +491,46 @@ export class AltudeHttpClient {
   //   }
   // }
 
-  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse[]> {
+  async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
     const walletAddr = options.walletAddress ?? options.account ?? ''
     // Android-style pagination (limit/offset) takes precedence over page/pageSize.
     const useAndroidStyle = options.limit !== undefined || options.offset !== undefined
     if (this.isMockMode) {
       if (useAndroidStyle) {
-        return []
+        return {
+          data: [],
+          page: options.page ?? 0,
+          pageSize: options.pageSize ?? 0,
+          limit: options.limit ?? 0,
+          offset: options.offset ?? 0,
+          total: 0
+        }
       }
-      return []
+      return {
+        data: [],
+        page: options.page ?? 0,
+        pageSize: options.pageSize ?? 0,
+        limit: options.limit ?? 0,
+        offset: options.offset ?? 0,
+        total: 0
+      }
     }
     
     const client = await this.getRpcClient()
-    var signatures = await client.rpc.getSignaturesForAddress(walletAddr as Address, {
-      limit: options.limit ?? 10,      
-    }).send()
+    var signatures = await client.rpc.getSignaturesForAddress(walletAddr as Address).send()
     var signaturelist = signatures.map((sig: { signature: any }) => sig.signature).slice(options.offset ?? 0, options.offset ?? 0 + (options.limit ?? 10) )
     
     
     
     
-    var transactionlist: GetHistoryResponse[] = []
+    var transactionlist: GetHistoryResponse = {
+      data: [],
+      page: options.page ?? 0,
+      pageSize: options.pageSize ?? 0,
+      limit: options.limit ?? 0,
+      offset: options.offset ?? 0,
+      total: signatures.length
+    };
     for (const sig of signaturelist) {
       var transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send()
       
@@ -511,7 +538,7 @@ export class AltudeHttpClient {
 
       try {
         console.table([`Summarizing transaction ${transaction  }`], sig)
-        transactionlist.push(this.summarizeTransaction(transaction, sig, walletAddr))
+        transactionlist.data .push(this.summarizeTransaction(transaction, sig, walletAddr))
       } catch (err) {
         console.error(`Failed to summarize transaction ${sig}:`, err)
       }
@@ -667,7 +694,7 @@ export class AltudeHttpClient {
     tx: any,
     signature: string,
     walletAddress: string,
-  ): GetHistoryResponse {
+  ): GetHistorySummary {
     const meta = tx.meta;
 
     /**
@@ -679,7 +706,7 @@ export class AltudeHttpClient {
     );
 
     if (tokenTransfer) {
-      const summary: GetHistoryResponse = {
+      const summary: GetHistorySummary = {
         signature,
         slot: Number(tx.slot),
         blockTime: Number(tx.blockTime) ?? null,
@@ -708,7 +735,7 @@ export class AltudeHttpClient {
       walletAddress,
     );
 
-    let type: GetHistoryResponse['type'] = 'unknown';
+    let type: GetHistorySummary['type'] = 'unknown';
 
     if (change > 0) {
       type = 'receive';
@@ -716,7 +743,7 @@ export class AltudeHttpClient {
       type = 'send';
     }
 
-    const summary: GetHistoryResponse = {
+    const summary: GetHistorySummary = {
       signature,
       slot: Number(tx.slot),
       blockTime: Number(tx.blockTime) ?? null,
