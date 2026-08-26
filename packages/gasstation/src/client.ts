@@ -672,7 +672,7 @@ export class AltudeHttpClient {
   >();
 
     for (const item of preTokenBalances) {
-      const key = `${item.accountIndex}:${item.mint}`;
+      const key = `${String(item.accountIndex)}:${item.mint}`;
 
       balances.set(key, {
         accountIndex: item.accountIndex,
@@ -685,7 +685,7 @@ export class AltudeHttpClient {
     }
 
     for (const item of postTokenBalances) {
-      const key = `${item.accountIndex.toString()}:${item.mint}`;
+      const key = `${String(item.accountIndex)}:${item.mint}`;
 
       const existing = balances.get(key);
 
