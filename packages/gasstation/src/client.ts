@@ -16,7 +16,7 @@
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 import type { Address } from './solana.native.js'
-import type { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, TransactionStatus, UnixTimestamp } from 'gill/react-native'
+import type { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, UnixTimestamp } from 'gill/react-native'
 
 export { ALTUDE_FEE_PAYER }
 
@@ -217,7 +217,7 @@ type GetTransactionApiResponseBase = Readonly<{
     blockTime: UnixTimestamp | null;
     /** The slot during which this transaction was processed */
     slot: Slot;
-    meta: TransactionMetaBase;
+    meta?: TransactionMetaBase;
     transaction: TransactionJson;
 }>;
 type TransactionMetaBase = Readonly<{
@@ -252,7 +252,6 @@ type TransactionMetaBase = Readonly<{
      * future
      */
     rewards: readonly Reward[] | null;
-    status: TransactionStatus;
 }>;
 
 type TransactionJson = Readonly<{
@@ -613,11 +612,11 @@ export class AltudeHttpClient {
       total: signatures.length
     };
     for (const sig of signaturelist) {
-      const transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send() as GetTransactionApiResponseBase
+      const transaction = await client.rpc.getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).send()
      
       if (!transaction) continue
       try {
-        transactionlist.data.push(this.summarizeTransaction(transaction, sig, walletAddr))
+        transactionlist.data.push(this.summarizeTransaction(transaction  as GetTransactionApiResponseBase, sig, walletAddr))
       } catch (err) {
         console.error(`Failed to summarize transaction ${sig}:`, err)
       }
