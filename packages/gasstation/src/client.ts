@@ -16,7 +16,6 @@
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 import { Address } from './solana.native.js'
-import { PublicKey } from '@solana/web3.js'
 
 export { ALTUDE_FEE_PAYER }
 
@@ -771,7 +770,6 @@ export class AltudeHttpClient {
       return 0;
     }
 
-    const walletPublicKey = new PublicKey(walletAddress);
 
     const accountKeys = tx.transaction.message.accountKeys;
     console.log('Account keys:', accountKeys);
