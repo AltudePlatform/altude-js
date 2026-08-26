@@ -790,7 +790,7 @@ export class AltudeHttpClient {
       const summary: GetHistorySummary = {
         signature,
         slot: Number(tx.slot),
-        blockTime: Number(tx.blockTime),
+        blockTime: tx.blockTime === null ? null : Number(tx.blockTime),
         status: meta?.err ? 'failed' : 'success',
         type: tokenTransfer.type,
         amount: tokenTransfer.amount,
