@@ -135,7 +135,7 @@ export interface GetHistoryResponse{
 export interface GetHistorySummary{
   signature: string;
   slot: number;
-  blockTime: UnixTimestamp | null;
+  blockTime: number | null;
   status: 'success' | 'failed';
   type: 'send' | 'receive' | 'unknown';
   amount: number;
@@ -665,8 +665,8 @@ export class AltudeHttpClient {
       accountIndex: number;
       mint: string;
       owner: string;
-      preAmount: number;
-      postAmount: number;
+      preAmount: string;
+      postAmount: string;
       decimals: number;
     }
   >();
@@ -678,8 +678,8 @@ export class AltudeHttpClient {
         accountIndex: item.accountIndex,
         mint: item.mint,
         owner: item.owner ?? '',
-        preAmount:  Number(item.uiTokenAmount.uiAmountString),
-        postAmount: 0,
+        preAmount:  item.uiTokenAmount.uiAmountString,
+        postAmount: '0',
         decimals: 0
       });
     }
@@ -690,14 +690,14 @@ export class AltudeHttpClient {
       const existing = balances.get(key);
 
       if (existing) {
-        existing.postAmount =  Number(item.uiTokenAmount.uiAmountString);
+        existing.postAmount =  item.uiTokenAmount.uiAmountString;
       } else {
         balances.set(key, {
           accountIndex: item.accountIndex,
           mint: item.mint,
           owner: item.owner ?? '',
-          preAmount: 0,
-          postAmount: Number(item.uiTokenAmount.uiAmountString) ,
+          preAmount: '0',
+          postAmount: item.uiTokenAmount.uiAmountString ,
           decimals: 0
         });
       }
@@ -706,7 +706,7 @@ export class AltudeHttpClient {
     const changes = Array.from(balances.values())
       .map(item => ({
         ...item,
-        change: item.postAmount - item.preAmount,
+        change: Number(item.postAmount) - Number(item.preAmount),
       }))
       .filter(item => item.change !== 0);
 
@@ -787,7 +787,7 @@ export class AltudeHttpClient {
       const summary: GetHistorySummary = {
         signature,
         slot: Number(tx.slot),
-        blockTime: tx.blockTime,
+        blockTime: Number(tx.blockTime),
         status: meta?.err ? 'failed' : 'success',
         type: tokenTransfer.type,
         amount: tokenTransfer.amount,
@@ -824,7 +824,7 @@ export class AltudeHttpClient {
     const summary: GetHistorySummary = {
       signature,
       slot: Number(tx.slot),
-      blockTime: tx.blockTime,
+      blockTime: Number(tx.blockTime),
       status: meta?.err ? 'failed' : 'success',
       type,
       amount: Math.abs(change) / 1_000_000_000,
