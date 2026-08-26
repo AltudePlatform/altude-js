@@ -15,7 +15,7 @@
 
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
-import { Address } from './solana.native.js'
+import type { Address } from './solana.native.js'
 
 export { ALTUDE_FEE_PAYER }
 
