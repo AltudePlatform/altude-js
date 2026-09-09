@@ -947,7 +947,10 @@ export class AltudeHttpClient {
     const absolute = amount < 0n ? -amount : amount
     const digits = absolute.toString().padStart(decimals + 1, '0')
     const whole = digits.slice(0, -decimals) || '0'
-    const fraction = digits.slice(-decimals).replace(/0+$/, '')
+    let fraction = digits.slice(-decimals)
+    while (fraction.endsWith('0')) {
+      fraction = fraction.slice(0, -1)
+    }
 
     return `${sign}${whole}${fraction ? `.${fraction}` : ''}`
   }
