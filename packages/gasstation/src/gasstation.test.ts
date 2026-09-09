@@ -68,32 +68,6 @@ describe('AltudeHttpClient — mock mode', () => {
     expect(result.Signature).toBeTruthy()
   })
 
-  it('getBalance returns mock data (address field)', async () => {
-    const client = new AltudeHttpClient()
-    const result = await client.getBalance({ address: '11111111111111111111111111111111' })
-    expect(result.address).toBe('11111111111111111111111111111111')
-    expect(result.lamports).toBeGreaterThan(0)
-  })
-
-  it('getBalance returns mock data (Android-style account field)', async () => {
-    const client = new AltudeHttpClient()
-    const result = await client.getBalance({ account: '11111111111111111111111111111111' })
-    expect(result.address).toBe('11111111111111111111111111111111')
-    expect(result.lamports).toBeGreaterThan(0)
-  })
-
-  it('getAccountInfo returns mock data (accountAddress field)', async () => {
-    const client = new AltudeHttpClient()
-    const result = await client.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
-    expect(result.accountAddress).toBe('11111111111111111111111111111111')
-  })
-
-  it('getAccountInfo returns mock data (Android-style account field)', async () => {
-    const client = new AltudeHttpClient()
-    const result = await client.getAccountInfo({ account: '11111111111111111111111111111111' })
-    expect(result.accountAddress).toBe('11111111111111111111111111111111')
-  })
-
   it('getHistory returns mock data (page/pageSize fields)', async () => {
     const client = new AltudeHttpClient()
     const result = await client.getHistory({
@@ -301,140 +275,6 @@ describe('AltudeHttpClient — live mode', () => {
     expect(sentBody).toEqual({ SignedTransaction: 'base64tx==' })
   })
 
-  it('getBalance reads SOL balance through the RPC client', async () => {
-    const walletAddress = '11111111111111111111111111111111'
-    const getBalance = vi.fn(() => ({
-      send: vi.fn().mockResolvedValue({ value: 1_500_000_000n }),
-    }))
-    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
-
-    vi.spyOn(client, 'getRpcClient').mockResolvedValue({
-      rpc: { getBalance },
-    } as never)
-
-    const result = await client.getBalance({ address: walletAddress })
-
-    expect(getBalance).toHaveBeenCalledWith(walletAddress)
-    expect(result).toEqual({
-      address: walletAddress,
-      lamports: 1_500_000_000,
-      amount: '1500000000',
-      decimals: 9,
-      uiAmount: 1.5,
-    })
-  })
-
-  it('getBalance aggregates token accounts by owner and mint through RPC', async () => {
-    const walletAddress = '11111111111111111111111111111111'
-    const mintAddress = 'So11111111111111111111111111111111111111112'
-    const getTokenAccountsByOwner = vi.fn(() => ({
-      send: vi.fn().mockResolvedValue({
-        value: [
-          {
-            account: {
-              data: {
-                parsed: {
-                  info: {
-                    tokenAmount: { amount: '1500000', decimals: 6 },
-                  },
-                },
-              },
-            },
-          },
-          {
-            account: {
-              data: {
-                parsed: {
-                  info: {
-                    tokenAmount: { amount: '250000', decimals: 6 },
-                  },
-                },
-              },
-            },
-          },
-        ],
-      }),
-    }))
-    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
-
-    vi.spyOn(client, 'getRpcClient').mockResolvedValue({
-      rpc: { getTokenAccountsByOwner },
-    } as never)
-
-    const result = await client.getBalance({ account: walletAddress, token: mintAddress })
-
-    expect(getTokenAccountsByOwner).toHaveBeenCalledWith(walletAddress, { mint: mintAddress }, { encoding: 'jsonParsed' })
-    expect(result).toEqual({
-      address: walletAddress,
-      amount: '1750000',
-      decimals: 6,
-      uiAmount: 1.75,
-    })
-  })
-
-  it('getAccountInfo reads and normalizes RPC account data', async () => {
-    const accountAddress = '11111111111111111111111111111111'
-    const getAccountInfo = vi.fn(() => ({
-      send: vi.fn().mockResolvedValue({
-        value: {
-          executable: false,
-          lamports: 42n,
-          owner: '11111111111111111111111111111111',
-          rentEpoch: 7n,
-          space: 165n,
-          data: {
-            parsed: {
-              info: {
-                tokenAmount: {
-                  amount: '100',
-                  decimals: 2,
-                  uiAmount: 1,
-                  uiAmountString: '1',
-                },
-              },
-              type: 'account',
-            },
-            program: 'spl-token',
-            space: 165n,
-          },
-        },
-      }),
-    }))
-    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
-
-    vi.spyOn(client, 'getRpcClient').mockResolvedValue({
-      rpc: { getAccountInfo },
-    } as never)
-
-    const result = await client.getAccountInfo({ accountAddress })
-
-    expect(getAccountInfo).toHaveBeenCalledWith(accountAddress, { encoding: 'jsonParsed' })
-    expect(result).toEqual({
-      accountAddress,
-      exists: true,
-      executable: false,
-      lamports: 42,
-      owner: '11111111111111111111111111111111',
-      rentEpoch: '7',
-      space: '165',
-      data: {
-        parsed: {
-          info: {
-            tokenAmount: {
-              amount: '100',
-              decimals: 2,
-              uiAmount: 1,
-              uiAmountString: '1',
-            },
-          },
-          type: 'account',
-        },
-        program: 'spl-token',
-        space: '165',
-      },
-    })
-    expect(() => JSON.stringify(result)).not.toThrow()
-  })
 })
 
 describe('AltudeGasStation facade', () => {
@@ -457,12 +297,6 @@ describe('AltudeGasStation facade', () => {
     const gs = new AltudeGasStation()
     const result = await gs.getBlockhash()
     expect(result.Blockhash).toBeTruthy()
-  })
-
-  it('getBalance returns balance data', async () => {
-    const gs = new AltudeGasStation()
-    const result = await gs.getBalance({ address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71' })
-    expect(result.address).toBeTruthy()
   })
 
   it('exposes getConfig through the facade', async () => {
@@ -492,16 +326,13 @@ describe('AltudeGasStation facade', () => {
 
     const batchResult = await gs.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
     const batchAliasResult = await gs.sendBatch({ signedTransaction: 'base64encodedtx==' })
-    const accountInfo = await gs.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
     const history = await gs.getHistory({
       page: 1,
       pageSize: 10,
       walletAddress: '11111111111111111111111111111111',
     })
-
     expect(batchResult.Signature).toBeTruthy()
     expect(batchAliasResult.Signature).toBeTruthy()
-    expect(accountInfo.accountAddress).toBe('11111111111111111111111111111111')
     expect(history.page).toBe(1)
   })
 
@@ -939,18 +770,6 @@ describe('AltudeGasStation facade', () => {
     expect(signer.signTransactionMessage).toHaveBeenCalled()
     expect(sendTransactionSpy).toHaveBeenCalledOnce()
     expect(result.Signature).toBeTruthy()
-  })
-
-  it('getBalance facade accepts Android-style account field', async () => {
-    const gs = new AltudeGasStation()
-    const result = await gs.getBalance({ account: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71' })
-    expect(result.address).toBeTruthy()
-  })
-
-  it('getAccountInfo facade accepts Android-style account field', async () => {
-    const gs = new AltudeGasStation()
-    const result = await gs.getAccountInfo({ account: '11111111111111111111111111111111' })
-    expect(result.accountAddress).toBe('11111111111111111111111111111111')
   })
 
   it('getHistory facade accepts Android-style limit/offset fields', async () => {

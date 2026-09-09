@@ -37,10 +37,6 @@ import type {
   ConfigResponse,
   SendTransactionResponse,
   BatchTransactionOptions,
-  GetBalanceOptions,
-  BalanceResponse,
-  GetAccountInfoOptions,
-  GetAccountInfoResponse,
   GetHistoryOptions,
   GetHistoryResponse,
   SwapOptions,
@@ -637,16 +633,6 @@ export class AltudeGasStation {
    */
   async swap(options: SwapOptions): Promise<SwapResponse> {
     return this.client.swap(options)
-  }
-
-  /** Fetch SOL or SPL token balance for an address via the configured Solana RPC client. */
-  async getBalance(options: GetBalanceOptions): Promise<BalanceResponse> {
-    return this.client.getBalance(options)
-  }
-
-  /** Fetch on-chain account info for an address via the configured Solana RPC client. */
-  async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
-    return this.client.getAccountInfo(options)
   }
 
   /** Fetch paginated account history for a wallet address. */

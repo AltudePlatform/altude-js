@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { deriveSolanaKeypair, generateMnemonic } from '@altude/core'
 import { AltudeGasStation } from '@altude/gasstation'
 import type {
-  BalanceResponse,
   BlockhashResponse,
   ConfigResponse,
   CreateAccountResponse,
-  GetAccountInfoResponse,
   GetHistoryResponse,
   SendTransactionResponse,
   SwapResponse,
@@ -27,9 +25,7 @@ export function App() {
   const [ownerPrivateKeyBytes, setOwnerPrivateKeyBytes] = useState<Uint8Array | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [network, setNetwork] = useState<Network>('devnet')
-  const [address, setAddress] = useState(DEFAULT_ADDRESS)
   const [baseUrl, setBaseUrl] = useState('')
-  const [balanceMint, setBalanceMint] = useState('')
 
   const [sendTo, setSendTo] = useState(DEFAULT_ADDRESS)
   const [sendAmount, setSendAmount] = useState('1000000')
@@ -54,7 +50,6 @@ export function App() {
   const [closeComputeUnitPrice, setCloseComputeUnitPrice] = useState('')
   const [closeHeapFrameBytes, setCloseHeapFrameBytes] = useState('')
   const [closeUseOwnerSigner, setCloseUseOwnerSigner] = useState(true)
-  const [accountInfoAddress, setAccountInfoAddress] = useState(DEFAULT_ADDRESS)
   const [historyWalletAddress, setHistoryWalletAddress] = useState(DEFAULT_ADDRESS)
   const [historyPage, setHistoryPage] = useState('1')
   const [historyPageSize, setHistoryPageSize] = useState('10')
@@ -65,11 +60,9 @@ export function App() {
   const [swapUserPublicKey, setSwapUserPublicKey] = useState(DEFAULT_ADDRESS)
   const [initResult, setInitResult] = useState<ConfigResponse | null>(null)
   const [blockhashResult, setBlockhashResult] = useState<BlockhashResponse | null>(null)
-  const [balanceResult, setBalanceResult] = useState<BalanceResponse | null>(null)
   const [sendResult, setSendResult] = useState<SendTransactionResponse | null>(null)
   const [createAccountResult, setCreateAccountResult] = useState<CreateAccountResponse | null>(null)
   const [closeAccountResult, setCloseAccountResult] = useState<SendTransactionResponse | null>(null)
-  const [accountInfoResult, setAccountInfoResult] = useState<GetAccountInfoResponse | null>(null)
   const [historyResult, setHistoryResult] = useState<GetHistoryResponse | null>(null)
   const [swapResult, setSwapResult] = useState<SwapResponse | null>(null)
   const [output, setOutput] = useState('Ready.')
@@ -87,9 +80,7 @@ export function App() {
     setOwnerPublicKey(publicKeyBase58)
     setOwnerPrivateKeyHex(privateKeyHex)
     setOwnerPrivateKeyBytes(privateKey)
-
     // Keep sender-owner fields aligned with the generated owner identity.
-    setAddress(publicKeyBase58)
     setSwapUserPublicKey(publicKeyBase58)
   }, [])
 
@@ -232,23 +223,6 @@ export function App() {
             />
           </label>
 
-          <label className="wide">
-            Address
-            <input
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Wallet address"
-            />
-          </label>
-
-          <label className="wide">
-            Balance Mint (optional)
-            <input
-              value={balanceMint}
-              onChange={(e) => setBalanceMint(e.target.value)}
-              placeholder="SPL mint address for token balance"
-            />
-          </label>
         </div>
 
         <h2 className="section-title">SDK Init and Blockhash</h2>
@@ -309,54 +283,6 @@ export function App() {
               </div>
             </dl>
             <pre className="result-json">{JSON.stringify(blockhashResult, null, 2)}</pre>
-          </div>
-        )}
-
-        <h2 className="section-title">getBalance</h2>
-        <p className="hint">Inputs match GetBalanceOptions: address, mint(optional). Live mode resolves balances through the Altude-configured RPC client.</p>
-        <div className="actions">
-          <button
-            disabled={busy}
-            onClick={() =>
-              run('getBalance()', async () => {
-                const result = await gasStation.getBalance({
-                  address: address.trim() || DEFAULT_ADDRESS,
-                  ...(balanceMint.trim() ? { mint: balanceMint.trim() } : {}),
-                })
-                setBalanceResult(result)
-                return result
-              })
-            }
-          >
-            Get Balance
-          </button>
-        </div>
-        {balanceResult && (
-          <div className="result-card">
-            <h3 className="result-title">Latest Balance Result</h3>
-            <dl className="result-grid">
-              <div>
-                <dt>Address</dt>
-                <dd className="mono">{balanceResult.address}</dd>
-              </div>
-              <div>
-                <dt>Lamports</dt>
-                <dd>{balanceResult.lamports ?? '-'}</dd>
-              </div>
-              <div>
-                <dt>Amount</dt>
-                <dd>{balanceResult.amount ?? '-'}</dd>
-              </div>
-              <div>
-                <dt>Decimals</dt>
-                <dd>{balanceResult.decimals ?? '-'}</dd>
-              </div>
-              <div>
-                <dt>UI Amount</dt>
-                <dd>{balanceResult.uiAmount ?? '-'}</dd>
-              </div>
-            </dl>
-            <pre className="result-json">{JSON.stringify(balanceResult, null, 2)}</pre>
           </div>
         )}
 
@@ -611,39 +537,6 @@ export function App() {
           </button>
         </div>
         {closeAccountResult && renderTransactionResult('Latest Close Account Result', closeAccountResult)}
-
-        <h2 className="section-title">getAccountInfo</h2>
-        <p className="hint">Live mode resolves account data through the Altude-configured RPC client.</p>
-        <div className="grid">
-          <label className="wide">
-            Account Address
-            <input
-              value={accountInfoAddress}
-              onChange={(e) => setAccountInfoAddress(e.target.value)}
-              placeholder="Wallet or account address"
-            />
-          </label>
-        </div>
-        <div className="actions">
-          <button
-            disabled={busy}
-            onClick={() =>
-              run('getAccountInfo()', async () => {
-                const result = await gasStation.getAccountInfo({ accountAddress: accountInfoAddress.trim() || DEFAULT_ADDRESS })
-                setAccountInfoResult(result)
-                return result
-              })
-            }
-          >
-            Get Account Info
-          </button>
-        </div>
-        {accountInfoResult && (
-          <div className="result-card">
-            <h3 className="result-title">Latest Account Info Result</h3>
-            <pre className="result-json">{JSON.stringify(accountInfoResult, null, 2)}</pre>
-          </div>
-        )}
 
         <h2 className="section-title">getHistory</h2>
         <div className="grid">

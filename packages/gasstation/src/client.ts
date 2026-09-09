@@ -8,8 +8,6 @@
  *   POST /api/Account/create         → sponsored account creation
  *   POST /api/account/close          → close an account
  *   POST /api/account/gethistory     → fetch account history
- * Account balance and account-info lookups are resolved through the
- * Altude-configured Solana RPC client instead of relay HTTP endpoints.
  *
  * Fee payer: ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71
  */
@@ -77,36 +75,6 @@ export interface CreateAccountResponse {
 export interface CloseAccountOptions {
   /** Base64-encoded partially-signed transaction (built by the gasstation facade) */
   signedTransaction: string
-}
-
-export interface GetBalanceOptions {
-  /** Wallet address (base58). Mirrors Android SDK `GetBalanceOption.account`. */
-  account?: string
-  /** Wallet address (base58). Kept for backward compatibility; prefer `account`. */
-  address?: string
-  /** SPL token mint address. Mirrors Android SDK `GetBalanceOption.token`. */
-  token?: string
-  /** SPL token mint address. Kept for backward compatibility; prefer `token`. */
-  mint?: string
-}
-
-export interface BalanceResponse {
-  address: string
-  lamports?: number
-  amount?: string
-  decimals?: number
-  uiAmount?: number
-}
-
-export interface GetAccountInfoOptions {
-  /** Wallet or account address (base58). Mirrors Android SDK `GetAccountInfoOption.account`. */
-  account?: string
-  /** Wallet or account address (base58). Kept for backward compatibility; prefer `account`. */
-  accountAddress?: string
-}
-
-export interface GetAccountInfoResponse {
-  [key: string]: unknown
 }
 
 export interface GetHistoryOptions {
@@ -453,73 +421,6 @@ export class AltudeHttpClient {
         SignedTransaction: options.signedTransaction,
       })
       return this.#normalizeTransactionResponse(fallback)
-    }
-  }
-
-  async getBalance(options: GetBalanceOptions): Promise<BalanceResponse> {
-    const walletAddress = options.account ?? options.address ?? ''
-    const mintAddress = options.token ?? options.mint ?? ''
-    if (this.isMockMode) {
-      return { address: walletAddress, lamports: 1_000_000_000, uiAmount: 1.0 }
-    }
-    const client = await this.getRpcClient()
-    if (mintAddress) {
-      const { value: tokenAccounts } = await client.rpc
-        .getTokenAccountsByOwner(address(walletAddress), { mint: address(mintAddress) }, { encoding: 'jsonParsed' })
-        .send()
-
-      const totalAmount = tokenAccounts.reduce((sum, tokenAccount) => {
-        const amount = tokenAccount.account.data.parsed.info.tokenAmount.amount
-        return sum + BigInt(amount)
-      }, 0n)
-      const decimals = tokenAccounts[0]?.account.data.parsed.info.tokenAmount.decimals ?? 0
-
-      return {
-        address: walletAddress,
-        amount: totalAmount.toString(),
-        decimals,
-        uiAmount: this.#toUiAmount(totalAmount, decimals),
-      }
-    }
-
-    const { value: lamports } = await client.rpc.getBalance(address(walletAddress)).send()
-    const safeLamports = this.#toSafeNumber(lamports)
-
-    return {
-      address: walletAddress,
-      ...(safeLamports !== undefined ? { lamports: safeLamports } : {}),
-      amount: lamports.toString(),
-      decimals: 9,
-      uiAmount: this.#toUiAmount(lamports, 9),
-    }
-  }
-
-  async getAccountInfo(options: GetAccountInfoOptions): Promise<GetAccountInfoResponse> {
-    const addr = options.account ?? options.accountAddress ?? ''
-    if (this.isMockMode) {
-      return { accountAddress: addr, lamports: 0, executable: false }
-    }
-    const client = await this.getRpcClient()
-    const { value } = await client.rpc.getAccountInfo(address(addr), { encoding: 'jsonParsed' }).send()
-
-    if (!value) {
-      return {
-        accountAddress: addr,
-        exists: false,
-      }
-    }
-
-    const safeLamports = this.#toSafeNumber(value.lamports)
-
-    return {
-      accountAddress: addr,
-      exists: true,
-      executable: value.executable,
-      ...(safeLamports !== undefined ? { lamports: safeLamports } : {}),
-      owner: String(value.owner),
-      rentEpoch: value.rentEpoch.toString(),
-      space: value.space.toString(),
-      data: this.#toJsonSafe(value.data),
     }
   }
 
@@ -928,44 +829,6 @@ export class AltudeHttpClient {
       Message: response.Message ?? response.message,
     }
     return normalized
-  }
-
-  #toSafeNumber(value: bigint): number | undefined {
-    return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined
-  }
-
-  #toUiAmount(amount: bigint, decimals: number): number {
-    return Number(this.#formatDecimalAmount(amount, decimals))
-  }
-
-  #formatDecimalAmount(amount: bigint, decimals: number): string {
-    if (decimals <= 0) {
-      return amount.toString()
-    }
-
-    const sign = amount < 0n ? '-' : ''
-    const absolute = amount < 0n ? -amount : amount
-    const digits = absolute.toString().padStart(decimals + 1, '0')
-    const whole = digits.slice(0, -decimals) || '0'
-    let fraction = digits.slice(-decimals)
-    while (fraction.endsWith('0')) {
-      fraction = fraction.slice(0, -1)
-    }
-
-    return `${sign}${whole}${fraction ? `.${fraction}` : ''}`
-  }
-
-  #toJsonSafe(value: unknown): unknown {
-    if (typeof value === 'bigint') {
-      return value.toString()
-    }
-    if (Array.isArray(value)) {
-      return value.map((item) => this.#toJsonSafe(item))
-    }
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, this.#toJsonSafe(entry)]))
-    }
-    return value
   }
 
   // ---------------------------------------------------------------------------

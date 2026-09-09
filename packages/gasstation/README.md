@@ -4,9 +4,7 @@ Gasless Solana transaction relay via the Altude relay API.
 
 `@altude/gasstation` lets you build, submit, and query Solana transactions where
 the Altude relay pays the network fee. It works with an application-provided
-signer or with pre-signed transaction bytes. Account balance and account-info
-lookups use the Altude-configured Solana RPC client instead of relay HTTP
-endpoints.
+signer or with pre-signed transaction bytes.
 
 ## Install
 
@@ -44,12 +42,6 @@ await gasStation.init()
 // Recent blockhash from the relay
 const { blockhash } = await gasStation.getBlockhash()
 
-// Native + SPL balances via the Altude-configured RPC client
-const balance = await gasStation.getBalance({
-  address: 'YOUR_WALLET_ADDRESS',
-})
-console.log('Balance:', balance.uiAmount, 'SOL')
-
 // Send a gasless SOL transfer (SDK builds + signs the transaction)
 const sig = await gasStation.send({
   sourceSigner: yourSigner,
@@ -66,14 +58,10 @@ const sig2 = await gasStation.send({
 ## What's included
 
 - `AltudeGasStation` — high-level client (`send`, `createAccount`, `closeAccount`,
-  `getBalance`, `getAccountInfo`, `getHistory`, `swap`, `getBlockhash`, …).
+  `getHistory`, `swap`, `getBlockhash`, …).
 - `AltudeHttpClient`, `createAltudeDevnetClient`, `createAltudeMainnetClient`
-  — low-level relay client plus RPC-backed account lookup helpers.
+  — low-level relay client.
 - `ALTUDE_FEE_PAYER` — the relay's fee-payer address.
-
-RPC operations require an API key. The SDK always uses the node URL and JWT
-returned by Altude's transaction config API and never falls back to a public
-Solana endpoint.
 
 See the [monorepo README](https://github.com/AltudePlatform/altude-js) for the full
 SDK overview.

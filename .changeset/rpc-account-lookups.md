@@ -1,5 +1,5 @@
 ---
-'@altude/gasstation': patch
+'@altude/gasstation': major
 ---
 
-Use the Altude-configured Solana RPC client for `getBalance` and `getAccountInfo` now that the relay account endpoints are gone.
+Remove `getBalance`, `getAccountInfo`, and their public types from `@altude/gasstation` because the relay account endpoints no longer exist.
