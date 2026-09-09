@@ -39,8 +39,8 @@ const gasStation = new AltudeGasStation({
 // Resolves RpcUrl and the short-lived RPC JWT from /api/transaction/config.
 await gasStation.init()
 
-// Recent blockhash from the relay
-const { blockhash } = await gasStation.getBlockhash()
+// Recent blockhash from the configured RPC endpoint
+const { Blockhash } = await gasStation.getBlockhash()
 
 // Send a gasless SOL transfer (SDK builds + signs the transaction)
 const sig = await gasStation.send({
