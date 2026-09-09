@@ -2,4 +2,4 @@
 '@altude/gasstation': major
 ---
 
-Remove `getBalance`, `getAccountInfo`, and their public types from `@altude/gasstation` because the relay account endpoints no longer exist.
+BREAKING: `@altude/gasstation` no longer exports `getBalance`, `getAccountInfo`, or their public types because the relay account endpoints no longer exist.
