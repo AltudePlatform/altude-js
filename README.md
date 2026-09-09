@@ -33,6 +33,7 @@ await gasStation.init()
 const balance = await gasStation.getBalance({
   address: 'YOUR_WALLET_ADDRESS',
 })
+// Uses the Altude-configured Solana RPC client for account data.
 console.log('Balance:', balance.uiAmount, 'SOL')
 ```
 

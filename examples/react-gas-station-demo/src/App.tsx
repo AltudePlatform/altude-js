@@ -313,7 +313,7 @@ export function App() {
         )}
 
         <h2 className="section-title">getBalance</h2>
-        <p className="hint">Inputs match GetBalanceOptions: address, mint(optional).</p>
+        <p className="hint">Inputs match GetBalanceOptions: address, mint(optional). Live mode resolves balances through the Altude-configured RPC client.</p>
         <div className="actions">
           <button
             disabled={busy}
@@ -613,6 +613,7 @@ export function App() {
         {closeAccountResult && renderTransactionResult('Latest Close Account Result', closeAccountResult)}
 
         <h2 className="section-title">getAccountInfo</h2>
+        <p className="hint">Live mode resolves account data through the Altude-configured RPC client.</p>
         <div className="grid">
           <label className="wide">
             Account Address

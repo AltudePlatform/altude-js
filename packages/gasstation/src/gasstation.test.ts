@@ -301,25 +301,139 @@ describe('AltudeHttpClient — live mode', () => {
     expect(sentBody).toEqual({ SignedTransaction: 'base64tx==' })
   })
 
-  it('getBalance sends { accountAddress, mintAddress } body matching Android SDK', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        jsonResponse({
-          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
-          RpcUrl: 'https://rpc.altude.so',
-          Token: 'runtime-token',
-          RpcEnvironment: 'devnet',
-          TokenExpiration: '2099-01-01T00:00:00Z',
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ address: 'wallet123', uiAmount: 1.0 }))
-
+  it('getBalance reads SOL balance through the RPC client', async () => {
+    const walletAddress = '11111111111111111111111111111111'
+    const getBalance = vi.fn(() => ({
+      send: vi.fn().mockResolvedValue({ value: 1_500_000_000n }),
+    }))
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
-    await client.getBalance({ address: 'wallet123', mint: 'mint456' })
 
-    const sentBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string) as Record<string, unknown>
-    expect(sentBody).toEqual({ accountAddress: 'wallet123', mintAddress: 'mint456' })
+    vi.spyOn(client, 'getRpcClient').mockResolvedValue({
+      rpc: { getBalance },
+    } as never)
+
+    const result = await client.getBalance({ address: walletAddress })
+
+    expect(getBalance).toHaveBeenCalledWith(walletAddress)
+    expect(result).toEqual({
+      address: walletAddress,
+      lamports: 1_500_000_000,
+      amount: '1500000000',
+      decimals: 9,
+      uiAmount: 1.5,
+    })
+  })
+
+  it('getBalance aggregates token accounts by owner and mint through RPC', async () => {
+    const walletAddress = '11111111111111111111111111111111'
+    const mintAddress = 'So11111111111111111111111111111111111111112'
+    const getTokenAccountsByOwner = vi.fn(() => ({
+      send: vi.fn().mockResolvedValue({
+        value: [
+          {
+            account: {
+              data: {
+                parsed: {
+                  info: {
+                    tokenAmount: { amount: '1500000', decimals: 6 },
+                  },
+                },
+              },
+            },
+          },
+          {
+            account: {
+              data: {
+                parsed: {
+                  info: {
+                    tokenAmount: { amount: '250000', decimals: 6 },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      }),
+    }))
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+
+    vi.spyOn(client, 'getRpcClient').mockResolvedValue({
+      rpc: { getTokenAccountsByOwner },
+    } as never)
+
+    const result = await client.getBalance({ account: walletAddress, token: mintAddress })
+
+    expect(getTokenAccountsByOwner).toHaveBeenCalledWith(walletAddress, { mint: mintAddress }, { encoding: 'jsonParsed' })
+    expect(result).toEqual({
+      address: walletAddress,
+      amount: '1750000',
+      decimals: 6,
+      uiAmount: 1.75,
+    })
+  })
+
+  it('getAccountInfo reads and normalizes RPC account data', async () => {
+    const accountAddress = '11111111111111111111111111111111'
+    const getAccountInfo = vi.fn(() => ({
+      send: vi.fn().mockResolvedValue({
+        value: {
+          executable: false,
+          lamports: 42n,
+          owner: '11111111111111111111111111111111',
+          rentEpoch: 7n,
+          space: 165n,
+          data: {
+            parsed: {
+              info: {
+                tokenAmount: {
+                  amount: '100',
+                  decimals: 2,
+                  uiAmount: 1,
+                  uiAmountString: '1',
+                },
+              },
+              type: 'account',
+            },
+            program: 'spl-token',
+            space: 165n,
+          },
+        },
+      }),
+    }))
+    const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
+
+    vi.spyOn(client, 'getRpcClient').mockResolvedValue({
+      rpc: { getAccountInfo },
+    } as never)
+
+    const result = await client.getAccountInfo({ accountAddress })
+
+    expect(getAccountInfo).toHaveBeenCalledWith(accountAddress, { encoding: 'jsonParsed' })
+    expect(result).toEqual({
+      accountAddress,
+      exists: true,
+      executable: false,
+      lamports: 42,
+      owner: '11111111111111111111111111111111',
+      rentEpoch: '7',
+      space: '165',
+      data: {
+        parsed: {
+          info: {
+            tokenAmount: {
+              amount: '100',
+              decimals: 2,
+              uiAmount: 1,
+              uiAmountString: '1',
+            },
+          },
+          type: 'account',
+        },
+        program: 'spl-token',
+        space: '165',
+      },
+    })
+    expect(() => JSON.stringify(result)).not.toThrow()
   })
 })
 
