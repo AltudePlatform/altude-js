@@ -515,7 +515,7 @@ export class AltudeHttpClient {
       accountAddress: addr,
       exists: true,
       executable: value.executable,
-      ...(safeLamports !== undefined ? { lamports: safeLamports } : {}),
+      lamports: safeLamports ?? value.lamports.toString(),
       owner: String(value.owner),
       rentEpoch: value.rentEpoch.toString(),
       space: value.space.toString(),
