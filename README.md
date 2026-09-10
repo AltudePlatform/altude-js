@@ -30,8 +30,11 @@ const gasStation = new AltudeGasStation({
 
 await gasStation.init()
 
-const { Blockhash } = await gasStation.getBlockhash()
-console.log('Blockhash:', Blockhash)
+const balance = await gasStation.getBalance({
+  address: 'YOUR_WALLET_ADDRESS',
+})
+// Uses the Altude-configured Solana RPC client for account data.
+console.log('Balance:', balance.uiAmount, 'SOL')
 ```
 
 Applications retain custody of user keys and provide the signer used for
