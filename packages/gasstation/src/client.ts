@@ -7,8 +7,9 @@
  *   POST /api/transaction/sendbatch  → relay a batch transaction
  *   POST /api/Account/create         → sponsored account creation
  *   POST /api/account/close          → close an account
- *   POST /api/account/getaccountinfo → fetch account info
  *   POST /api/account/gethistory     → fetch account history
+ * Account balance and account-info lookups are resolved through the
+ * Altude-configured Solana RPC client instead of relay HTTP endpoints.
  *
  * Fee payer: ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71
  */
@@ -461,21 +462,35 @@ export class AltudeHttpClient {
     if (this.isMockMode) {
       return { address: walletAddress, lamports: 1_000_000_000, uiAmount: 1.0 }
     }
-    await this.#ensureConfig()
-    try {
-      return await this.#post<BalanceResponse>('/api/Account/balance', {
-        accountAddress: walletAddress,
-        mintAddress,
-      })
-    } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
+    const client = await this.getRpcClient()
+    if (mintAddress) {
+      const { value: tokenAccounts } = await client.rpc
+        .getTokenAccountsByOwner(address(walletAddress), { mint: address(mintAddress) }, { encoding: 'jsonParsed' })
+        .send()
 
-      return this.#post<BalanceResponse>('/api/Account/balance', {
-        AccountAddress: walletAddress,
-        MintAddress: mintAddress,
-      })
+      const totalAmount = tokenAccounts.reduce((sum, tokenAccount) => {
+        const amount = tokenAccount.account.data.parsed.info.tokenAmount.amount
+        return sum + BigInt(amount)
+      }, 0n)
+      const decimals = tokenAccounts[0]?.account.data.parsed.info.tokenAmount.decimals ?? 0
+
+      return {
+        address: walletAddress,
+        amount: totalAmount.toString(),
+        decimals,
+        uiAmount: this.#toUiAmount(totalAmount, decimals),
+      }
+    }
+
+    const { value: lamports } = await client.rpc.getBalance(address(walletAddress)).send()
+    const safeLamports = this.#toSafeNumber(lamports)
+
+    return {
+      address: walletAddress,
+      ...(safeLamports !== undefined ? { lamports: safeLamports } : {}),
+      amount: lamports.toString(),
+      decimals: 9,
+      uiAmount: this.#toUiAmount(lamports, 9),
     }
   }
 
@@ -484,19 +499,27 @@ export class AltudeHttpClient {
     if (this.isMockMode) {
       return { accountAddress: addr, lamports: 0, executable: false }
     }
-    await this.#ensureConfig()
-    try {
-      return await this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', {
-        accountAddress: addr,
-      })
-    } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
+    const client = await this.getRpcClient()
+    const { value } = await client.rpc.getAccountInfo(address(addr), { encoding: 'jsonParsed' }).send()
 
-      return this.#post<GetAccountInfoResponse>('/api/account/getaccountinfo', {
-        AccountAddress: addr,
-      })
+    if (!value) {
+      return {
+        accountAddress: addr,
+        exists: false,
+      }
+    }
+
+    const safeLamports = this.#toSafeNumber(value.lamports)
+
+    return {
+      accountAddress: addr,
+      exists: true,
+      executable: value.executable,
+      lamports: safeLamports ?? value.lamports.toString(),
+      owner: String(value.owner),
+      rentEpoch: value.rentEpoch.toString(),
+      space: value.space.toString(),
+      data: this.#toJsonSafe(value.data),
     }
   }
 
@@ -905,6 +928,44 @@ export class AltudeHttpClient {
       Message: response.Message ?? response.message,
     }
     return normalized
+  }
+
+  #toSafeNumber(value: bigint): number | undefined {
+    return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined
+  }
+
+  #toUiAmount(amount: bigint, decimals: number): number {
+    return Number(this.#formatDecimalAmount(amount, decimals))
+  }
+
+  #formatDecimalAmount(amount: bigint, decimals: number): string {
+    if (decimals <= 0) {
+      return amount.toString()
+    }
+
+    const sign = amount < 0n ? '-' : ''
+    const absolute = amount < 0n ? -amount : amount
+    const digits = absolute.toString().padStart(decimals + 1, '0')
+    const whole = digits.slice(0, -decimals) || '0'
+    let fraction = digits.slice(-decimals)
+    while (fraction.endsWith('0')) {
+      fraction = fraction.slice(0, -1)
+    }
+
+    return `${sign}${whole}${fraction ? `.${fraction}` : ''}`
+  }
+
+  #toJsonSafe(value: unknown): unknown {
+    if (typeof value === 'bigint') {
+      return value.toString()
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => this.#toJsonSafe(item))
+    }
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, this.#toJsonSafe(entry)]))
+    }
+    return value
   }
 
   // ---------------------------------------------------------------------------
