@@ -314,6 +314,24 @@ export function App() {
 
         <h2 className="section-title">getBalance</h2>
         <p className="hint">Inputs match GetBalanceOptions: address, mint(optional). Live mode resolves balances through the Altude-configured RPC client.</p>
+        <div className="grid">
+          <label>
+            Wallet Address
+            <input
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="Wallet address"
+            />
+          </label>
+          <label>
+            Mint Address (optional)
+            <input
+              value={balanceMint}
+              onChange={(e) => setBalanceMint(e.target.value)}
+              placeholder="SPL mint address for token balance"
+            />
+          </label>
+        </div>
         <div className="actions">
           <button
             disabled={busy}
