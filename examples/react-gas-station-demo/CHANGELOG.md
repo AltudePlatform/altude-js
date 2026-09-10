@@ -1,5 +1,12 @@
 # react-gas-station-demo
 
+## 0.0.8
+
+### Patch Changes
+
+- Updated dependencies [af470ab]
+  - @altude/gasstation@2.2.1
+
 ## 0.0.7
 
 ### Patch Changes
