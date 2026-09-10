@@ -1,5 +1,11 @@
 # @altude/gasstation
 
+## 2.2.1
+
+### Patch Changes
+
+- af470ab: Use the Altude-configured Solana RPC client for `getBalance` and `getAccountInfo` now that the relay account endpoints are gone.
+
 ## 2.2.0
 
 ### Minor Changes
