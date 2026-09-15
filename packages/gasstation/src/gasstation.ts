@@ -95,7 +95,11 @@ export interface SerializeInstructionPayloadOptions {
 export interface CreateAccountOptions {
   /** Wallet address for token account ownership. Must match the signer when provided. */
   account?: string
-  /** Token mints for ATAs to create. Mirrors Android SDK default to USDC. */
+  /** Token mint for the ATA to create. Defaults to WSOL when omitted or null. */
+  mint?: string | null
+  /** Backward-compatible alias for `mint`. */
+  token?: string | null
+  /** Token mints for ATAs to create. Takes precedence over `mint` and `token` when non-empty. */
   tokens?: string[]
   /** Reference passthrough field for Android SDK shape parity. */
   reference?: string
@@ -156,6 +160,7 @@ export interface CloseAccountOptions {
 }
 
 const TOKEN_PROGRAM_ADDRESS = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const WRAPPED_SOL_MINT_ADDRESS = 'So11111111111111111111111111111111111111112'
 
 async function getAssociatedTokenAccountAddress(mint: Address, owner: Address) {
   return (
@@ -437,15 +442,36 @@ export class AltudeGasStation {
     }
 
     const execute = async (): Promise<CreateAccountResponse> => {
-      const config = await this.getConfig()
       const rpc = await this.getRpcClient()
-      
-      const feePayer = config.FeePayer as unknown as Address
-
-      const feePayerNoop = createNoopSigner(feePayer)
       const owner = this.#toTransactionSigner(signerToUse)
       const ownerAddress = owner.address as unknown as Address
-      const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
+      const tokens = this.#resolveCreateAccountMints(options)
+      const tokenAccounts = await Promise.all(
+        tokens.map(async (token) => {
+          const mint = token as unknown as Address
+          const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress)
+          const { value } = await rpc.rpc
+            .getAccountInfo(ata, {
+              encoding: 'jsonParsed',
+              commitment: options.commitment ?? 'confirmed',
+            })
+            .send()
+          return { ata, mint, exists: value !== null }
+        }),
+      )
+      const missingTokenAccounts = tokenAccounts.filter(({ exists }) => !exists)
+
+      if (missingTokenAccounts.length === 0) {
+        return {
+          Signature: '',
+          Status: 'Success',
+          Message: 'Account already exists',
+        }
+      }
+
+      const config = await this.getConfig()
+      const feePayer = config.FeePayer as unknown as Address
+      const feePayerNoop = createNoopSigner(feePayer)
       const computeOptions = options.computeOptions ?? {}
       const computeInstructions: Instruction[] = [
         getSetComputeUnitLimitInstruction({
@@ -468,9 +494,7 @@ export class AltudeGasStation {
       ]
       const tokenInstructions: Instruction[] = []
 
-      for (const token of tokens) {
-        const mint = token as unknown as Address
-        const ata = await getAssociatedTokenAccountAddress(mint, ownerAddress)
+      for (const { ata, mint } of missingTokenAccounts) {
         const createAssociatedTokenInstruction = await getCreateAssociatedTokenInstructionAsync({
           payer: feePayerNoop,
           owner: ownerAddress,
@@ -567,7 +591,7 @@ export class AltudeGasStation {
         // Android SDK-style: auto-discover ATAs for the wallet + token list, close each.
         const walletAddress = options.account as unknown as Address
         const destinationAddress = walletAddress // rent goes back to the wallet
-        const tokens = options.tokens?.length ? options.tokens : [this.#defaultCreateAccountMint()]
+        const tokens = options.tokens?.length ? options.tokens : [this.#defaultCloseAccountMint()]
 
         for (const token of tokens) {
           const mint = token as unknown as Address
@@ -670,10 +694,18 @@ export class AltudeGasStation {
     } as unknown as TransactionSigner
   }
 
-  #defaultCreateAccountMint(): string {
+  #defaultCloseAccountMint(): string {
     return this.client.network === 'devnet'
       ? '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
       : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
   }
 
+  #resolveCreateAccountMints(options: CreateAccountOptions): string[] {
+    const tokens = options.tokens?.map((token) => token.trim()).filter(Boolean) ?? []
+    if (tokens.length > 0) {
+      return [...new Set(tokens)]
+    }
+
+    return [options.mint?.trim() || options.token?.trim() || WRAPPED_SOL_MINT_ADDRESS]
+  }
 }
