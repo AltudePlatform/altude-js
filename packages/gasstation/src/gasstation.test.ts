@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AltudeGasStation } from '../src/gasstation.js'
 import { AltudeHttpClient } from '../src/client.js'
 import { address, type Instruction } from 'gill'
-import { findAssociatedTokenPda } from '../src/solana.js'
+import {
+  AuthorityType,
+  createNoopSigner,
+  createTransaction,
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getSetAuthorityInstruction,
+  getSetComputeUnitLimitInstruction,
+  transactionToBase64WithSigners,
+} from '../src/solana.js'
 
 const TOKEN_PROGRAM_ADDRESS = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 const WRAPPED_SOL_MINT_ADDRESS = 'So11111111111111111111111111111111111111112'
@@ -846,7 +855,10 @@ describe('AltudeGasStation facade', () => {
     expect(createAccountSpy).not.toHaveBeenCalled()
   })
 
-  it('createAccount defaults omitted tokens to WSOL', async () => {
+  it.each([
+    { label: 'omitted', tokens: undefined },
+    { label: 'empty', tokens: [] as string[] },
+  ])('createAccount defaults $label tokens to WSOL', async ({ tokens }) => {
     const gs = new AltudeGasStation()
     const getAccountInfo = vi.fn(() => ({
       send: vi.fn().mockResolvedValue({ value: {} }),
@@ -866,7 +878,7 @@ describe('AltudeGasStation facade', () => {
       rpcSubscriptions: {},
     } as never)
 
-    await gs.createAccount({ signer })
+    await gs.createAccount({ signer, ...(tokens !== undefined && { tokens }) })
 
     expect(getAccountInfo).toHaveBeenCalledWith(expectedAta, {
       encoding: 'jsonParsed',
@@ -879,7 +891,7 @@ describe('AltudeGasStation facade', () => {
     const createAccountSpy = vi.spyOn(gs.client, 'createAccount')
     const missingMintAddress = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
     const signer = {
-      address: WRAPPED_SOL_MINT_ADDRESS,
+      address: '11111111111111111111111111111111',
       signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
     }
     const [existingAta] = await findAssociatedTokenPda({
@@ -926,8 +938,54 @@ describe('AltudeGasStation facade', () => {
       encoding: 'jsonParsed',
       commitment: 'confirmed',
     })
+    const feePayer = address((await gs.getConfig()).FeePayer)
+    const signedTransaction = createAccountSpy.mock.calls[0]?.[0]?.signedTransaction
+    expect(signedTransaction).toBeTruthy()
+    const expectedSigner = {
+      address: address(signer.address),
+      signTransactions: vi.fn((transactions: ReadonlyArray<{ messageBytes: Uint8Array }>) =>
+        Promise.resolve(
+          transactions.map(() => ({
+            [address(signer.address)]: new Uint8Array([1, 2, 3]),
+          })),
+        ),
+      ),
+    }
+    const expectedSignedTransaction = await transactionToBase64WithSigners(
+      createTransaction(
+        {
+          version: 'legacy',
+          feePayer,
+          latestBlockhash: {
+            blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+            lastValidBlockHeight: 100n,
+          },
+          instructions: [
+            getSetComputeUnitLimitInstruction({ units: 400_000 }),
+            getCreateAssociatedTokenIdempotentInstruction({
+              payer: createNoopSigner(feePayer),
+              owner: address(signer.address),
+              mint: address(missingMintAddress),
+              ata: missingAta,
+              tokenProgram: TOKEN_PROGRAM_ADDRESS,
+            }),
+            getSetAuthorityInstruction(
+              {
+                owned: missingAta,
+                owner: expectedSigner as never,
+                authorityType: AuthorityType.CloseAccount,
+                newAuthority: feePayer,
+              },
+              { programAddress: TOKEN_PROGRAM_ADDRESS },
+            ),
+          ],
+        } as never,
+      ) as never,
+    )
+
     expect(signer.signTransactionMessage).toHaveBeenCalledOnce()
     expect(createAccountSpy).toHaveBeenCalledOnce()
+    expect(signedTransaction).toBe(expectedSignedTransaction)
     expect(result.Signature).toBeTruthy()
   })
 

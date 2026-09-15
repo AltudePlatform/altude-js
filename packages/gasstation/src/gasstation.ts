@@ -22,7 +22,6 @@ import {
   type Instruction,
   type TransactionSigner,
   findAssociatedTokenPda,
-  getCreateAssociatedTokenInstructionAsync,
   getCreateAssociatedTokenIdempotentInstruction,
   getTransferInstruction,
   getSetAuthorityInstruction,
@@ -491,7 +490,7 @@ export class AltudeGasStation {
       const tokenInstructions: Instruction[] = []
 
       for (const { ata, mint } of missingTokenAccounts) {
-        const createAssociatedTokenInstruction = await getCreateAssociatedTokenInstructionAsync({
+        const createAssociatedTokenInstruction = getCreateAssociatedTokenIdempotentInstruction({
           payer: feePayerNoop,
           owner: ownerAddress,
           mint,
