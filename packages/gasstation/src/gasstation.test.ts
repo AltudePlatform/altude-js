@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AltudeGasStation } from '../src/gasstation.js'
 import { AltudeHttpClient } from '../src/client.js'
-import type { Instruction } from 'gill'
+import { address, type Instruction } from 'gill'
+import {
+  AuthorityType,
+  createNoopSigner,
+  createTransaction,
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getSetAuthorityInstruction,
+  getSetComputeUnitLimitInstruction,
+  transactionToBase64WithSigners,
+} from '../src/solana.js'
+
+const TOKEN_PROGRAM_ADDRESS = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const WRAPPED_SOL_MINT_ADDRESS = 'So11111111111111111111111111111111111111112'
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -770,9 +783,12 @@ describe('AltudeGasStation facade', () => {
   it('createAccount builds a transaction and relays it (mock mode)', async () => {
     const gs = new AltudeGasStation()
     const createAccountSpy = vi.spyOn(gs.client, 'createAccount')
+    const getAccountInfo = vi.fn(() => ({
+      send: vi.fn().mockResolvedValue({ value: null }),
+    }))
 
     const signer = {
-      address: 'So11111111111111111111111111111111111111112',
+      address: WRAPPED_SOL_MINT_ADDRESS,
       signTransactionMessages: vi.fn().mockResolvedValue([{}]),
       signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
       signMessage: vi.fn().mockResolvedValue(new Uint8Array([9, 9])),
@@ -781,6 +797,7 @@ describe('AltudeGasStation facade', () => {
     // Stub getRpcClient to avoid real network calls.
     vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
       rpc: {
+        getAccountInfo,
         getLatestBlockhash: () => ({
           send: vi.fn().mockResolvedValue({
             value: {
@@ -794,16 +811,181 @@ describe('AltudeGasStation facade', () => {
     } as never)
 
     const result = await gs.createAccount({
-      account: 'So11111111111111111111111111111111111111112',
-      tokens: ['So11111111111111111111111111111111111111112'],
+      account: WRAPPED_SOL_MINT_ADDRESS,
+      tokens: [WRAPPED_SOL_MINT_ADDRESS],
       signer,
     })
 
+    expect(getAccountInfo).toHaveBeenCalledOnce()
     expect(createAccountSpy).toHaveBeenCalledOnce()
     expect(signer.signTransactionMessage).toHaveBeenCalled()
     const callArg = createAccountSpy.mock.calls[0]?.[0]
     expect(typeof callArg?.signedTransaction).toBe('string')
     expect(callArg?.signedTransaction.length).toBeGreaterThan(0)
+    expect(result.Signature).toBeTruthy()
+  })
+
+  it('createAccount returns success without signing or relaying when the ATA already exists', async () => {
+    const gs = new AltudeGasStation()
+    const createAccountSpy = vi.spyOn(gs.client, 'createAccount')
+    const getLatestBlockhash = vi.fn()
+    const getAccountInfo = vi.fn(() => ({
+      send: vi.fn().mockResolvedValue({ value: {} }),
+    }))
+    const signer = {
+      address: WRAPPED_SOL_MINT_ADDRESS,
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    }
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: { getAccountInfo, getLatestBlockhash },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.createAccount({ signer })
+
+    expect(result).toEqual({
+      Signature: '',
+      Status: 'Success',
+      Message: 'Account already exists',
+    })
+    expect(getAccountInfo).toHaveBeenCalledOnce()
+    expect(getLatestBlockhash).not.toHaveBeenCalled()
+    expect(signer.signTransactionMessage).not.toHaveBeenCalled()
+    expect(createAccountSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { label: 'omitted', tokens: undefined },
+    { label: 'empty', tokens: [] as string[] },
+  ])('createAccount defaults $label tokens to WSOL', async ({ tokens }) => {
+    const gs = new AltudeGasStation()
+    const getAccountInfo = vi.fn(() => ({
+      send: vi.fn().mockResolvedValue({ value: {} }),
+    }))
+    const signer = {
+      address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    }
+    const [expectedAta] = await findAssociatedTokenPda({
+      mint: address(WRAPPED_SOL_MINT_ADDRESS),
+      owner: address(signer.address),
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    })
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: { getAccountInfo },
+      rpcSubscriptions: {},
+    } as never)
+
+    await gs.createAccount({ signer, ...(tokens !== undefined && { tokens }) })
+
+    expect(getAccountInfo).toHaveBeenCalledWith(expectedAta, {
+      encoding: 'jsonParsed',
+      commitment: 'confirmed',
+    })
+  })
+
+  it('createAccount creates only missing ATAs when some requested accounts exist', async () => {
+    const gs = new AltudeGasStation()
+    const createAccountSpy = vi.spyOn(gs.client, 'createAccount')
+    const missingMintAddress = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
+    const signer = {
+      address: '11111111111111111111111111111111',
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    }
+    const [existingAta] = await findAssociatedTokenPda({
+      mint: address(WRAPPED_SOL_MINT_ADDRESS),
+      owner: address(signer.address),
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    })
+    const [missingAta] = await findAssociatedTokenPda({
+      mint: address(missingMintAddress),
+      owner: address(signer.address),
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    })
+    const getAccountInfo = vi.fn((ataAddress: string) => ({
+      send: vi.fn().mockResolvedValue({
+        value: ataAddress === existingAta ? {} : null,
+      }),
+    }))
+
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getAccountInfo,
+        getLatestBlockhash: () => ({
+          send: vi.fn().mockResolvedValue({
+            value: {
+              blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+              lastValidBlockHeight: 100n,
+            },
+          }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+
+    const result = await gs.createAccount({
+      tokens: [WRAPPED_SOL_MINT_ADDRESS, missingMintAddress],
+      signer,
+    })
+
+    expect(getAccountInfo).toHaveBeenCalledWith(existingAta, {
+      encoding: 'jsonParsed',
+      commitment: 'confirmed',
+    })
+    expect(getAccountInfo).toHaveBeenCalledWith(missingAta, {
+      encoding: 'jsonParsed',
+      commitment: 'confirmed',
+    })
+    const feePayer = address((await gs.getConfig()).FeePayer)
+    const signedTransaction = createAccountSpy.mock.calls[0]?.[0]?.signedTransaction
+    expect(signedTransaction).toBeTruthy()
+    const expectedSigner = {
+      address: address(signer.address),
+      signTransactions: vi.fn((transactions: ReadonlyArray<{ messageBytes: Uint8Array }>) =>
+        Promise.resolve(
+          transactions.map(() => ({
+            [address(signer.address)]: new Uint8Array([1, 2, 3]),
+          })),
+        ),
+      ),
+    }
+    const expectedSignedTransaction = await transactionToBase64WithSigners(
+      createTransaction(
+        {
+          version: 'legacy',
+          feePayer,
+          latestBlockhash: {
+            blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+            lastValidBlockHeight: 100n,
+          },
+          instructions: [
+            getSetComputeUnitLimitInstruction({ units: 400_000 }),
+            getCreateAssociatedTokenIdempotentInstruction({
+              payer: createNoopSigner(feePayer),
+              owner: address(signer.address),
+              mint: address(missingMintAddress),
+              ata: missingAta,
+              tokenProgram: TOKEN_PROGRAM_ADDRESS,
+            }),
+            getSetAuthorityInstruction(
+              {
+                owned: missingAta,
+                owner: expectedSigner as never,
+                authorityType: AuthorityType.CloseAccount,
+                newAuthority: feePayer,
+              },
+              { programAddress: TOKEN_PROGRAM_ADDRESS },
+            ),
+          ],
+        } as never,
+      ) as never,
+    )
+
+    expect(signer.signTransactionMessage).toHaveBeenCalledOnce()
+    expect(createAccountSpy).toHaveBeenCalledOnce()
+    expect(signedTransaction).toBe(expectedSignedTransaction)
     expect(result.Signature).toBeTruthy()
   })
 

@@ -61,6 +61,13 @@ const sig = await gasStation.send({
 const sig2 = await gasStation.send({
   signedTransaction: preSignedTxBytes,
 })
+
+// Create a WSOL associated token account when it is missing.
+// Existing accounts return a successful response without signing or relaying.
+const accountResult = await gasStation.createAccount({
+  account: yourSigner.address,
+  signer: yourSigner,
+})
 ```
 
 ## What's included
