@@ -1,5 +1,12 @@
 # react-gas-station-demo
 
+## 0.0.9
+
+### Patch Changes
+
+- Updated dependencies [683d809]
+  - @altude/gasstation@2.2.2
+
 ## 0.0.8
 
 ### Patch Changes

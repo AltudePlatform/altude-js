@@ -1,5 +1,11 @@
 # @altude/gasstation
 
+## 2.2.2
+
+### Patch Changes
+
+- 683d809: Make `createAccount` idempotent by skipping existing associated token accounts, and default an omitted or empty token list to Wrapped SOL. The `closeAccount` default remains unchanged.
+
 ## 2.2.1
 
 ### Patch Changes
