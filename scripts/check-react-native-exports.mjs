@@ -54,6 +54,9 @@ const gasstation = await import(bundledModuleUrl)
 const station = new gasstation.AltudeGasStation()
 station.getRpcClient = async () => ({
   rpc: {
+    getAccountInfo: () => ({
+      send: async () => ({ value: null }),
+    }),
     getLatestBlockhash: () => ({
       send: async () => ({
         value: {
