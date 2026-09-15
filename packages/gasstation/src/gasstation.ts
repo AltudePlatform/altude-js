@@ -95,11 +95,7 @@ export interface SerializeInstructionPayloadOptions {
 export interface CreateAccountOptions {
   /** Wallet address for token account ownership. Must match the signer when provided. */
   account?: string
-  /** Token mint for the ATA to create. Defaults to WSOL when omitted or null. */
-  mint?: string | null
-  /** Backward-compatible alias for `mint`. */
-  token?: string | null
-  /** Token mints for ATAs to create. Takes precedence over `mint` and `token` when non-empty. */
+  /** Token mints for ATAs to create. Defaults to WSOL when omitted or empty. */
   tokens?: string[]
   /** Reference passthrough field for Android SDK shape parity. */
   reference?: string
@@ -445,7 +441,7 @@ export class AltudeGasStation {
       const rpc = await this.getRpcClient()
       const owner = this.#toTransactionSigner(signerToUse)
       const ownerAddress = owner.address as unknown as Address
-      const tokens = this.#resolveCreateAccountMints(options)
+      const tokens = options.tokens?.length ? options.tokens : [WRAPPED_SOL_MINT_ADDRESS]
       const tokenAccounts = await Promise.all(
         tokens.map(async (token) => {
           const mint = token as unknown as Address
@@ -698,14 +694,5 @@ export class AltudeGasStation {
     return this.client.network === 'devnet'
       ? '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
       : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
-  }
-
-  #resolveCreateAccountMints(options: CreateAccountOptions): string[] {
-    const tokens = options.tokens?.map((token) => token.trim()).filter(Boolean) ?? []
-    if (tokens.length > 0) {
-      return [...new Set(tokens)]
-    }
-
-    return [options.mint?.trim() || options.token?.trim() || WRAPPED_SOL_MINT_ADDRESS]
   }
 }

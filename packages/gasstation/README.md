@@ -66,7 +66,6 @@ const sig2 = await gasStation.send({
 // Existing accounts return a successful response without signing or relaying.
 const accountResult = await gasStation.createAccount({
   account: yourSigner.address,
-  mint: null,
   signer: yourSigner,
 })
 ```

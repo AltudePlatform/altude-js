@@ -846,7 +846,7 @@ describe('AltudeGasStation facade', () => {
     expect(createAccountSpy).not.toHaveBeenCalled()
   })
 
-  it('createAccount defaults a null mint to WSOL', async () => {
+  it('createAccount defaults omitted tokens to WSOL', async () => {
     const gs = new AltudeGasStation()
     const getAccountInfo = vi.fn(() => ({
       send: vi.fn().mockResolvedValue({ value: {} }),
@@ -866,7 +866,7 @@ describe('AltudeGasStation facade', () => {
       rpcSubscriptions: {},
     } as never)
 
-    await gs.createAccount({ mint: null, signer })
+    await gs.createAccount({ signer })
 
     expect(getAccountInfo).toHaveBeenCalledWith(expectedAta, {
       encoding: 'jsonParsed',
