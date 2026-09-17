@@ -17,7 +17,7 @@
 import { AltudeError, ALTUDE_API_URL, ALTUDE_FEE_PAYER, createAltudeClient } from '@altude/core'
 import type { SolanaNetwork } from '@altude/core'
 import { address, type Address } from './solana.js'
-import type { Lamports, Reward, Signature, Slot, TokenBalance, TransactionError, UnixTimestamp } from 'gill'
+import type { Lamports, Reward, Slot, TokenBalance, TransactionError, UnixTimestamp } from 'gill'
 
 export { ALTUDE_FEE_PAYER }
 
@@ -511,16 +511,24 @@ export class AltudeHttpClient {
 
     const safeLamports = this.#toSafeNumber(value.lamports)
 
-    return {
+    const accountInfo: GetAccountInfoResponse = {
       accountAddress: addr,
       exists: true,
       executable: value.executable,
       lamports: safeLamports ?? value.lamports.toString(),
       owner: String(value.owner),
-      rentEpoch: value.rentEpoch.toString(),
       space: value.space.toString(),
       data: this.#toJsonSafe(value.data),
     }
+    if (
+      'rentEpoch' in value &&
+      (typeof value.rentEpoch === 'bigint' ||
+        typeof value.rentEpoch === 'number' ||
+        typeof value.rentEpoch === 'string')
+    ) {
+      accountInfo.rentEpoch = value.rentEpoch.toString()
+    }
+    return accountInfo
   }
 
   // async getHistory(options: GetHistoryOptions): Promise<GetHistoryResponse> {
@@ -625,7 +633,7 @@ export class AltudeHttpClient {
     const offset = options.offset ?? 0
     const limit = options.limit ?? 10
     const signatureList = signatures
-      .map((sig: { signature: Signature }) => sig.signature)
+      .map(sig => sig.signature)
       .slice(offset, offset + limit)
 
     const transactionlist: GetHistoryResponse = {
@@ -638,7 +646,7 @@ export class AltudeHttpClient {
     }
     for (const sig of signatureList) {
       const transaction = await client.rpc
-        .getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+        .getTransaction(sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 1 })
         .send()
       if (!transaction) continue
       try {
@@ -850,7 +858,7 @@ export class AltudeHttpClient {
     const summary: GetHistorySummary = {
       signature,
       slot: Number(tx.slot),
-      blockTime: Number(tx.blockTime),
+      blockTime: tx.blockTime === null ? null : Number(tx.blockTime),
       status: meta?.err ? 'failed' : 'success',
       type,
       amount: Math.abs(change) / 1_000_000_000,

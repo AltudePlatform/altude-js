@@ -17,7 +17,8 @@ const mocks = vi.hoisted(() => {
   }
 })
 
-vi.mock('gill', () => mocks)
+vi.mock('@solana/rpc', () => ({ createSolanaRpc: mocks.createSolanaRpc }))
+vi.mock('gill', () => ({ createSolanaClient: mocks.createSolanaClient }))
 
 import { createAltudeClient } from './rpc.js'
 

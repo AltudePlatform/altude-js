@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
+    "@solana/rpc": "^8.3.0",
     "@scure/bip32": "^1.5.0",
     "@scure/bip39": "^1.4.0",
     "gill": "0.8.3"

@@ -1,4 +1,5 @@
-import { createSolanaClient, createSolanaRpc } from 'gill'
+import { createSolanaRpc } from '@solana/rpc'
+import { createSolanaClient } from 'gill'
 import { createAltudeClientWith } from './rpc.shared.js'
 import type { AltudeClientConfig } from './rpc.shared.js'
 

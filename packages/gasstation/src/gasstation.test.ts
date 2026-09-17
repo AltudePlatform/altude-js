@@ -15,12 +15,106 @@ import {
 
 const TOKEN_PROGRAM_ADDRESS = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 const WRAPPED_SOL_MINT_ADDRESS = 'So11111111111111111111111111111111111111112'
+const TEST_WALLET = '11111111111111111111111111111111'
+const TEST_COUNTERPARTY = 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71'
+const TEST_SIGNATURES = [
+  '2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2',
+  '3L3RY5sT8K4kyEnqhizwaqxLEbcYvpGrGPNEYRwtbCSUtL6YL86jdrvCbohnP5q8VxQ3qzGmt3W3iQJW97rD7m3',
+  '4VZdodJgBy6dxMgm45zusmRzrPvKtiumu5YrK9RLPJADpzeJzgebxHsoQD4B58FCFS6aGUufKZka56xFiBGpB94',
+] as const
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+function rpcResponse(id: string, result: unknown): Response {
+  return jsonResponse({ jsonrpc: '2.0', id, result })
+}
+
+function parseRpcRequest(init?: RequestInit): {
+  id: string
+  method: string
+  params: unknown[]
+} {
+  if (typeof init?.body !== 'string') {
+    throw new Error('Expected a JSON RPC request body')
+  }
+  return JSON.parse(init.body) as { id: string; method: string; params: unknown[] }
+}
+
+function rpcTransactionFixture({
+  signature,
+  version,
+  slot,
+  blockTime,
+  preBalances,
+  postBalances,
+  failed = false,
+  preTokenBalances = [],
+  postTokenBalances = [],
+  instructionData = '',
+}: {
+  signature: string
+  version: 'legacy' | 0 | 1
+  slot: number
+  blockTime: number | null
+  preBalances: number[]
+  postBalances: number[]
+  failed?: boolean
+  preTokenBalances?: unknown[]
+  postTokenBalances?: unknown[]
+  instructionData?: string
+}) {
+  const transactionConfig =
+    version === 1
+      ? {
+          transactionConfig: {
+            computeUnitLimit: 200_000,
+            heapSize: null,
+            loadedAccountsDataSizeLimit: null,
+            priorityFee: 5_000,
+          },
+        }
+      : {}
+
+  return {
+    blockTime,
+    slot,
+    version,
+    meta: {
+      computeUnitsConsumed: 25_000,
+      err: failed ? { InstructionError: [0, 'Custom'] } : null,
+      fee: 5_000,
+      innerInstructions: null,
+      loadedAddresses: { readonly: [], writable: [] },
+      logMessages: [],
+      postBalances,
+      postTokenBalances,
+      preBalances,
+      preTokenBalances,
+      rewards: [],
+      status: failed ? { Err: { InstructionError: [0, 'Custom'] } } : { Ok: null },
+    },
+    transaction: {
+      message: {
+        accountKeys: [TEST_WALLET, TEST_COUNTERPARTY],
+        addressTableLookups: [],
+        header: {
+          numReadonlySignedAccounts: 0,
+          numReadonlyUnsignedAccounts: 1,
+          numRequiredSignatures: 1,
+        },
+        instructions: [{ accounts: [0, 1], data: instructionData, programIdIndex: 1 }],
+        recentBlockhash: TEST_WALLET,
+        ...transactionConfig,
+      },
+      signatures: [signature],
+    },
+    unknownFutureField: { preservedByJsonTransport: true },
+  }
 }
 
 afterEach(() => {
@@ -271,6 +365,327 @@ describe('AltudeHttpClient — live mode', () => {
     const first = await client.getRpcClient()
     const second = await client.getRpcClient()
     expect(first).toBe(second)
+  })
+
+  it('transforms mixed legacy, v0, and large v1 history through the public facade', async () => {
+    const tokenMint = 'So11111111111111111111111111111111111111112'
+    const transactions = [
+      rpcTransactionFixture({
+        signature: TEST_SIGNATURES[0],
+        version: 'legacy',
+        slot: 100,
+        blockTime: 1_700_000_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_000_000_000, 1_000_000_000],
+      }),
+      rpcTransactionFixture({
+        signature: TEST_SIGNATURES[1],
+        version: 0,
+        slot: 101,
+        blockTime: null,
+        preBalances: [1_000_000_000, 0],
+        postBalances: [1_000_000_000, 0],
+        failed: true,
+      }),
+      rpcTransactionFixture({
+        signature: TEST_SIGNATURES[2],
+        version: 1,
+        slot: 102,
+        blockTime: 1_700_000_002,
+        preBalances: [1_000_000_000, 0],
+        postBalances: [1_000_000_000, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 0,
+            mint: tokenMint,
+            owner: TEST_WALLET,
+            programId: TOKEN_PROGRAM_ADDRESS,
+            uiTokenAmount: { amount: '1000000', decimals: 6, uiAmount: 1, uiAmountString: '1' },
+          },
+          {
+            accountIndex: 1,
+            mint: tokenMint,
+            owner: TEST_COUNTERPARTY,
+            programId: TOKEN_PROGRAM_ADDRESS,
+            uiTokenAmount: { amount: '3500000', decimals: 6, uiAmount: 3.5, uiAmountString: '3.5' },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 0,
+            mint: tokenMint,
+            owner: TEST_WALLET,
+            programId: TOKEN_PROGRAM_ADDRESS,
+            uiTokenAmount: { amount: '3500000', decimals: 6, uiAmount: 3.5, uiAmountString: '3.5' },
+          },
+          {
+            accountIndex: 1,
+            mint: tokenMint,
+            owner: TEST_COUNTERPARTY,
+            programId: TOKEN_PROGRAM_ADDRESS,
+            uiTokenAmount: { amount: '1000000', decimals: 6, uiAmount: 1, uiAmountString: '1' },
+          },
+        ],
+        // 1,300 zero bytes encoded as base58, above the legacy packet ceiling and below v1's allowance.
+        instructionData: '1'.repeat(1_300),
+      }),
+    ]
+    let transactionIndex = 0
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (input === 'https://api.altude.so/api/transaction/config') {
+        return Promise.resolve(
+          jsonResponse({
+            FeePayer: TEST_COUNTERPARTY,
+            RpcUrl: 'https://rpc.altude.so',
+            Token: 'runtime-token',
+            RpcEnvironment: 'devnet',
+            TokenExpiration: '2099-01-01T00:00:00Z',
+          }),
+        )
+      }
+
+      const request = parseRpcRequest(init)
+      if (request.method === 'getSignaturesForAddress') {
+        return Promise.resolve(
+          rpcResponse(
+            request.id,
+            TEST_SIGNATURES.map((signature, index) => ({
+              blockTime: 1_700_000_000 + index,
+              confirmationStatus: 'confirmed',
+              err: null,
+              memo: null,
+              signature,
+              slot: 100 + index,
+            })),
+          ),
+        )
+      }
+      if (request.method === 'getTransaction') {
+        expect(request.params[1]).toMatchObject({
+          commitment: 'confirmed',
+          encoding: 'json',
+          maxSupportedTransactionVersion: 1,
+        })
+        return Promise.resolve(rpcResponse(request.id, transactions[transactionIndex++] ?? transactions[2]))
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`)
+    })
+
+    const gasStation = new AltudeGasStation({
+      apiKey: 'test-key',
+      baseUrl: 'https://api.altude.so',
+      network: 'devnet',
+    })
+    const result = await gasStation.getHistory({ account: TEST_WALLET, limit: 10 })
+    const rpc = await gasStation.getRpcClient()
+    const transformedSignatures = await rpc.rpc.getSignaturesForAddress(address(TEST_WALLET)).send()
+    const v1Signature = transformedSignatures[2]?.signature
+    if (!v1Signature) {
+      throw new Error('Expected the v1 signature fixture')
+    }
+    const transformedV1 = await rpc.rpc
+      .getTransaction(v1Signature, {
+        commitment: 'confirmed',
+        encoding: 'json',
+        maxSupportedTransactionVersion: 1,
+      })
+      .send()
+
+    expect(fetchSpy).toHaveBeenCalledTimes(7)
+    expect(transformedV1?.version).toBe(1)
+    expect(transformedV1?.transaction.message.transactionConfig).toEqual({
+      computeUnitLimit: 200_000,
+      heapSize: null,
+      loadedAccountsDataSizeLimit: null,
+      priorityFee: 5_000n,
+    })
+    expect(transformedV1).toHaveProperty('unknownFutureField', { preservedByJsonTransport: true })
+    expect(result).toEqual({
+      data: [
+        {
+          signature: TEST_SIGNATURES[0],
+          slot: 100,
+          blockTime: 1_700_000_000,
+          status: 'success',
+          type: 'send',
+          amount: 1,
+          from: TEST_WALLET,
+        },
+        {
+          signature: TEST_SIGNATURES[1],
+          slot: 101,
+          blockTime: null,
+          status: 'failed',
+          type: 'unknown',
+          amount: 0,
+        },
+        {
+          signature: TEST_SIGNATURES[2],
+          slot: 102,
+          blockTime: 1_700_000_002,
+          status: 'success',
+          type: 'receive',
+          amount: 2.5,
+          mint: tokenMint,
+          from: TEST_COUNTERPARTY,
+          to: TEST_WALLET,
+        },
+      ],
+      page: 0,
+      pageSize: 0,
+      limit: 10,
+      offset: 0,
+      total: 3,
+    })
+  })
+
+  it('keeps empty and temporarily unavailable history entries explicit', async () => {
+    let signatureRequestCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (input === 'https://api.altude.so/api/transaction/config') {
+        return Promise.resolve(
+          jsonResponse({
+            FeePayer: TEST_COUNTERPARTY,
+            RpcUrl: 'https://rpc.altude.so',
+            Token: 'runtime-token',
+            RpcEnvironment: 'devnet',
+            TokenExpiration: '2099-01-01T00:00:00Z',
+          }),
+        )
+      }
+
+      const request = parseRpcRequest(init)
+      if (request.method === 'getSignaturesForAddress') {
+        signatureRequestCount += 1
+        return Promise.resolve(
+          rpcResponse(
+            request.id,
+            signatureRequestCount === 1
+              ? []
+              : [
+                  {
+                    blockTime: null,
+                    confirmationStatus: 'confirmed',
+                    err: null,
+                    memo: null,
+                    signature: TEST_SIGNATURES[0],
+                    slot: 100,
+                  },
+                ],
+          ),
+        )
+      }
+      return Promise.resolve(rpcResponse(request.id, null))
+    })
+
+    const gasStation = new AltudeGasStation({
+      apiKey: 'test-key',
+      baseUrl: 'https://api.altude.so',
+      network: 'devnet',
+    })
+
+    await expect(gasStation.getHistory({ account: TEST_WALLET })).resolves.toMatchObject({
+      data: [],
+      total: 0,
+    })
+    await expect(gasStation.getHistory({ account: TEST_WALLET })).resolves.toMatchObject({
+      data: [],
+      total: 1,
+    })
+  })
+
+  it.each([
+    {
+      name: 'unsupported future transaction versions',
+      rpcError: {
+        code: -32015,
+        message: 'Transaction version (2) is not supported by the requesting client',
+      },
+    },
+    {
+      name: 'RPC authentication failures',
+      rpcError: { code: -32001, message: 'Authentication failed' },
+    },
+  ])('surfaces $name instead of returning empty history', async ({ rpcError }) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (input === 'https://api.altude.so/api/transaction/config') {
+        return Promise.resolve(
+          jsonResponse({
+            FeePayer: TEST_COUNTERPARTY,
+            RpcUrl: 'https://rpc.altude.so',
+            Token: 'runtime-token',
+            RpcEnvironment: 'devnet',
+            TokenExpiration: '2099-01-01T00:00:00Z',
+          }),
+        )
+      }
+
+      const request = parseRpcRequest(init)
+      if (request.method === 'getSignaturesForAddress') {
+        return Promise.resolve(
+          rpcResponse(request.id, [
+            {
+              blockTime: null,
+              confirmationStatus: 'confirmed',
+              err: null,
+              memo: null,
+              signature: TEST_SIGNATURES[0],
+              slot: 100,
+            },
+          ]),
+        )
+      }
+      return Promise.resolve(jsonResponse({ jsonrpc: '2.0', id: request.id, error: rpcError }))
+    })
+
+    const gasStation = new AltudeGasStation({
+      apiKey: 'test-key',
+      baseUrl: 'https://api.altude.so',
+      network: 'devnet',
+    })
+
+    await expect(gasStation.getHistory({ account: TEST_WALLET })).rejects.toThrow(rpcError.message)
+  })
+
+  it('surfaces RPC transport failures instead of returning empty history', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (input === 'https://api.altude.so/api/transaction/config') {
+        return Promise.resolve(
+          jsonResponse({
+            FeePayer: TEST_COUNTERPARTY,
+            RpcUrl: 'https://rpc.altude.so',
+            Token: 'runtime-token',
+            RpcEnvironment: 'devnet',
+            TokenExpiration: '2099-01-01T00:00:00Z',
+          }),
+        )
+      }
+
+      const request = parseRpcRequest(init)
+      if (request.method === 'getSignaturesForAddress') {
+        return Promise.resolve(
+          rpcResponse(request.id, [
+            {
+              blockTime: null,
+              confirmationStatus: 'confirmed',
+              err: null,
+              memo: null,
+              signature: TEST_SIGNATURES[0],
+              slot: 100,
+            },
+          ]),
+        )
+      }
+      return Promise.resolve(new Response('upstream unavailable', { status: 503 }))
+    })
+
+    const gasStation = new AltudeGasStation({
+      apiKey: 'test-key',
+      baseUrl: 'https://api.altude.so',
+      network: 'devnet',
+    })
+
+    await expect(gasStation.getHistory({ account: TEST_WALLET })).rejects.toThrow()
   })
 
   it('rejects success-shaped API fallback config', async () => {
