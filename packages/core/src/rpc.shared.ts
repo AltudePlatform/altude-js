@@ -1,9 +1,10 @@
 /**
- * Solana RPC client wrapper using Gill.
+ * Solana RPC client wrapper using @solana/rpc + Gill utilities.
  * Uses the node URL and JWT returned by Altude's transaction config API.
  */
 
-import type { createSolanaClient, createSolanaRpc } from 'gill'
+import type { createSolanaRpc } from '@solana/rpc'
+import type { createSolanaClient } from 'gill'
 import { AltudeError } from './errors.js'
 import type { SolanaNetwork } from './types.js'
 
@@ -21,7 +22,7 @@ export interface AltudeClientConfig {
 }
 
 /**
- * Create a Gill-backed Solana client from Altude's API-key-scoped RPC config.
+ * Create a Solana client from Altude's API-key-scoped RPC config.
  */
 export function createAltudeClientWith(
   createRpc: typeof createSolanaRpc,

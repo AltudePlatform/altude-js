@@ -5,7 +5,7 @@
  *
  * Usage:
  *   const gs = new AltudeGasStation({ apiKey: 'your-key', network: 'devnet' })
- *   const rpc = await gs.getRpcClient()   // Gill client initialised from config RpcUrl
+ *   const rpc = await gs.getRpcClient()   // Solana client initialised from config RpcUrl
  *   const blockhash = await gs.getBlockhash()
  *   const sig = await gs.send({ to: '...', amount: 1_000_000 })
  */

@@ -97,7 +97,8 @@ The release workflow builds, lints, typechecks and tests only the packages liste
 ## Architecture
 
 Built on:
-- **[Gill](https://gill.web3.builders/)** — ergonomic Solana client (built on `@solana/kit`)
+- **[Gill](https://gill.web3.builders/)** — ergonomic Solana transaction utilities
+- **[@solana/rpc](https://www.npmjs.com/package/@solana/rpc)** — version-aware Solana JSON-RPC client
 - **[@scure/bip39](https://github.com/paulmillr/scure-bip39)** + **[@scure/bip32](https://github.com/paulmillr/scure-bip32)** — audited BIP-39/BIP-44
 - **[@noble/ed25519](https://github.com/paulmillr/noble-ed25519)** — audited Ed25519
 
