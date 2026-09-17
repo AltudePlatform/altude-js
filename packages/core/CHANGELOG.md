@@ -1,5 +1,11 @@
 # @altude/core
 
+## 0.1.2
+
+### Patch Changes
+
+- 9a8616d: Support legacy, v0, and v1 transactions when loading Gas Station account history.
+
 ## 0.1.1
 
 ### Patch Changes
