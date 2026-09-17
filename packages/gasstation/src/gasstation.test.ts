@@ -30,19 +30,19 @@ function jsonResponse(body: unknown): Response {
   })
 }
 
-function rpcResponse(id: string, result: unknown): Response {
+function rpcResponse(id: string | number, result: unknown): Response {
   return jsonResponse({ jsonrpc: '2.0', id, result })
 }
 
 function parseRpcRequest(init?: RequestInit): {
-  id: string
+  id: string | number
   method: string
   params: unknown[]
 } {
   if (typeof init?.body !== 'string') {
-    throw new Error('Expected a JSON RPC request body')
+    throw new Error('Expected a JSON-RPC request body')
   }
-  return JSON.parse(init.body) as { id: string; method: string; params: unknown[] }
+  return JSON.parse(init.body) as { id: string | number; method: string; params: unknown[] }
 }
 
 function rpcTransactionFixture({
@@ -368,7 +368,7 @@ describe('AltudeHttpClient — live mode', () => {
   })
 
   it('transforms mixed legacy, v0, and large v1 history through the public facade', async () => {
-    const tokenMint = 'So11111111111111111111111111111111111111112'
+    const tokenMint = WRAPPED_SOL_MINT_ADDRESS
     const transactions = [
       rpcTransactionFixture({
         signature: TEST_SIGNATURES[0],

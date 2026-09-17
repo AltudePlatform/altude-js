@@ -1,5 +1,5 @@
 /**
- * Solana RPC client wrapper using Gill.
+ * Solana RPC client wrapper using @solana/rpc + Gill utilities.
  * Uses the node URL and JWT returned by Altude's transaction config API.
  */
 

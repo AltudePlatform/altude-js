@@ -33,5 +33,10 @@
     "node": ">=18.0.0",
     "pnpm": ">=9.0.0"
   },
+  "pnpm": {
+    "overrides": {
+      "commander": "14.0.3"
+    }
+  },
   "packageManager": "pnpm@10.33.2"
 }
