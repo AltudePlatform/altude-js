@@ -44,6 +44,8 @@ export class AltudeWallet {
   readonly #listeners = new Set<(event: WalletEvent) => void>()
   readonly #pendingTransactions = new Map<string, PendingTransaction>()
   #active: ActiveWallet | null = null
+  #lifecycleGeneration = 0
+  #sessionTokenQueue: Promise<void> = Promise.resolve()
 
   constructor(config: AltudeWalletConfig) {
     this.#auth = config.auth
@@ -140,14 +142,33 @@ export class AltudeWallet {
   }
 
   async connect(identity: WalletIdentityToken): Promise<WalletState> {
+    const generation = ++this.#lifecycleGeneration
     this.#assertIdentity(identity)
-    const address = await this.#vault.getOrCreateAddress(identity.identityKey)
+    let address: string
+    try {
+      address = await this.#vault.getOrCreateAddress(identity.identityKey)
+    } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) {
+      this.#lockStaleIdentity(identity.identityKey)
+      return this.state
+    }
     let result: Awaited<ReturnType<EmbeddedWalletApi['exchangeAuth0']>>
     try {
       result = await this.#api.exchangeAuth0(identity.accessToken, address)
     } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) {
+        this.#lockStaleIdentity(identity.identityKey)
+        return this.state
+      }
       this.#vault.lock(identity.identityKey)
       throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) {
+      this.#lockStaleIdentity(identity.identityKey)
+      return this.state
     }
     const { token, user } = result
     if (user.walletAddress && user.walletAddress !== address) {
@@ -156,33 +177,85 @@ export class AltudeWallet {
         'The API session wallet does not match this browser’s local wallet.',
       )
     }
-    await this.#vault.associateServerUser(identity.identityKey, user.id)
-    await this.#sessionTokens.set(token)
-    const protection = await this.#vault.protection(identity.identityKey)
+    try {
+      await this.#vault.associateServerUser(identity.identityKey, user.id)
+    } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) {
+        this.#lockStaleIdentity(identity.identityKey)
+        return this.state
+      }
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) return this.state
+    let protection: WalletState['protection']
+    try {
+      protection = await this.#vault.protection(identity.identityKey)
+    } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) return this.state
+    if (protection === 'device-local') {
+      try {
+        await this.#vault.unlock(identity.identityKey)
+      } catch (error) {
+        if (!this.#isCurrentLifecycle(generation)) return this.state
+        throw error
+      }
+    }
+    if (!this.#isCurrentLifecycle(generation)) {
+      this.#lockStaleIdentity(identity.identityKey)
+      return this.state
+    }
+    try {
+      await this.#withSessionTokens(generation, () => this.#sessionTokens.set(token))
+    } catch (error) {
+      this.#lockStaleIdentity(identity.identityKey)
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) {
+      this.#lockStaleIdentity(identity.identityKey)
+      return this.state
+    }
     this.#replaceActive({
       identityKey: identity.identityKey,
       session: { user },
       address,
       protection,
     })
-    if (protection === 'device-local') await this.#vault.unlock(identity.identityKey)
     this.#emit({ type: 'state', state: this.state })
     return this.state
   }
 
   async restoreSession(): Promise<WalletState> {
-    const token = await this.#sessionTokens.get()
-    if (!token) return this.state
-    const session = await this.#api.getSession(token)
+    const generation = ++this.#lifecycleGeneration
+    const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
+    if (!this.#isCurrentLifecycle(generation) || !token) return this.state
+    let session: WalletSession | null
+    try {
+      session = await this.#api.getSession(token)
+    } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) return this.state
     if (!session) {
-      await this.#sessionTokens.clear()
+      await this.#withSessionTokens(generation, () => this.#sessionTokens.clear())
+      if (!this.#isCurrentLifecycle(generation)) return this.state
       this.#vault.lock()
       this.#active = null
       this.#cancelPendingTransactions('Wallet session expired before transaction approval.')
       this.#emit({ type: 'state', state: this.state })
       return this.state
     }
-    const record = await this.#vault.findByServerUserId(session.user.id)
+    let record: Awaited<ReturnType<WalletVault['findByServerUserId']>>
+    try {
+      record = await this.#vault.findByServerUserId(session.user.id)
+    } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) return this.state
     if (!record) {
       throw new AltudeWalletError(
         'WALLET_NOT_FOUND',
@@ -195,13 +268,25 @@ export class AltudeWallet {
         'The server wallet address does not match the local identity key.',
       )
     }
+    if (!this.#isCurrentLifecycle(generation)) return this.state
+    if (record.protection === 'device-local') {
+      try {
+        await this.#vault.unlock(record.identityKey)
+      } catch (error) {
+        if (!this.#isCurrentLifecycle(generation)) return this.state
+        throw error
+      }
+    }
+    if (!this.#isCurrentLifecycle(generation)) {
+      this.#lockStaleIdentity(record.identityKey)
+      return this.state
+    }
     this.#replaceActive({
       identityKey: record.identityKey,
       session,
       address: record.publicKey,
       protection: record.protection,
     })
-    if (record.protection === 'device-local') await this.#vault.unlock(record.identityKey)
     this.#emit({ type: 'state', state: this.state })
     return this.state
   }
@@ -229,10 +314,14 @@ export class AltudeWallet {
   }
 
   async signOut(): Promise<void> {
-    const token = await this.#sessionTokens.get()
+    const generation = ++this.#lifecycleGeneration
+    this.#vault.lock()
+    const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
+    if (!this.#isCurrentLifecycle(generation)) return
     if (token) await this.#api.signOut(token)
-    await this.#sessionTokens.clear()
-    this.#vault.lock(this.#active?.identityKey)
+    if (!this.#isCurrentLifecycle(generation)) return
+    await this.#withSessionTokens(generation, () => this.#sessionTokens.clear())
+    if (!this.#isCurrentLifecycle(generation)) return
     this.#active = null
     this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
     this.#emit({ type: 'state', state: this.state })
@@ -370,6 +459,26 @@ export class AltudeWallet {
       pending.reject(new AltudeWalletError('SESSION', message))
       this.#pendingTransactions.delete(id)
     }
+  }
+
+  #isCurrentLifecycle(generation: number): boolean {
+    return generation === this.#lifecycleGeneration
+  }
+
+  #lockStaleIdentity(identityKey: string): void {
+    if (this.#active?.identityKey !== identityKey) this.#vault.lock(identityKey)
+  }
+
+  #withSessionTokens<T>(generation: number, operation: () => Promise<T>): Promise<T | undefined> {
+    const pending = this.#sessionTokenQueue.then(async () => {
+      if (!this.#isCurrentLifecycle(generation)) return undefined
+      return operation()
+    })
+    this.#sessionTokenQueue = pending.then(
+      () => undefined,
+      () => undefined,
+    )
+    return pending
   }
 
   #assertIdentity(identity: WalletIdentityToken): void {

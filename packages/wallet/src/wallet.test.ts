@@ -16,7 +16,9 @@ class TestWalletStore implements WalletStore {
     )
   }
 
-  createIfAbsent(record: WalletStoreRecord): Promise<{ record: WalletStoreRecord; created: boolean }> {
+  createIfAbsent(
+    record: WalletStoreRecord,
+  ): Promise<{ record: WalletStoreRecord; created: boolean }> {
     const current = this.records.get(record.identityKey)
     if (current) return Promise.resolve({ record: current, created: false })
     const created = structuredClone(record)
@@ -280,6 +282,152 @@ describe('AltudeWallet', () => {
     expect(gasStation.send).not.toHaveBeenCalled()
   })
 
+  it('does not commit a pending connection after sign-out', async () => {
+    const exchange = deferred<Response>()
+    fetchMock.mockReturnValue(exchange.promise)
+    const wallet = createWallet()
+    const connection = wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|pending-connect',
+    })
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    await wallet.signOut()
+    exchange.resolve(
+      jsonResponse({
+        success: true,
+        sessionToken: 'stale-session',
+        user: { id: 'stale-user' },
+      }),
+    )
+
+    expect(await connection).toMatchObject({ status: 'disconnected' })
+    expect(sessionTokens.token).toBeNull()
+    expect(wallet.state.status).toBe('disconnected')
+  })
+
+  it('does not restore a session after sign-out supersedes restoration', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        sessionToken: 'session-token',
+        user: { id: 'server-user-restore-race' },
+      }),
+    )
+    const wallet = createWallet()
+    await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|restore-race',
+    })
+    wallet.lock()
+
+    fetchMock.mockClear()
+    const sessionResponse = deferred<Response>()
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/session')) return sessionResponse.promise
+      if (url.endsWith('/signout')) return Promise.resolve(jsonResponse({ success: true }))
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    const restoration = wallet.restoreSession()
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    await wallet.signOut()
+    sessionResponse.resolve(
+      jsonResponse({
+        isAuthenticated: true,
+        user: { id: 'server-user-restore-race' },
+      }),
+    )
+
+    expect(await restoration).toMatchObject({ status: 'disconnected' })
+    expect(sessionTokens.token).toBeNull()
+    expect(wallet.state.status).toBe('disconnected')
+  })
+
+  it('does not unlock a wallet when sign-out occurs during restoration unlock', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        sessionToken: 'session-token',
+        user: { id: 'server-user-unlock-race' },
+      }),
+    )
+    const wallet = createWallet()
+    await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|unlock-race',
+    })
+    wallet.lock()
+
+    const unlockRecord = deferred<WalletStoreRecord | undefined>()
+    const unlockStarted = deferred<boolean>()
+    store.get = () => {
+      unlockStarted.resolve(true)
+      return unlockRecord.promise
+    }
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/session')) {
+        return Promise.resolve(
+          jsonResponse({
+            isAuthenticated: true,
+            user: { id: 'server-user-unlock-race' },
+          }),
+        )
+      }
+      if (url.endsWith('/signout')) return Promise.resolve(jsonResponse({ success: true }))
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    const restoration = wallet.restoreSession()
+    await unlockStarted.promise
+
+    await wallet.signOut()
+    unlockRecord.resolve([...store.records.values()][0])
+
+    expect(await restoration).toMatchObject({ status: 'disconnected' })
+    expect(wallet.state.status).toBe('disconnected')
+    expect(sessionTokens.token).toBeNull()
+  })
+
+  it('ignores a stale unauthenticated restoration after a new connection', async () => {
+    sessionTokens.token = 'old-session'
+    const sessionResponse = deferred<Response>()
+    fetchMock.mockImplementation((url: string, request: RequestInit) => {
+      if (url.endsWith('/session')) return sessionResponse.promise
+      if (url.endsWith('/auth0')) {
+        const body = parseBody(request.body)
+        return Promise.resolve(
+          jsonResponse({
+            success: true,
+            sessionToken: 'new-session',
+            user: { id: 'new-user', walletAddress: body.walletAddress },
+          }),
+        )
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    const wallet = createWallet()
+    const restoration = wallet.restoreSession()
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    const connected = await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|fresh-connection',
+    })
+    sessionResponse.resolve(jsonResponse({ isAuthenticated: false }))
+
+    await restoration
+    expect(connected.status).toBe('connected')
+    expect(wallet.state.status).toBe('connected')
+    expect(wallet.state.address).toBe(connected.address)
+    expect(sessionTokens.token).toBe('new-session')
+  })
+
   function parseBody(body: BodyInit | null | undefined): {
     accessToken: string
     walletAddress: string
@@ -297,6 +445,14 @@ describe('AltudeWallet', () => {
   function jsonResponse(body: unknown): Response {
     const serialized = JSON.stringify(body)
     return new Response(serialized, { headers: { 'Content-Type': 'application/json' } })
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((resolvePromise) => {
+      resolve = resolvePromise
+    })
+    return { promise, resolve }
   }
 
   it('signs out through the API and clears the session token only after revocation', async () => {
