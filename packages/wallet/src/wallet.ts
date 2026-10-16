@@ -318,17 +318,23 @@ export class AltudeWallet {
 
   async signOut(): Promise<void> {
     const generation = ++this.#lifecycleGeneration
-    this.#vault.lock()
+    const identityKey = this.#active?.identityKey
+    if (identityKey) this.#vault.lock(identityKey)
     this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
-    const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
-    if (!this.#isCurrentLifecycle(generation)) return
-    if (token) await this.#api.signOut(token)
-    if (!this.#isCurrentLifecycle(generation)) return
-    await this.#withSessionTokens(generation, () => this.#sessionTokens.clear())
-    if (!this.#isCurrentLifecycle(generation)) return
-    this.#active = null
-    this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
-    this.#emit({ type: 'state', state: this.state })
+    try {
+      const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
+      if (!this.#isCurrentLifecycle(generation)) return
+      if (token) await this.#api.signOut(token)
+      if (!this.#isCurrentLifecycle(generation)) return
+      await this.#withSessionTokens(generation, () => this.#sessionTokens.clear())
+    } finally {
+      if (this.#isCurrentLifecycle(generation)) {
+        if (identityKey) this.#vault.lock(identityKey)
+        this.#active = null
+        this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
+        this.#emit({ type: 'state', state: this.state })
+      }
+    }
   }
 
   requestTransaction(intent: WalletTransactionIntent): Promise<WalletTransactionResult> {

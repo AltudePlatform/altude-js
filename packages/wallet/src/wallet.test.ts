@@ -740,4 +740,86 @@ describe('AltudeWallet', () => {
     expect(sessionTokens.token).toBeNull()
     expect(wallet.state.status).toBe('disconnected')
   })
+
+  it('cleans up locally after revocation fails and retains the token for retry', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          sessionToken: 'session-token',
+          user: { id: 'server-user-signout-retry' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: 'Revocation temporarily unavailable.' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true }))
+    const wallet = createWallet()
+    await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|signout-retry',
+    })
+    const pending = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: '11111111111111111111111111111111',
+      amount: 1_000,
+    })
+    const pendingRejected = expect(pending).rejects.toMatchObject({ code: 'SESSION' })
+
+    await expect(wallet.signOut()).rejects.toMatchObject({
+      code: 'API',
+      message: 'Revocation temporarily unavailable.',
+    })
+    await pendingRejected
+    expect(wallet.state.status).toBe('disconnected')
+    expect(wallet.state.session).toBeNull()
+    expect(sessionTokens.token).toBe('session-token')
+
+    await wallet.signOut()
+    expect(sessionTokens.token).toBeNull()
+    expect(wallet.state.status).toBe('disconnected')
+  })
+
+  it('does not clear a newer session when an older sign-out completes late', async () => {
+    const revoke = deferred<Response>()
+    let authCalls = 0
+    fetchMock.mockImplementation((url: string, request: RequestInit) => {
+      if (url.endsWith('/signout')) return revoke.promise
+      const body = parseBody(request.body)
+      const isNewSession = ++authCalls > 1
+      return Promise.resolve(
+        jsonResponse({
+          success: true,
+          sessionToken: isNewSession ? 'new-session' : 'old-session',
+          user: { id: isNewSession ? 'new-user' : 'old-user', walletAddress: body.walletAddress },
+        }),
+      )
+    })
+    const wallet = createWallet()
+    const first = await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|old-session',
+    })
+    expect(first.status).toBe('connected')
+    const signOut = wallet.signOut()
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|new-session',
+    })
+    revoke.resolve(jsonResponse({ success: true }))
+    await signOut
+
+    expect(wallet.state).toMatchObject({
+      status: 'connected',
+      session: { user: { id: 'new-user' } },
+    })
+    expect(sessionTokens.token).toBe('new-session')
+  })
 })
