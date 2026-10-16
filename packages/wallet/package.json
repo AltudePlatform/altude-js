@@ -1,0 +1,50 @@
+{
+  "name": "@altude/wallet",
+  "version": "0.1.0",
+  "description": "Browser self-custodial wallet infrastructure for Altude",
+  "keywords": [
+    "solana",
+    "altude",
+    "wallet",
+    "self-custody"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/index.browser.js",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "browser": "./dist/index.browser.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:browser": "node browser-tests/integration.mjs",
+    "lint": "eslint src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@altude/gasstation": "workspace:*",
+    "@noble/curves": "^2.2.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "happy-dom": "^15.11.7",
+    "playwright": "^1.64.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "private": true
+}
