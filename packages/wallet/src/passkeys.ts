@@ -6,28 +6,52 @@ interface PrfExtensionResults {
   prf?: { results?: { first?: ArrayBuffer | Uint8Array } }
 }
 
+function getCancellationError(error: unknown, ceremony: 'creation' | 'unlock'): AltudeWalletError | undefined {
+  if (
+    !error ||
+    typeof error !== 'object' ||
+    !('name' in error) ||
+    (error.name !== 'NotAllowedError' && error.name !== 'AbortError')
+  ) {
+    return undefined
+  }
+  return new AltudeWalletError(
+    'PASSKEY_CANCELLED',
+    `Passkey ${ceremony} was cancelled.`,
+    undefined,
+    error,
+  )
+}
+
 export class BrowserPasskeyAdapter implements PasskeyAdapter {
   async register(input: Parameters<PasskeyAdapter['register']>[0]) {
     this.#assertAvailable(input.rpId)
-    const result = (await navigator.credentials.create({
-      publicKey: {
-        challenge: toArrayBuffer(input.challenge),
-        rp: { id: input.rpId, name: input.rpName },
-        user: {
-          id: toArrayBuffer(input.userId),
-          name: input.userName,
-          displayName: 'Altude Wallet',
+    let result: PublicKeyCredential | null
+    try {
+      result = (await navigator.credentials.create({
+        publicKey: {
+          challenge: toArrayBuffer(input.challenge),
+          rp: { id: input.rpId, name: input.rpName },
+          user: {
+            id: toArrayBuffer(input.userId),
+            name: input.userName,
+            displayName: 'Altude Wallet',
+          },
+          pubKeyCredParams: [
+            { type: 'public-key', alg: -7 },
+            { type: 'public-key', alg: -257 },
+          ],
+          authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+          extensions: {
+            prf: { eval: { first: toArrayBuffer(input.prfSalt) } },
+          },
         },
-        pubKeyCredParams: [
-          { type: 'public-key', alg: -7 },
-          { type: 'public-key', alg: -257 },
-        ],
-        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
-        extensions: {
-          prf: { eval: { first: toArrayBuffer(input.prfSalt) } },
-        },
-      },
-    })) as PublicKeyCredential | null
+      })) as PublicKeyCredential | null
+    } catch (error) {
+      const cancellation = getCancellationError(error, 'creation')
+      if (cancellation) throw cancellation
+      throw error
+    }
 
     if (!result) {
       throw new AltudeWalletError('PASSKEY_CANCELLED', 'Passkey creation was cancelled.')
@@ -41,17 +65,24 @@ export class BrowserPasskeyAdapter implements PasskeyAdapter {
 
   async deriveKey(input: Parameters<PasskeyAdapter['deriveKey']>[0]): Promise<Uint8Array> {
     this.#assertAvailable(input.rpId)
-    const result = (await navigator.credentials.get({
-      publicKey: {
-        challenge: toArrayBuffer(input.challenge),
-        rpId: input.rpId,
-        userVerification: 'required',
-        allowCredentials: [{ type: 'public-key', id: toArrayBuffer(input.credentialId) }],
-        extensions: {
-          prf: { eval: { first: toArrayBuffer(input.prfSalt) } },
+    let result: PublicKeyCredential | null
+    try {
+      result = (await navigator.credentials.get({
+        publicKey: {
+          challenge: toArrayBuffer(input.challenge),
+          rpId: input.rpId,
+          userVerification: 'required',
+          allowCredentials: [{ type: 'public-key', id: toArrayBuffer(input.credentialId) }],
+          extensions: {
+            prf: { eval: { first: toArrayBuffer(input.prfSalt) } },
+          },
         },
-      },
-    })) as PublicKeyCredential | null
+      })) as PublicKeyCredential | null
+    } catch (error) {
+      const cancellation = getCancellationError(error, 'unlock')
+      if (cancellation) throw cancellation
+      throw error
+    }
 
     if (!result) {
       throw new AltudeWalletError('PASSKEY_CANCELLED', 'Passkey unlock was cancelled.')
