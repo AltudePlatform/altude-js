@@ -48,6 +48,13 @@ describe('WalletVault', () => {
 
     vault.lock('issuer|first')
     await expect(sign(message)).rejects.toThrow('locked')
+    await expect(vault.getSigner('issuer|first')).rejects.toMatchObject({
+      code: 'WALLET_LOCKED',
+    })
+    expect(vault.isUnlocked('issuer|first')).toBe(false)
+
+    await vault.unlock('issuer|first')
+    expect(vault.isUnlocked('issuer|first')).toBe(true)
   })
 
   it('wraps passkey-protected keys and requires a PRF assertion to unlock', async () => {

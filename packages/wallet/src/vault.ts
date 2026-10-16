@@ -240,7 +240,7 @@ export class WalletVault {
           'Unlock this wallet with its registered passkey.',
         )
       }
-      await this.#unlock(identityKey, operation)
+      throw new AltudeWalletError('WALLET_LOCKED', 'Unlock this wallet before signing.')
     }
     this.#assertCurrent(identityKey, operation)
     const secret = this.#unlocked.get(identityKey)

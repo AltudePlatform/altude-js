@@ -277,6 +277,48 @@ describe('AltudeWallet', () => {
     ).toThrow(AltudeWalletError)
   })
 
+  it('requires an explicit unlock before approving transactions or creating accounts', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        success: true,
+        sessionToken: 'session-token',
+        user: { id: 'locked-wallet-user' },
+      }),
+    )
+    const wallet = createWallet()
+    await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|locked-wallet-user',
+    })
+    let confirmationId = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') confirmationId = event.id
+    })
+    const resultPromise = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: '11111111111111111111111111111111',
+      amount: 1_000,
+      network: 'devnet',
+    })
+    wallet.lock()
+
+    await expect(wallet.approveTransaction(confirmationId)).rejects.toMatchObject({
+      code: 'WALLET_LOCKED',
+    })
+    await expect(resultPromise).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+    await expect(wallet.createAccount()).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+    expect(gasStation.send).not.toHaveBeenCalled()
+    expect(gasStation.createAccount).not.toHaveBeenCalled()
+    expect(wallet.state.status).toBe('locked')
+
+    const stateEvents: string[] = []
+    wallet.onEvent((event) => {
+      if (event.type === 'state') stateEvents.push(event.state.status)
+    })
+    expect((await wallet.unlock()).status).toBe('connected')
+    expect(stateEvents).toEqual(['connected'])
+  })
+
   it.each([true, false])(
     'relays concurrent approvals only once (relay succeeds: %s)',
     async (succeeds) => {
