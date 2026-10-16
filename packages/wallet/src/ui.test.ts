@@ -109,6 +109,102 @@ describe('mountWalletUI', () => {
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(previousFocus)
   })
+
+  it('keeps overlapping confirmations independently actionable through out-of-order results', async () => {
+    let listener: ((event: WalletEvent) => void) | undefined
+    const state: WalletState = {
+      status: 'connected',
+      session: { user: { id: 'user-1' } },
+      address: '11111111111111111111111111111111',
+      protection: 'device-local',
+    }
+    const approvals = new Map<
+      string,
+      { resolve: (result: { signature: string }) => void; reject: (error: Error) => void }
+    >()
+    const approveTransaction = vi.fn(
+      (id: string) =>
+        new Promise<{ signature: string }>((resolve, reject) => {
+          approvals.set(id, { resolve, reject })
+        }),
+    )
+    const rejectTransaction = vi.fn()
+    const wallet = {
+      state,
+      canStartOtp: false,
+      canSignInWithSocial: false,
+      canSignInWithPasskey: false,
+      onEvent: (handler: (event: WalletEvent) => void) => {
+        listener = handler
+        return () => {
+          listener = undefined
+        }
+      },
+      restoreSession: () => Promise.resolve(state),
+      getBalance: () => Promise.resolve({ address: state.address ?? '', uiAmount: 1 }),
+      createAccount: () => Promise.resolve({ Signature: 'account-signature' }),
+      protectWithPasskey: () => Promise.resolve(state),
+      signOut: () => Promise.resolve(),
+      approveTransaction,
+      rejectTransaction,
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, { presentation: 'modal' })
+
+    const requests = ['request-a', 'request-b', 'request-c']
+    for (const id of requests) {
+      listener?.({
+        type: 'transaction:confirmation',
+        id,
+        intent: {
+          kind: 'sol-transfer',
+          recipient: '11111111111111111111111111111111',
+          amount: 100,
+        },
+      })
+    }
+
+    const dialog = container.querySelector('[role="dialog"]')
+    const group = (id: string) =>
+      dialog?.querySelector(`[role="group"][aria-label="Transaction confirmation ${id}"]`)
+    expect(requests.map((id) => group(id)).every(Boolean)).toBe(true)
+
+    const action = (id: string, label: string) => {
+      const control = [...(group(id)?.querySelectorAll('button') ?? [])].find(
+        (button) => button.textContent === label,
+      )
+      if (!control) throw new Error(`Expected ${label} for ${id}.`)
+      control.click()
+    }
+    action('request-a', 'Confirm and submit')
+    action('request-b', 'Confirm and submit')
+    action('request-c', 'Cancel')
+    expect(approveTransaction.mock.calls.map(([id]) => id)).toEqual(['request-a', 'request-b'])
+    expect(rejectTransaction).toHaveBeenCalledWith('request-c')
+    expect(group('request-a')).not.toBeNull()
+    expect(group('request-b')).not.toBeNull()
+    expect(group('request-c')).toBeNull()
+
+    listener?.({
+      type: 'transaction:complete',
+      id: 'request-b',
+      result: { signature: 'signature-b' },
+    })
+    expect(group('request-b')).toBeNull()
+    expect(group('request-a')).not.toBeNull()
+
+    const failure = new Error('request-a failed')
+    listener?.({ type: 'transaction:error', id: 'request-a', error: failure })
+    expect(group('request-a')).toBeNull()
+    expect(dialog?.querySelector('[role="alert"]')?.textContent).toBe(failure.message)
+
+    approvals.get('request-a')?.reject(failure)
+    approvals.get('request-b')?.resolve({ signature: 'signature-b' })
+    await Promise.resolve()
+    await Promise.resolve()
+    unmount()
+  })
 })
 
 function getSelectors(rules: CSSRuleList): string[] {

@@ -75,16 +75,41 @@ export function mountWalletUI(
   let busy = false
   let message = ''
   let errorMessage = ''
-  let pending: Extract<WalletEvent, { type: 'transaction:confirmation' }> | null = null
+  type ConfirmationEvent = Extract<WalletEvent, { type: 'transaction:confirmation' }>
+  const pending = new Map<
+    string,
+    { event: ConfirmationEvent; userId: string | null; address: string | null }
+  >()
+  const submitting = new Set<string>()
   const events = wallet.onEvent((event) => {
-    if (event.type === 'transaction:confirmation') pending = event
+    if (event.type === 'transaction:confirmation') {
+      pending.set(event.id, {
+        event,
+        userId: wallet.state.session?.user.id ?? null,
+        address: wallet.state.address,
+      })
+    }
     if (event.type === 'transaction:complete') {
-      pending = null
+      pending.delete(event.id)
       message = `Transaction submitted: ${event.result.signature}`
     }
     if (event.type === 'transaction:error') {
-      pending = null
+      pending.delete(event.id)
       errorMessage = event.error.message
+    }
+    if (event.type === 'state') {
+      if (event.state.status === 'disconnected') {
+        pending.clear()
+      } else if (event.state.status === 'connected') {
+        for (const [id, request] of pending) {
+          if (
+            request.userId !== event.state.session?.user.id ||
+            request.address !== event.state.address
+          ) {
+            pending.delete(id)
+          }
+        }
+      }
     }
     render()
   })
@@ -225,30 +250,39 @@ export function mountWalletUI(
       panel.append(button('Sign out', () => run(() => wallet.signOut()), true))
     }
 
-    if (pending && state.status === 'connected') {
-      const confirmation = document.createElement('div')
-      confirmation.className = 'confirm'
-      const summary = document.createElement('p')
-      const transaction = pending
-      const amount = transaction.intent.amount.toLocaleString()
-      summary.textContent =
-        transaction.intent.kind === 'sol-transfer'
-          ? `Confirm transfer of ${amount} lamports to ${transaction.intent.recipient}?`
-          : `Confirm transfer of ${amount} base units of ${transaction.intent.mint} to ${transaction.intent.recipient}?`
-      confirmation.append(
-        summary,
-        button('Confirm and submit', () => run(() => wallet.approveTransaction(transaction.id))),
-        button(
-          'Cancel',
-          () => {
-            wallet.rejectTransaction(transaction.id)
-            pending = null
-            render()
-          },
-          true,
-        ),
-      )
-      panel.append(confirmation)
+    if (state.status === 'connected') {
+      for (const { event: transaction } of pending.values()) {
+        const confirmation = document.createElement('div')
+        confirmation.className = 'confirm'
+        confirmation.setAttribute('role', 'group')
+        confirmation.setAttribute('aria-label', `Transaction confirmation ${transaction.id}`)
+        const summary = document.createElement('p')
+        const amount = transaction.intent.amount.toLocaleString()
+        summary.textContent =
+          transaction.intent.kind === 'sol-transfer'
+            ? `Confirm transfer of ${amount} lamports to ${transaction.intent.recipient}?`
+            : `Confirm transfer of ${amount} base units of ${transaction.intent.mint} to ${transaction.intent.recipient}?`
+        confirmation.append(
+          summary,
+          button(
+            'Confirm and submit',
+            () => submitTransaction(transaction.id),
+            false,
+            submitting.has(transaction.id),
+          ),
+          button(
+            'Cancel',
+            () => {
+              if (!pending.has(transaction.id)) return
+              wallet.rejectTransaction(transaction.id)
+              pending.delete(transaction.id)
+              render()
+            },
+            true,
+          ),
+        )
+        panel.append(confirmation)
+      }
     }
 
     if (message) {
@@ -285,6 +319,24 @@ export function mountWalletUI(
     }
   }
 
+  async function submitTransaction(id: string): Promise<void> {
+    if (!pending.has(id) || submitting.has(id)) return
+    submitting.add(id)
+    errorMessage = ''
+    message = ''
+    render()
+    try {
+      await wallet.approveTransaction(id)
+    } catch (error) {
+      if (pending.delete(id)) {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+    } finally {
+      submitting.delete(id)
+      render()
+    }
+  }
+
   render()
   let mounted = true
   void wallet.restoreSession().catch((error: unknown) => {
@@ -310,10 +362,16 @@ function input(labelText: string, type: string): HTMLInputElement {
   return field
 }
 
-function button(text: string, action: () => unknown, secondary = false): HTMLButtonElement {
+function button(
+  text: string,
+  action: () => unknown,
+  secondary = false,
+  disabled = false,
+): HTMLButtonElement {
   const element = document.createElement('button')
   element.type = 'button'
   element.textContent = text
+  element.disabled = disabled
   if (secondary) element.className = 'secondary'
   element.addEventListener('click', () => void action())
   return element
