@@ -2,22 +2,22 @@ import type { WalletEvent, WalletUiOptions } from './types.js'
 import type { AltudeWallet } from './wallet.js'
 
 const styles = `
-:host{font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#071922}
-.overlay{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;padding:20px;background:#07192299}
-.panel{box-sizing:border-box;width:min(100%,420px);max-height:min(88vh,760px);overflow:auto;padding:28px;background:#fff;border:1px solid #d6e1e6;border-radius:18px;box-shadow:0 24px 80px #07192240}
-.inline{width:100%;max-width:480px;margin:auto;padding:24px;background:#fff;border:1px solid #d6e1e6;border-radius:16px}
-.fullscreen{position:fixed;inset:0;z-index:2147483000;overflow:auto;padding:24px;background:#f7fafb}
-h2{margin:0 0 16px;font-size:22px;line-height:1.25}
-p{margin:12px 0;color:#39515c}
-label{display:block;margin:14px 0 5px;font-weight:600}
-input{box-sizing:border-box;width:100%;min-height:44px;padding:10px 12px;border:1px solid #aabac2;border-radius:8px;font:inherit}
-button{min-height:42px;margin:6px 6px 0 0;padding:9px 14px;border:0;border-radius:8px;background:#071922;color:white;font:600 14px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer}
-button.secondary{border:1px solid #c5d2d8;background:white;color:#071922}
-button:focus-visible,input:focus-visible{outline:3px solid #048abf;outline-offset:2px}
-.error{color:#a6262d}
-.status{word-break:break-word}
-.confirm{margin-top:20px;padding:16px;background:#eff7fb;border-radius:10px}
-@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+.altude-wallet-ui{font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#071922}
+.altude-wallet-ui .overlay{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;padding:20px;background:#07192299}
+.altude-wallet-ui .panel{box-sizing:border-box;width:min(100%,420px);max-height:min(88vh,760px);overflow:auto;padding:28px;background:#fff;border:1px solid #d6e1e6;border-radius:18px;box-shadow:0 24px 80px #07192240}
+.altude-wallet-ui .inline{width:100%;max-width:480px;margin:auto;padding:24px;background:#fff;border:1px solid #d6e1e6;border-radius:16px}
+.altude-wallet-ui .fullscreen{position:fixed;inset:0;z-index:2147483000;overflow:auto;padding:24px;background:#f7fafb}
+.altude-wallet-ui h2{margin:0 0 16px;font-size:22px;line-height:1.25}
+.altude-wallet-ui p{margin:12px 0;color:#39515c}
+.altude-wallet-ui label{display:block;margin:14px 0 5px;font-weight:600}
+.altude-wallet-ui input{box-sizing:border-box;width:100%;min-height:44px;padding:10px 12px;border:1px solid #aabac2;border-radius:8px;font:inherit}
+.altude-wallet-ui button{min-height:42px;margin:6px 6px 0 0;padding:9px 14px;border:0;border-radius:8px;background:#071922;color:white;font:600 14px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer}
+.altude-wallet-ui button.secondary{border:1px solid #c5d2d8;background:white;color:#071922}
+.altude-wallet-ui button:focus-visible,.altude-wallet-ui input:focus-visible{outline:3px solid #048abf;outline-offset:2px}
+.altude-wallet-ui .error{color:#a6262d}
+.altude-wallet-ui .status{word-break:break-word}
+.altude-wallet-ui .confirm{margin-top:20px;padding:16px;background:#eff7fb;border-radius:10px}
+@media(prefers-reduced-motion:reduce){.altude-wallet-ui *{scroll-behavior:auto!important}}
 `
 
 export function mountWalletUI(
@@ -26,6 +26,7 @@ export function mountWalletUI(
   options: WalletUiOptions = {},
 ): () => void {
   const root = document.createElement('div')
+  root.className = 'altude-wallet-ui'
   container.append(root)
   const previousFocus = document.activeElement
   const presentation = options.presentation ?? 'modal'
