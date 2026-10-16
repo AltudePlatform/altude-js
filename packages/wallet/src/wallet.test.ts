@@ -277,6 +277,161 @@ describe('AltudeWallet', () => {
     ).toThrow(AltudeWalletError)
   })
 
+  it.each([true, false])(
+    'relays concurrent approvals only once (relay succeeds: %s)',
+    async (succeeds) => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          success: true,
+          sessionToken: 'session-token',
+          user: { id: 'concurrent-user' },
+        }),
+      )
+      const wallet = createWallet()
+      await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|concurrent' })
+      let confirmationId = ''
+      const events: WalletEvent[] = []
+      wallet.onEvent((event) => {
+        events.push(event)
+        if (event.type === 'transaction:confirmation') confirmationId = event.id
+      })
+      const relay = deferred<{ Signature: string }>()
+      gasStation.send.mockReturnValue(relay.promise)
+      const requested = wallet.requestTransaction({
+        kind: 'sol-transfer',
+        recipient: '11111111111111111111111111111111',
+        amount: 1_000,
+      })
+      const first = wallet.approveTransaction(confirmationId)
+      const outcomes = Promise.allSettled([requested, first])
+      const second = wallet.approveTransaction(confirmationId)
+
+      await expect(second).rejects.toMatchObject({
+        code: 'TRANSACTION',
+        message: 'This transaction request is already submitting.',
+      })
+      await vi.waitFor(() => {
+        expect(gasStation.send).toHaveBeenCalledOnce()
+      })
+      relay.resolve({ Signature: succeeds ? 'only-signature' : '' })
+
+      const settled = await outcomes
+      if (succeeds) {
+        expect(settled).toEqual([
+          { status: 'fulfilled', value: { signature: 'only-signature' } },
+          { status: 'fulfilled', value: { signature: 'only-signature' } },
+        ])
+        expect(events.filter((event) => event.type === 'transaction:complete')).toHaveLength(1)
+      } else {
+        for (const outcome of settled) {
+          expect(outcome).toMatchObject({
+            status: 'rejected',
+            reason: { code: 'TRANSACTION' },
+          })
+        }
+        expect(events.filter((event) => event.type === 'transaction:error')).toHaveLength(1)
+      }
+      await expect(wallet.approveTransaction(confirmationId)).rejects.toMatchObject({
+        code: 'TRANSACTION',
+        message: 'This transaction request is no longer active.',
+      })
+      expect(gasStation.send).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('does not relay an approval cancelled while obtaining its signer', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        success: true,
+        sessionToken: 'session-token',
+        user: { id: 'cancel-before-relay' },
+      }),
+    )
+    const wallet = createWallet()
+    await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|cancel-before-relay' })
+    let confirmationId = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') confirmationId = event.id
+    })
+    const requested = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: '11111111111111111111111111111111',
+      amount: 1_000,
+    })
+    const approval = wallet.approveTransaction(confirmationId)
+    const outcomes = Promise.allSettled([requested, approval])
+
+    wallet.rejectTransaction(confirmationId)
+
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'TRANSACTION', message: 'The wallet user rejected this transaction.' },
+      })
+    }
+    expect(gasStation.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['identity change', 'sign-out', 'rejection'])(
+    'keeps an in-flight approval cancellable on %s and ignores its late relay response',
+    async (cancellation) => {
+      const signOutResponse = deferred<Response>()
+      fetchMock.mockImplementation((url: string, request: RequestInit) => {
+        if (url.endsWith('/signout')) return signOutResponse.promise
+        const body = parseBody(request.body)
+        return Promise.resolve(
+          jsonResponse({
+            success: true,
+            sessionToken: `session-${body.walletAddress}`,
+            user: { id: body.walletAddress, walletAddress: body.walletAddress },
+          }),
+        )
+      })
+      const wallet = createWallet()
+      await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|first' })
+      let confirmationId = ''
+      const eventHandler = vi.fn((event: WalletEvent) => {
+        if (event.type === 'transaction:confirmation') confirmationId = event.id
+      })
+      wallet.onEvent(eventHandler)
+      const relay = deferred<{ Signature: string }>()
+      gasStation.send.mockReturnValue(relay.promise)
+      const requested = wallet.requestTransaction({
+        kind: 'sol-transfer',
+        recipient: '11111111111111111111111111111111',
+        amount: 1_000,
+      })
+      const approval = wallet.approveTransaction(confirmationId)
+      const code = cancellation === 'rejection' ? 'TRANSACTION' : 'SESSION'
+      const requestRejected = expect(requested).rejects.toMatchObject({ code })
+      const approvalRejected = expect(approval).rejects.toMatchObject({ code })
+      await vi.waitFor(() => {
+        expect(gasStation.send).toHaveBeenCalledOnce()
+      })
+
+      if (cancellation === 'identity change') {
+        await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|second' })
+      } else if (cancellation === 'sign-out') {
+        const signOut = wallet.signOut()
+        await requestRejected
+        signOutResponse.resolve(jsonResponse({ success: true }))
+        await signOut
+      } else {
+        wallet.rejectTransaction(confirmationId)
+      }
+
+      await requestRejected
+      await expect(wallet.approveTransaction(confirmationId)).rejects.toMatchObject({
+        code: 'TRANSACTION',
+      })
+      eventHandler.mockClear()
+      relay.resolve({ Signature: 'stale-signature' })
+      await approvalRejected
+      expect(eventHandler).not.toHaveBeenCalled()
+      expect(gasStation.send).toHaveBeenCalledOnce()
+    },
+  )
+
   it('keeps SPL transfer approval bound to its immutable confirmed snapshot', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

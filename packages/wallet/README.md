@@ -104,6 +104,13 @@ Gas Station SDK builds, locally signs, and submits supported requests. Opaque
 instruction sets and Token-2022 transfers are rejected/not exposed until the
 relay SDK supports them.
 
+Approval claims the request immediately; concurrent `approveTransaction(id)`
+calls reject with a `TRANSACTION` error rather than submit another transfer.
+Requests stay cancellable while submitting. Changing identity, signing out, or
+rejecting the request cancels its pending result and prevents a late relay
+response from reporting completion. Cancellation cannot retract a transfer
+already sent to the relay; check its status before requesting another transfer.
+
 `createAccount()`, `getBalance()`, `getHistory()`, and `getTransaction()` use
 Gas Station's supported account/RPC capabilities. Transaction lookup searches
 the most recent 100 history entries; the current Gas Station API does not

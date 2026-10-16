@@ -30,6 +30,8 @@ interface PendingTransaction {
   intent: WalletTransactionIntentSnapshot
   identityKey: string
   address: string
+  submitting: boolean
+  cancelled?: Error
   resolve: (result: WalletTransactionResult) => void
   reject: (error: Error) => void
 }
@@ -317,6 +319,7 @@ export class AltudeWallet {
   async signOut(): Promise<void> {
     const generation = ++this.#lifecycleGeneration
     this.#vault.lock()
+    this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
     const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
     if (!this.#isCurrentLifecycle(generation)) return
     if (token) await this.#api.signOut(token)
@@ -338,6 +341,7 @@ export class AltudeWallet {
         intent: snapshot,
         identityKey: active.identityKey,
         address: active.address,
+        submitting: false,
         resolve,
         reject,
       })
@@ -350,6 +354,9 @@ export class AltudeWallet {
     const pending = this.#pendingTransactions.get(id)
     if (!pending)
       throw new AltudeWalletError('TRANSACTION', 'This transaction request is no longer active.')
+    if (pending.submitting)
+      throw new AltudeWalletError('TRANSACTION', 'This transaction request is already submitting.')
+    pending.submitting = true
     try {
       const active = this.#requireActive()
       if (active.identityKey !== pending.identityKey || active.address !== pending.address) {
@@ -359,6 +366,7 @@ export class AltudeWallet {
         )
       }
       const signer = await this.#vault.getSigner(active.identityKey)
+      this.#assertNotCancelled(pending)
       const response = await this.#gasStation.send({
         sourceSigner: signer,
         account: active.address,
@@ -366,6 +374,7 @@ export class AltudeWallet {
         amount: pending.intent.amount,
         ...(pending.intent.kind === 'spl-transfer' ? { token: pending.intent.mint } : {}),
       })
+      this.#assertNotCancelled(pending)
       if (!response.Signature) {
         throw new AltudeWalletError(
           'TRANSACTION',
@@ -381,9 +390,9 @@ export class AltudeWallet {
       this.#emit({ type: 'transaction:complete', id, result })
       return result
     } catch (error) {
-      const normalized = asError(error)
+      const normalized = pending.cancelled ?? asError(error)
       pending.reject(normalized)
-      this.#emit({ type: 'transaction:error', id, error: normalized })
+      if (!pending.cancelled) this.#emit({ type: 'transaction:error', id, error: normalized })
       throw normalized
     } finally {
       this.#pendingTransactions.delete(id)
@@ -394,9 +403,11 @@ export class AltudeWallet {
     const pending = this.#pendingTransactions.get(id)
     if (!pending) return
     this.#pendingTransactions.delete(id)
-    pending.reject(
-      new AltudeWalletError('TRANSACTION', 'The wallet user rejected this transaction.'),
+    pending.cancelled = new AltudeWalletError(
+      'TRANSACTION',
+      'The wallet user rejected this transaction.',
     )
+    pending.reject(pending.cancelled)
   }
 
   async createAccount(tokens?: string[]) {
@@ -458,9 +469,14 @@ export class AltudeWallet {
 
   #cancelPendingTransactions(message: string): void {
     for (const [id, pending] of this.#pendingTransactions) {
-      pending.reject(new AltudeWalletError('SESSION', message))
+      pending.cancelled = new AltudeWalletError('SESSION', message)
+      pending.reject(pending.cancelled)
       this.#pendingTransactions.delete(id)
     }
+  }
+
+  #assertNotCancelled(pending: PendingTransaction): void {
+    if (pending.cancelled) throw pending.cancelled
   }
 
   #isCurrentLifecycle(generation: number): boolean {
