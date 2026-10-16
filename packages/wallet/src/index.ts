@@ -15,6 +15,9 @@ export {
 } from './embed.js'
 export type {
   AltudeWalletConfig,
+  ExternalWalletConnection,
+  ExternalWalletProvider,
+  ExternalWalletProviderId,
   OtpChannel,
   PasskeyAdapter,
   SessionTokenStore,

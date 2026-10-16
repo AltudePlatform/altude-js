@@ -172,6 +172,20 @@ export function mountWalletUI(
           button('Continue with passkey', () => run(() => wallet.signInWithPasskey()), true),
         )
       }
+      if (!otpStarted && wallet.externalWalletProviders.length > 0) {
+        const externalIntro = document.createElement('p')
+        externalIntro.textContent = 'Or connect an external wallet:'
+        panel.append(externalIntro)
+        for (const provider of wallet.externalWalletProviders) {
+          panel.append(
+            button(
+              `Connect ${provider.label}`,
+              () => run(() => wallet.connectExternalWallet(provider.id)),
+              true,
+            ),
+          )
+        }
+      }
       if (otpStarted) {
         const code = input('One-time code', 'text')
         code.autocomplete = 'one-time-code'
@@ -205,8 +219,16 @@ export function mountWalletUI(
       const status = document.createElement('p')
       status.className = 'status'
       const address = state.address ?? 'Unavailable'
-      status.textContent =
-        state.status === 'locked' ? `Wallet locked · ${address}` : `Connected · ${address}`
+      if (state.custody === 'external') {
+        const provider = wallet.externalWalletProviders.find(
+          (candidate) => candidate.id === state.externalProviderId,
+        )
+        const chain = state.externalChain === 'evm' ? 'EVM' : 'Solana'
+        status.textContent = `Connected with ${provider?.label ?? 'external wallet'} · ${chain} · ${address}`
+      } else {
+        status.textContent =
+          state.status === 'locked' ? `Wallet locked · ${address}` : `Connected · ${address}`
+      }
       panel.append(status)
       if (state.status === 'locked') {
         const unlock =
@@ -217,37 +239,55 @@ export function mountWalletUI(
           button(state.protection === 'passkey' ? 'Unlock with passkey' : 'Unlock wallet', unlock),
         )
       } else {
-        panel.append(
-          button(
-            'Check balance',
-            () =>
-              run(async () => {
-                const balance = await wallet.getBalance()
-                message = `Balance: ${String(balance.uiAmount ?? 'unavailable')} SOL`
-              }),
-            true,
-          ),
-        )
-        if (state.protection === 'device-local') {
+        if (state.custody !== 'external' || state.externalChain === 'solana') {
           panel.append(
-            button('Protect with passkey', () => run(() => wallet.protectWithPasskey()), true),
+            button(
+              'Check balance',
+              () =>
+                run(async () => {
+                  const balance = await wallet.getBalance()
+                  message = `Balance: ${String(balance.uiAmount ?? 'unavailable')} SOL`
+                }),
+              true,
+            ),
           )
         }
-        panel.append(
-          button(
-            'Create token account',
-            () =>
-              run(async () => {
-                const result = await wallet.createAccount()
-                message =
-                  result.Message ||
-                  (result.Signature ? `Account created: ${result.Signature}` : 'Account is ready.')
-              }),
-            true,
-          ),
-        )
+        if (state.custody === 'embedded') {
+          if (state.protection === 'device-local') {
+            panel.append(
+              button('Protect with passkey', () => run(() => wallet.protectWithPasskey()), true),
+            )
+          }
+          panel.append(
+            button(
+              'Create token account',
+              () =>
+                run(async () => {
+                  const result = await wallet.createAccount()
+                  message =
+                    result.Message ||
+                    (result.Signature
+                      ? `Account created: ${result.Signature}`
+                      : 'Account is ready.')
+                }),
+              true,
+            ),
+          )
+        }
+        if (state.custody === 'external' && state.externalChain === 'evm') {
+          const unavailable = document.createElement('p')
+          unavailable.textContent =
+            'This external EVM wallet is connected, but Solana balance and transaction actions are unavailable.'
+          panel.append(unavailable)
+        }
       }
-      panel.append(button('Sign out', () => run(() => wallet.signOut()), true))
+      panel.append(
+        button(
+          state.custody === 'external' ? 'Disconnect wallet' : 'Sign out',
+          () => run(() => wallet.signOut()),
+          true,
+        ),
+      )
     }
 
     if (state.status === 'connected') {

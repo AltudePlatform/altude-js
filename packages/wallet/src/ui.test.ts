@@ -15,12 +15,16 @@ describe('mountWalletUI', () => {
       session: null,
       address: null,
       protection: null,
+      custody: null,
+      externalProviderId: null,
+      externalChain: null,
     }
     const wallet = {
       state,
       canStartOtp: false,
       canSignInWithSocial: false,
       canSignInWithPasskey: false,
+      externalWalletProviders: [],
       onEvent: () => () => {},
       restoreSession: () => Promise.resolve(state),
     } as unknown as AltudeWallet
@@ -53,6 +57,9 @@ describe('mountWalletUI', () => {
       session: { user: { id: 'user-1' } },
       address: '11111111111111111111111111111111',
       protection: 'device-local',
+      custody: 'embedded',
+      externalProviderId: null,
+      externalChain: null,
     }
     const approveTransaction = vi.fn(() => Promise.resolve({ signature: 'signature' }))
     const wallet = {
@@ -60,6 +67,7 @@ describe('mountWalletUI', () => {
       canStartOtp: false,
       canSignInWithSocial: false,
       canSignInWithPasskey: false,
+      externalWalletProviders: [],
       onEvent: (handler: (event: WalletEvent) => void) => {
         listener = handler
         return () => {
@@ -117,6 +125,9 @@ describe('mountWalletUI', () => {
       session: { user: { id: 'user-1' } },
       address: '11111111111111111111111111111111',
       protection: 'device-local',
+      custody: 'embedded',
+      externalProviderId: null,
+      externalChain: null,
     }
     const approvals = new Map<
       string,
@@ -134,6 +145,7 @@ describe('mountWalletUI', () => {
       canStartOtp: false,
       canSignInWithSocial: false,
       canSignInWithPasskey: false,
+      externalWalletProviders: [],
       onEvent: (handler: (event: WalletEvent) => void) => {
         listener = handler
         return () => {
@@ -203,6 +215,71 @@ describe('mountWalletUI', () => {
     approvals.get('request-b')?.resolve({ signature: 'signature-b' })
     await Promise.resolve()
     await Promise.resolve()
+    unmount()
+  })
+
+  it('offers external providers and avoids embedded-wallet actions for EVM custody', async () => {
+    let listener: ((event: WalletEvent) => void) | undefined
+    let state: WalletState = {
+      status: 'disconnected',
+      session: null,
+      address: null,
+      protection: null,
+      custody: null,
+      externalProviderId: null,
+      externalChain: null,
+    }
+    const connectExternalWallet = vi.fn(() => {
+      state = {
+        status: 'connected',
+        session: null,
+        address: '0x1234567890123456789012345678901234567890',
+        protection: null,
+        custody: 'external',
+        externalProviderId: 'metamask',
+        externalChain: 'evm',
+      }
+      listener?.({ type: 'state', state })
+      return Promise.resolve(state)
+    })
+    const wallet = {
+      get state() {
+        return state
+      },
+      canStartOtp: false,
+      canSignInWithSocial: false,
+      canSignInWithPasskey: false,
+      externalWalletProviders: [{ id: 'metamask', label: 'MetaMask' }],
+      connectExternalWallet,
+      onEvent: (handler: (event: WalletEvent) => void) => {
+        listener = handler
+        return () => {
+          listener = undefined
+        }
+      },
+      restoreSession: () => Promise.resolve(state),
+      signOut: () => Promise.resolve(),
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, { presentation: 'inline' })
+
+    const connect = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Connect MetaMask',
+    )
+    expect(connect).toBeDefined()
+    connect?.click()
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Connected with MetaMask · EVM')
+    })
+    expect(connectExternalWallet).toHaveBeenCalledWith('metamask')
+    expect(container.textContent).toContain(
+      'Solana balance and transaction actions are unavailable.',
+    )
+    expect(container.textContent).not.toContain('Create token account')
+    expect(container.textContent).not.toContain('Protect with passkey')
+    expect(container.textContent).toContain('Disconnect wallet')
+
     unmount()
   })
 })

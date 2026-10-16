@@ -30,6 +30,7 @@
     "prepack": "pnpm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:browser": "node browser-tests/integration.mjs",
     "lint": "eslint src",
     "clean": "rm -rf dist"
   },
@@ -40,6 +41,7 @@
   "devDependencies": {
     "fake-indexeddb": "^6.2.5",
     "happy-dom": "^15.11.7",
+    "playwright": "^1.64.1",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"

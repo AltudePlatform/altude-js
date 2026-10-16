@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AltudeGasStation } from '@altude/gasstation'
 import { AltudeWallet, AltudeWalletError } from './index.js'
 import type {
+  ExternalWalletProvider,
   SessionTokenStore,
   WalletEvent,
   WalletStore,
@@ -89,12 +90,13 @@ describe('AltudeWallet', () => {
     }
   })
 
-  function createWallet() {
+  function createWallet(externalWallets: readonly ExternalWalletProvider[] = []) {
     return new AltudeWallet({
       apiKey: 'test-api-key',
       apiBaseUrl: 'https://api.example.test',
       network: 'devnet',
       auth: {},
+      externalWallets,
       store,
       sessionTokenStore: sessionTokens,
       fetch: fetchMock as typeof fetch,
@@ -214,6 +216,131 @@ describe('AltudeWallet', () => {
     ).toThrow(AltudeWalletError)
   })
 
+  it('connects an external Solana wallet without creating an API session or local key', async () => {
+    const signer = {
+      address: '11111111111111111111111111111111',
+      sign: vi.fn(),
+    }
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect: vi.fn().mockResolvedValue({
+        address: signer.address,
+        chain: 'solana',
+        signer,
+      }),
+      disconnect: vi.fn(),
+    }
+    const wallet = createWallet([provider])
+
+    const state = await wallet.connectExternalWallet('phantom')
+
+    expect(state).toMatchObject({
+      status: 'connected',
+      session: null,
+      address: signer.address,
+      protection: null,
+      custody: 'external',
+      externalProviderId: 'phantom',
+      externalChain: 'solana',
+    })
+    expect(wallet.externalWalletProviders).toEqual([{ id: 'phantom', label: 'Phantom' }])
+    expect(store.records.size).toBe(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('routes an approved external Solana transfer through its adapter signer', async () => {
+    const signer = {
+      address: '11111111111111111111111111111111',
+      sign: vi.fn(),
+    }
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect: vi.fn().mockResolvedValue({
+        address: signer.address,
+        chain: 'solana',
+        signer,
+      }),
+    }
+    const wallet = createWallet([provider])
+    await wallet.connectExternalWallet('phantom')
+    let transactionId = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') transactionId = event.id
+    })
+
+    const result = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: 'Vote111111111111111111111111111111111111111',
+      amount: 500,
+    })
+    await wallet.approveTransaction(transactionId)
+
+    await expect(result).resolves.toMatchObject({ signature: 'transaction-signature' })
+    expect(gasStation.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: signer.address,
+        sourceSigner: signer,
+        toAddress: 'Vote111111111111111111111111111111111111111',
+        amount: 500,
+      }),
+    )
+    expect(store.records.size).toBe(0)
+    expect(sessionTokens.token).toBeNull()
+  })
+
+  it('rejects EVM wallet operations that require Solana and disconnects without API credentials', async () => {
+    const disconnect = vi.fn()
+    const provider: ExternalWalletProvider = {
+      id: 'metamask',
+      label: 'MetaMask',
+      connect: vi.fn().mockResolvedValue({
+        address: '0x1234567890123456789012345678901234567890',
+        chain: 'evm',
+      }),
+      disconnect,
+    }
+    const wallet = createWallet([provider])
+    await wallet.connectExternalWallet('metamask')
+
+    await expect(wallet.getBalance()).rejects.toMatchObject({ code: 'TRANSACTION' })
+    expect(() =>
+      wallet.requestTransaction({
+        kind: 'sol-transfer',
+        recipient: 'Vote111111111111111111111111111111111111111',
+        amount: 500,
+      }),
+    ).toThrow(AltudeWalletError)
+    await expect(wallet.createAccount()).rejects.toMatchObject({ code: 'SESSION' })
+    expect(gasStation.getBalance).not.toHaveBeenCalled()
+    expect(gasStation.send).not.toHaveBeenCalled()
+    expect(gasStation.createAccount).not.toHaveBeenCalled()
+
+    await wallet.signOut()
+    expect(disconnect).toHaveBeenCalledOnce()
+    expect(wallet.state.status).toBe('disconnected')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects external connections while an API session token remains', async () => {
+    sessionTokens.token = 'active-api-session'
+    const connect = vi.fn()
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect,
+    }
+    const wallet = createWallet([provider])
+
+    await expect(wallet.connectExternalWallet('phantom')).rejects.toMatchObject({
+      code: 'SESSION',
+      message: 'Sign out of the existing API session before connecting an external wallet.',
+    })
+    expect(connect).not.toHaveBeenCalled()
+    expect(wallet.state.status).toBe('disconnected')
+  })
+
   it('requires user confirmation and relays only validated structured transfers', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
@@ -246,7 +373,8 @@ describe('AltudeWallet', () => {
     expect(gasStation.send).not.toHaveBeenCalled()
     intent.recipient = 'Vote111111111111111111111111111111111111111'
     intent.amount = 2_000
-    if (!confirmationIntent || !confirmationEvent) throw new Error('Confirmation event was not emitted.')
+    if (!confirmationIntent || !confirmationEvent)
+      throw new Error('Confirmation event was not emitted.')
     expect(confirmationIntent).toEqual({
       kind: 'sol-transfer',
       recipient: '11111111111111111111111111111111',
@@ -422,7 +550,10 @@ describe('AltudeWallet', () => {
       }),
     )
     const wallet = createWallet()
-    await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|cancel-before-relay' })
+    await wallet.connect({
+      accessToken: 'provider-token',
+      identityKey: 'auth0|cancel-before-relay',
+    })
     let confirmationId = ''
     wallet.onEvent((event) => {
       if (event.type === 'transaction:confirmation') confirmationId = event.id

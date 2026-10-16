@@ -37,7 +37,7 @@ export class EmbeddedWalletApi {
     }
     this.#apiKey = apiKey
     this.#baseUrl = baseUrl.toString().replace(/\/$/, '')
-    this.#fetch = fetchImpl
+    this.#fetch = fetchImpl.bind(globalThis)
   }
 
   async exchangeAuth0(

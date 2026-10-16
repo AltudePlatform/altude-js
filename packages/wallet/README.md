@@ -47,6 +47,46 @@ const stopListening = wallet.onEvent((event) => {
 })
 ```
 
+## External wallets
+
+External wallets are opt-in adapters and remain distinct from locally held
+embedded wallets. The SDK includes provider identifiers for MetaMask, Phantom,
+and WalletConnect; the application supplies each provider's connection and
+disconnect implementation:
+
+```ts
+const wallet = new AltudeWallet({
+  apiKey,
+  apiBaseUrl,
+  auth,
+  externalWallets: [
+    {
+      id: 'phantom',
+      label: 'Phantom',
+      connect: async () => {
+        const connection = await phantom.connect()
+        return {
+          address: connection.publicKey.toBase58(),
+          chain: 'solana',
+          signer: connection.signer,
+        }
+      },
+      disconnect: () => phantom.disconnect(),
+    },
+  ],
+})
+
+await wallet.connectExternalWallet('phantom')
+```
+
+External connections do not create an Altude API session, store a local key, or
+inherit embedded-wallet passkey protection. EVM addresses are exposed as
+external custody only; Solana balance/history and sponsored transfers require
+a Solana address, and sponsored transfers additionally require an adapter
+signer compatible with `@altude/gasstation`. External wallets cannot provision
+embedded accounts. `signOut()` disconnects the provider and clears wallet state.
+The managed UI shows configured providers and labels external custody explicitly.
+
 For apps that embed the hosted wallet in an iframe, use the typed provider. It
 accepts messages only from the configured wallet origin and the expected iframe
 window, posts to the exact origin, validates protocol/version/request IDs, and
@@ -127,3 +167,7 @@ This package currently targets secure browser contexts with IndexedDB, Web
 Crypto, and optional WebAuthn PRF. It is intentionally omitted from
 `release-manifest.json` until browser runtime, API, and custody contracts are
 fully reviewed and the package is promoted.
+
+Run `pnpm --filter @altude/wallet test:browser` to exercise the browser entry
+point with real browser Web Crypto and IndexedDB in Microsoft Edge. Set
+`EDGE_EXECUTABLE` if Edge is installed outside its standard Windows locations.

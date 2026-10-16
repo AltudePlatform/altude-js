@@ -1,5 +1,5 @@
 import type { GetHistoryOptions, GetHistoryResponse } from '@altude/gasstation'
-import type { AltudeGasStation } from '@altude/gasstation'
+import type { AltudeGasStation, GaslessTransactionSigner } from '@altude/gasstation'
 
 export type WalletProtection = 'device-local' | 'passkey'
 export type OtpChannel = 'email' | 'sms'
@@ -32,6 +32,22 @@ export interface WalletAuthProvider {
   signInWithSocial?(provider: string): Promise<WalletIdentityToken>
   /** Must return an API-audience access token from a server-validated auth flow. */
   signInWithPasskey?(): Promise<WalletIdentityToken>
+}
+
+export type ExternalWalletProviderId = 'metamask' | 'phantom' | 'walletconnect'
+
+export interface ExternalWalletConnection {
+  address: string
+  chain: 'solana' | 'evm'
+  /** Present only when the provider can sign supported Solana transactions. */
+  signer?: GaslessTransactionSigner
+}
+
+export interface ExternalWalletProvider {
+  id: ExternalWalletProviderId
+  label: string
+  connect(): Promise<ExternalWalletConnection>
+  disconnect?(): Promise<void>
 }
 
 export type WalletTransactionIntent =
@@ -67,6 +83,9 @@ export interface WalletState {
   session: WalletSession | null
   address: string | null
   protection: WalletProtection | null
+  custody: 'embedded' | 'external' | null
+  externalProviderId: ExternalWalletProviderId | null
+  externalChain: ExternalWalletConnection['chain'] | null
 }
 
 export type WalletEvent =
@@ -137,6 +156,7 @@ export interface AltudeWalletConfig {
   apiBaseUrl: string
   network?: 'mainnet-beta' | 'devnet' | 'testnet'
   auth: WalletAuthProvider
+  externalWallets?: readonly ExternalWalletProvider[]
   store?: WalletStore
   sessionTokenStore?: SessionTokenStore
   passkeys?: PasskeyAdapter
