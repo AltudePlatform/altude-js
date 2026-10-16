@@ -25,7 +25,7 @@ function getCancellationError(error: unknown, ceremony: 'creation' | 'unlock'): 
 
 export class BrowserPasskeyAdapter implements PasskeyAdapter {
   async register(input: Parameters<PasskeyAdapter['register']>[0]) {
-    this.#assertAvailable(input.rpId)
+    this.#assertAvailable(input.rpId, 'create')
     let result: PublicKeyCredential | null
     try {
       result = (await navigator.credentials.create({
@@ -64,7 +64,7 @@ export class BrowserPasskeyAdapter implements PasskeyAdapter {
   }
 
   async deriveKey(input: Parameters<PasskeyAdapter['deriveKey']>[0]): Promise<Uint8Array> {
-    this.#assertAvailable(input.rpId)
+    this.#assertAvailable(input.rpId, 'get')
     let result: PublicKeyCredential | null
     try {
       result = (await navigator.credentials.get({
@@ -97,15 +97,16 @@ export class BrowserPasskeyAdapter implements PasskeyAdapter {
     return output
   }
 
-  #assertAvailable(rpId: string): void {
+  #assertAvailable(rpId: string, operation: 'create' | 'get'): void {
     const secureContext = Reflect.get(globalThis, 'isSecureContext')
     const browserNavigator = Reflect.get(globalThis, 'navigator') as Navigator | undefined
     const credentialConstructor = Reflect.get(globalThis, 'PublicKeyCredential')
+    const credentials = browserNavigator?.credentials
     if (
       typeof secureContext !== 'boolean' ||
       !secureContext ||
-      !browserNavigator ||
-      typeof browserNavigator.credentials.get !== 'function' ||
+      !credentials ||
+      typeof credentials[operation] !== 'function' ||
       typeof credentialConstructor !== 'function'
     ) {
       throw new AltudeWalletError(

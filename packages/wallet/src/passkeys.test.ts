@@ -33,6 +33,18 @@ describe('BrowserPasskeyAdapter ceremony errors', () => {
 
   afterEach(() => vi.unstubAllGlobals())
 
+  it.each([
+    ['creation', () => adapter.register(registerInput)],
+    ['retrieval', () => adapter.deriveKey(deriveInput)],
+  ])('returns a typed unavailable error when credentials are absent for %s', async (_, ceremony) => {
+    vi.stubGlobal('navigator', {})
+
+    await expect(ceremony()).rejects.toMatchObject({
+      name: 'AltudeWalletError',
+      code: 'PASSKEY_UNAVAILABLE',
+    })
+  })
+
   it.each(['NotAllowedError', 'AbortError'])(
     'maps %s from credential creation to a typed cancellation',
     async (name) => {
