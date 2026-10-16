@@ -338,6 +338,7 @@ export class AltudeWallet {
   }
 
   requestTransaction(intent: WalletTransactionIntent): Promise<WalletTransactionResult> {
+    assertSupportedIntentKind(intent)
     const snapshot = snapshotIntent(intent)
     this.#validateIntent(snapshot)
     const active = this.#requireActive()
@@ -579,6 +580,19 @@ function snapshotIntent(intent: WalletTransactionIntent): WalletTransactionInten
     amount: intent.amount,
     ...(intent.network === undefined ? {} : { network: intent.network }),
   })
+}
+
+function assertSupportedIntentKind(value: unknown): asserts value is WalletTransactionIntent {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    (Reflect.get(value, 'kind') !== 'sol-transfer' && Reflect.get(value, 'kind') !== 'spl-transfer')
+  ) {
+    throw new AltudeWalletError(
+      'INVALID_INPUT',
+      'Only SOL and standard SPL transfers are supported.',
+    )
+  }
 }
 
 function asError(error: unknown): Error {

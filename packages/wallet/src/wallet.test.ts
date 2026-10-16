@@ -277,6 +277,38 @@ describe('AltudeWallet', () => {
     ).toThrow(AltudeWalletError)
   })
 
+  it('rejects unsupported runtime intent kinds before confirmation or relay', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        success: true,
+        sessionToken: 'session-token',
+        user: { id: 'unsupported-kind-user' },
+      }),
+    )
+    const wallet = createWallet()
+    await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|unsupported-kind' })
+    const confirmationHandler = vi.fn()
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') confirmationHandler(event)
+    })
+
+    const unsupportedIntent: unknown = JSON.parse(
+      '{"kind":"unsupported-transfer","recipient":"11111111111111111111111111111111","amount":1000}',
+    )
+    const requestTransaction = wallet.requestTransaction.bind(wallet)
+    let error: unknown
+    try {
+      Reflect.apply(requestTransaction, wallet, [unsupportedIntent])
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(AltudeWalletError)
+    expect((error as AltudeWalletError).code).toBe('INVALID_INPUT')
+    expect(confirmationHandler).not.toHaveBeenCalled()
+    expect(gasStation.send).not.toHaveBeenCalled()
+  })
+
   it('requires an explicit unlock before approving transactions or creating accounts', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
