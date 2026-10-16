@@ -276,6 +276,12 @@ export class WalletVault {
     const operation = this.#operation(identityKey)
     const record = await this.#requireRecord(identityKey)
     this.#assertCurrent(identityKey, operation)
+    if (record.serverUserId && record.serverUserId !== userId) {
+      throw new AltudeWalletError(
+        'SESSION',
+        'This local wallet is already associated with a different server account.',
+      )
+    }
     await this.#write(
       identityKey,
       operation,

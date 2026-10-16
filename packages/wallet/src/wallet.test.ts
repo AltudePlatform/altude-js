@@ -153,6 +153,39 @@ describe('AltudeWallet', () => {
     expect(restored.session?.user.id).toBe('server-user-2')
   })
 
+  it('rejects connecting an existing local wallet to a different server user', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          sessionToken: 'user-a-session',
+          user: { id: 'server-user-a' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          sessionToken: 'user-b-session',
+          user: { id: 'server-user-b' },
+        }),
+      )
+    const wallet = createWallet()
+    const identityKey = 'auth0|shared-identity'
+    await wallet.connect({ accessToken: 'user-a-token', identityKey })
+    const address = wallet.address
+
+    await expect(
+      wallet.connect({ accessToken: 'user-b-token', identityKey }),
+    ).rejects.toMatchObject({
+      code: 'SESSION',
+      message: 'This local wallet is already associated with a different server account.',
+    })
+
+    expect(store.records.get(identityKey)?.serverUserId).toBe('server-user-a')
+    expect(wallet.address).toBe(address)
+    expect(sessionTokens.token).toBe('user-a-session')
+  })
+
   it('refuses malformed identity results and non-HTTPS API origins', async () => {
     const wallet = createWallet()
     await expect(wallet.connect({ accessToken: '', identityKey: 'subject' })).rejects.toMatchObject(
