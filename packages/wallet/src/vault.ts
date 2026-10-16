@@ -12,11 +12,19 @@ import type {
   WalletVaultOptions,
 } from './types.js'
 
+interface VaultOperation {
+  globalEpoch: number
+  identityEpoch: number
+}
+
 export class WalletVault {
   readonly #store: WalletStore
   readonly #passkeys: PasskeyAdapter
   readonly #crypto: Crypto
   readonly #unlocked = new Map<string, Uint8Array>()
+  readonly #identityEpochs = new Map<string, number>()
+  #globalEpoch = 0
+  #writeQueue: Promise<void> = Promise.resolve()
 
   constructor(options: WalletVaultOptions = {}) {
     this.#crypto = options.crypto ?? globalThis.crypto
@@ -26,24 +34,38 @@ export class WalletVault {
 
   async getOrCreateAddress(identityKey: string): Promise<string> {
     this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
     const secret = randomBytes(this.#crypto, 32)
     const publicKey = encodeBase58(ed25519.getPublicKey(secret))
-    const { record, created } = await this.#store.createIfAbsent({
-      identityKey,
-      publicKey,
-      protection: 'device-local',
-      secret: secret.slice(),
-    })
-    if (created) {
-      this.#unlocked.set(identityKey, secret)
-    } else {
+    try {
+      const { record, created } = await this.#write(identityKey, operation, () =>
+        this.#store.createIfAbsent({
+          identityKey,
+          publicKey,
+          protection: 'device-local',
+          secret: secret.slice(),
+        }),
+        (result) => result.created ? this.#store.delete(identityKey) : Promise.resolve(),
+      )
+      this.#assertCurrent(identityKey, operation)
+      if (created) this.#unlocked.set(identityKey, secret)
+      else secret.fill(0)
+      return record.publicKey
+    } catch (error) {
       secret.fill(0)
+      throw error
     }
-    return record.publicKey
   }
 
   async unlock(identityKey: string): Promise<WalletProtection> {
+    this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
+    return this.#unlock(identityKey, operation)
+  }
+
+  async #unlock(identityKey: string, operation: VaultOperation): Promise<WalletProtection> {
     const record = await this.#requireRecord(identityKey)
+    this.#assertCurrent(identityKey, operation)
     if (record.protection === 'passkey') {
       throw new AltudeWalletError(
         'WALLET_LOCKED',
@@ -56,12 +78,17 @@ export class WalletVault {
         'The local wallet key is missing; sign in with its recovery method.',
       )
     }
-    this.#unlocked.set(identityKey, record.secret.slice())
+    const secret = record.secret.slice()
+    this.#assertCurrent(identityKey, operation)
+    this.#unlocked.set(identityKey, secret)
     return record.protection
   }
 
   async unlockWithPasskey(identityKey: string): Promise<void> {
+    this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
     const record = await this.#requireRecord(identityKey)
+    this.#assertCurrent(identityKey, operation)
     if (
       record.protection !== 'passkey' ||
       !record.ciphertext ||
@@ -81,10 +108,12 @@ export class WalletVault {
       rpId: record.rpId,
       prfSalt: record.prfSalt,
     })
-    const key = await this.#crypto.subtle.importKey('raw', toArrayBuffer(kek), 'AES-GCM', false, [
-      'decrypt',
-    ])
     try {
+      this.#assertCurrent(identityKey, operation)
+      const key = await this.#crypto.subtle.importKey('raw', toArrayBuffer(kek), 'AES-GCM', false, [
+        'decrypt',
+      ])
+      this.#assertCurrent(identityKey, operation)
       const secret = new Uint8Array(
         await this.#crypto.subtle.decrypt(
           { name: 'AES-GCM', iv: toArrayBuffer(record.iv) },
@@ -92,12 +121,19 @@ export class WalletVault {
           toArrayBuffer(record.ciphertext),
         ),
       )
-      if (encodeBase58(ed25519.getPublicKey(secret)) !== record.publicKey) {
+      try {
+        this.#assertCurrent(identityKey, operation)
+        if (encodeBase58(ed25519.getPublicKey(secret)) !== record.publicKey) {
+          throw new Error('Wallet key did not match the stored public address.')
+        }
+        this.#assertCurrent(identityKey, operation)
+        this.#unlocked.set(identityKey, secret)
+      } catch (error) {
         secret.fill(0)
-        throw new Error('Wallet key did not match the stored public address.')
+        throw error
       }
-      this.#unlocked.set(identityKey, secret)
     } catch (error) {
+      if (error instanceof AltudeWalletError && error.code === 'WALLET_LOCKED') throw error
       throw new AltudeWalletError(
         'WALLET_LOCKED',
         'Unable to unlock this wallet. Use the passkey that protected it.',
@@ -110,66 +146,93 @@ export class WalletVault {
   }
 
   async protectWithPasskey(identityKey: string): Promise<void> {
-    const record = await this.#requireRecord(identityKey)
-    const secret = this.#unlocked.get(identityKey)
-    if (!secret)
+    this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
+    const unlockedSecret = this.#unlocked.get(identityKey)
+    if (!unlockedSecret)
       throw new AltudeWalletError('WALLET_LOCKED', 'Unlock the wallet before protecting it.')
+    const secret = unlockedSecret.slice()
 
-    const currentLocation = Reflect.get(globalThis, 'location') as Location | undefined
-    const rpId = currentLocation?.hostname
-    if (!rpId)
-      throw new AltudeWalletError(
-        'CONFIGURATION',
-        'A browser origin is required for passkey protection.',
-      )
-    const prfSalt = randomBytes(this.#crypto, 32)
-    const registration = await this.#passkeys.register({
-      challenge: createPasskeyChallenge(this.#crypto),
-      userId: randomBytes(this.#crypto, 32),
-      userName: `altude-${record.publicKey.slice(0, 8)}`,
-      rpId,
-      rpName: 'Altude Wallet',
-      prfSalt,
-    })
-    const kek =
-      registration.kek ??
-      (await this.#passkeys.deriveKey({
-        challenge: createPasskeyChallenge(this.#crypto),
-        credentialId: registration.credentialId,
-        rpId,
-        prfSalt,
-      }))
-    const iv = randomBytes(this.#crypto, 12)
     try {
-      const key = await this.#crypto.subtle.importKey('raw', toArrayBuffer(kek), 'AES-GCM', false, [
-        'encrypt',
-      ])
-      const ciphertext = new Uint8Array(
-        await this.#crypto.subtle.encrypt(
-          { name: 'AES-GCM', iv: toArrayBuffer(iv) },
-          key,
-          toArrayBuffer(secret),
-        ),
-      )
-      await this.#store.put({
-        identityKey,
-        ...(record.serverUserId ? { serverUserId: record.serverUserId } : {}),
-        publicKey: record.publicKey,
-        protection: 'passkey',
-        ciphertext,
-        iv,
-        prfSalt,
-        credentialId: registration.credentialId,
+      const record = await this.#requireRecord(identityKey)
+      this.#assertCurrent(identityKey, operation)
+      const currentLocation = Reflect.get(globalThis, 'location') as Location | undefined
+      const rpId = currentLocation?.hostname
+      if (!rpId)
+        throw new AltudeWalletError(
+          'CONFIGURATION',
+          'A browser origin is required for passkey protection.',
+        )
+      const prfSalt = randomBytes(this.#crypto, 32)
+      const registration = await this.#passkeys.register({
+        challenge: createPasskeyChallenge(this.#crypto),
+        userId: randomBytes(this.#crypto, 32),
+        userName: `altude-${record.publicKey.slice(0, 8)}`,
         rpId,
+        rpName: 'Altude Wallet',
+        prfSalt,
       })
-      this.#unlocked.set(identityKey, secret)
+      let kek = registration.kek
+      try {
+        this.#assertCurrent(identityKey, operation)
+        if (!kek) {
+          kek = await this.#passkeys.deriveKey({
+            challenge: createPasskeyChallenge(this.#crypto),
+            credentialId: registration.credentialId,
+            rpId,
+            prfSalt,
+          })
+        }
+        this.#assertCurrent(identityKey, operation)
+        const iv = randomBytes(this.#crypto, 12)
+        const key = await this.#crypto.subtle.importKey(
+          'raw',
+          toArrayBuffer(kek),
+          'AES-GCM',
+          false,
+          ['encrypt'],
+        )
+        this.#assertCurrent(identityKey, operation)
+        const ciphertext = new Uint8Array(
+          await this.#crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+            key,
+            toArrayBuffer(secret),
+          ),
+        )
+        this.#assertCurrent(identityKey, operation)
+        const protectedRecord: WalletStoreRecord = {
+          identityKey,
+          ...(record.serverUserId ? { serverUserId: record.serverUserId } : {}),
+          publicKey: record.publicKey,
+          protection: 'passkey',
+          ciphertext,
+          iv,
+          prfSalt,
+          credentialId: registration.credentialId,
+          rpId,
+        }
+        await this.#write(
+          identityKey,
+          operation,
+          () => this.#store.put(protectedRecord),
+          () => this.#store.put(record),
+        )
+        this.#assertCurrent(identityKey, operation)
+        this.#unlocked.set(identityKey, secret.slice())
+      } finally {
+        kek?.fill(0)
+      }
     } finally {
-      kek.fill(0)
+      secret.fill(0)
     }
   }
 
   async getSigner(identityKey: string): Promise<GaslessTransactionSigner> {
+    this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
     const record = await this.#requireRecord(identityKey)
+    this.#assertCurrent(identityKey, operation)
     if (!this.#unlocked.has(identityKey)) {
       if (record.protection === 'passkey') {
         throw new AltudeWalletError(
@@ -177,8 +240,9 @@ export class WalletVault {
           'Unlock this wallet with its registered passkey.',
         )
       }
-      await this.unlock(identityKey)
+      await this.#unlock(identityKey, operation)
     }
+    this.#assertCurrent(identityKey, operation)
     const secret = this.#unlocked.get(identityKey)
     if (!secret) throw new AltudeWalletError('WALLET_LOCKED', 'Unlock the wallet before signing.')
     return {
@@ -208,11 +272,24 @@ export class WalletVault {
   }
 
   async associateServerUser(identityKey: string, userId: string): Promise<void> {
+    this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
     const record = await this.#requireRecord(identityKey)
-    await this.#store.put({ ...record, serverUserId: userId })
+    this.#assertCurrent(identityKey, operation)
+    await this.#write(
+      identityKey,
+      operation,
+      () => this.#store.put({ ...record, serverUserId: userId }),
+      () => this.#store.put(record),
+    )
   }
 
   lock(identityKey?: string): void {
+    if (identityKey) {
+      this.#identityEpochs.set(identityKey, (this.#identityEpochs.get(identityKey) ?? 0) + 1)
+    } else {
+      this.#globalEpoch++
+    }
     const entries = identityKey
       ? [[identityKey, this.#unlocked.get(identityKey)] as const]
       : [...this.#unlocked.entries()]
@@ -224,7 +301,15 @@ export class WalletVault {
 
   async delete(identityKey: string): Promise<void> {
     this.lock(identityKey)
-    await this.#store.delete(identityKey)
+    const operation = this.#operation(identityKey)
+    const record = await this.#store.get(identityKey)
+    this.#assertCurrent(identityKey, operation)
+    await this.#write(
+      identityKey,
+      operation,
+      () => this.#store.delete(identityKey),
+      () => record ? this.#store.put(record) : Promise.resolve(),
+    )
   }
 
   async #requireRecord(identityKey: string): Promise<WalletStoreRecord> {
@@ -242,5 +327,48 @@ export class WalletVault {
         'A stable identity key is required for local wallet isolation.',
       )
     }
+  }
+
+  #operation(identityKey: string): VaultOperation {
+    return {
+      globalEpoch: this.#globalEpoch,
+      identityEpoch: this.#identityEpochs.get(identityKey) ?? 0,
+    }
+  }
+
+  #assertCurrent(identityKey: string, operation: VaultOperation): void {
+    if (
+      operation.identityEpoch !== (this.#identityEpochs.get(identityKey) ?? 0) ||
+      operation.globalEpoch !== this.#globalEpoch
+    ) {
+      throw new AltudeWalletError('WALLET_LOCKED', 'The wallet changed while the operation was in progress.')
+    }
+  }
+
+  async #write<T>(
+    identityKey: string,
+    operation: VaultOperation,
+    write: () => Promise<T>,
+    rollback?: (result: T) => Promise<void>,
+  ): Promise<T> {
+    let result!: T
+    const pending = this.#writeQueue.then(async () => {
+      this.#assertCurrent(identityKey, operation)
+      result = await write()
+      if (!this.#isCurrent(identityKey, operation)) {
+        await rollback?.(result)
+        this.#assertCurrent(identityKey, operation)
+      }
+    })
+    this.#writeQueue = pending.catch(() => {})
+    await pending
+    return result
+  }
+
+  #isCurrent(identityKey: string, operation: VaultOperation): boolean {
+    return (
+      operation.identityEpoch === (this.#identityEpochs.get(identityKey) ?? 0) &&
+      operation.globalEpoch === this.#globalEpoch
+    )
   }
 }
