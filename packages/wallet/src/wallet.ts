@@ -14,6 +14,7 @@ import type {
   WalletSession,
   WalletState,
   WalletTransactionIntent,
+  WalletTransactionIntentSnapshot,
   WalletTransactionResult,
   WalletTransferHistory,
 } from './types.js'
@@ -26,7 +27,7 @@ interface ActiveWallet {
 }
 
 interface PendingTransaction {
-  intent: WalletTransactionIntent
+  intent: WalletTransactionIntentSnapshot
   identityKey: string
   address: string
   resolve: (result: WalletTransactionResult) => void
@@ -328,19 +329,20 @@ export class AltudeWallet {
   }
 
   requestTransaction(intent: WalletTransactionIntent): Promise<WalletTransactionResult> {
-    this.#validateIntent(intent)
+    const snapshot = snapshotIntent(intent)
+    this.#validateIntent(snapshot)
     const active = this.#requireActive()
     const id = this.#newId()
     const result = new Promise<WalletTransactionResult>((resolve, reject) => {
       this.#pendingTransactions.set(id, {
-        intent,
+        intent: snapshot,
         identityKey: active.identityKey,
         address: active.address,
         resolve,
         reject,
       })
     })
-    this.#emit({ type: 'transaction:confirmation', id, intent })
+    this.#emit(Object.freeze({ type: 'transaction:confirmation', id, intent: snapshot }))
     return result
   }
 
@@ -495,7 +497,7 @@ export class AltudeWallet {
     }
   }
 
-  #validateIntent(intent: WalletTransactionIntent): void {
+  #validateIntent(intent: WalletTransactionIntentSnapshot): void {
     const active = this.#requireActive()
     if (!Number.isSafeInteger(intent.amount) || intent.amount <= 0) {
       throw new AltudeWalletError(
@@ -537,6 +539,24 @@ export class AltudeWallet {
       listener(event)
     })
   }
+}
+
+function snapshotIntent(intent: WalletTransactionIntent): WalletTransactionIntentSnapshot {
+  if (intent.kind === 'sol-transfer') {
+    return Object.freeze({
+      kind: 'sol-transfer',
+      recipient: intent.recipient,
+      amount: intent.amount,
+      ...(intent.network === undefined ? {} : { network: intent.network }),
+    })
+  }
+  return Object.freeze({
+    kind: 'spl-transfer',
+    recipient: intent.recipient,
+    mint: intent.mint,
+    amount: intent.amount,
+    ...(intent.network === undefined ? {} : { network: intent.network }),
+  })
 }
 
 function asError(error: unknown): Error {

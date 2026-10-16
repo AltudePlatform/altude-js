@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AltudeGasStation } from '@altude/gasstation'
 import { AltudeWallet, AltudeWalletError } from './index.js'
-import type { SessionTokenStore, WalletStore, WalletStoreRecord } from './types.js'
+import type {
+  SessionTokenStore,
+  WalletEvent,
+  WalletStore,
+  WalletStoreRecord,
+  WalletTransactionIntent,
+  WalletTransactionIntentSnapshot,
+} from './types.js'
 
 class TestWalletStore implements WalletStore {
   readonly records = new Map<string, WalletStoreRecord>()
@@ -218,18 +225,38 @@ describe('AltudeWallet', () => {
     const wallet = createWallet()
     await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|transfer-user' })
     let confirmationId = ''
-    const eventHandler = vi.fn((event: { type: string; id?: string }) => {
-      if (event.type === 'transaction:confirmation') confirmationId = event.id ?? ''
+    let confirmationIntent: WalletTransactionIntentSnapshot | undefined
+    let confirmationEvent: WalletEvent | undefined
+    const eventHandler = vi.fn((event: WalletEvent) => {
+      if (event.type === 'transaction:confirmation') {
+        confirmationId = event.id
+        confirmationIntent = event.intent
+        confirmationEvent = event
+      }
     })
     wallet.onEvent(eventHandler)
-    const resultPromise = wallet.requestTransaction({
+    const intent: WalletTransactionIntent = {
+      kind: 'sol-transfer',
+      recipient: '11111111111111111111111111111111',
+      amount: 1_000,
+      network: 'devnet',
+    }
+    const resultPromise = wallet.requestTransaction(intent)
+    expect(confirmationId).not.toBe('')
+    expect(gasStation.send).not.toHaveBeenCalled()
+    intent.recipient = 'Vote111111111111111111111111111111111111111'
+    intent.amount = 2_000
+    if (!confirmationIntent || !confirmationEvent) throw new Error('Confirmation event was not emitted.')
+    expect(confirmationIntent).toEqual({
       kind: 'sol-transfer',
       recipient: '11111111111111111111111111111111',
       amount: 1_000,
       network: 'devnet',
     })
-    expect(confirmationId).not.toBe('')
-    expect(gasStation.send).not.toHaveBeenCalled()
+    expect(Object.isFrozen(confirmationIntent)).toBe(true)
+    expect(Reflect.set(confirmationIntent, 'recipient', intent.recipient)).toBe(false)
+    expect(confirmationEvent).toBeDefined()
+    expect(Reflect.set(confirmationEvent, 'intent', intent)).toBe(false)
 
     const result = await wallet.approveTransaction(confirmationId)
     expect(await resultPromise).toEqual(result)
@@ -248,6 +275,51 @@ describe('AltudeWallet', () => {
         amount: 1,
       }),
     ).toThrow(AltudeWalletError)
+  })
+
+  it('keeps SPL transfer approval bound to its immutable confirmed snapshot', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        success: true,
+        sessionToken: 'session-token',
+        user: { id: 'server-user-spl' },
+      }),
+    )
+    const wallet = createWallet()
+    await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|spl-transfer-user' })
+    let confirmationId = ''
+    let confirmationIntent: WalletTransactionIntentSnapshot | undefined
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') {
+        confirmationId = event.id
+        confirmationIntent = event.intent
+      }
+    })
+    const intent: WalletTransactionIntent = {
+      kind: 'spl-transfer',
+      recipient: '11111111111111111111111111111111',
+      mint: 'Vote111111111111111111111111111111111111111',
+      amount: 1_000,
+      network: 'devnet',
+    }
+    const resultPromise = wallet.requestTransaction(intent)
+    intent.recipient = 'Stake11111111111111111111111111111111111111'
+    intent.mint = 'SysvarRent111111111111111111111111111111111'
+    intent.amount = 2_000
+    if (!confirmationIntent) throw new Error('Confirmation intent was not emitted.')
+    expect(Object.isFrozen(confirmationIntent)).toBe(true)
+    expect(Reflect.set(confirmationIntent, 'mint', intent.mint)).toBe(false)
+
+    await wallet.approveTransaction(confirmationId)
+    await resultPromise
+    expect(gasStation.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toAddress: '11111111111111111111111111111111',
+        amount: 1_000,
+        token: 'Vote111111111111111111111111111111111111111',
+        account: wallet.address,
+      }),
+    )
   })
 
   it('cancels a pending approval when the connected identity changes', async () => {

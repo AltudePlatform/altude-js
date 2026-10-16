@@ -51,6 +51,8 @@ export type WalletTransactionIntent =
       network?: 'mainnet-beta' | 'devnet' | 'testnet'
     }
 
+export type WalletTransactionIntentSnapshot = Readonly<WalletTransactionIntent>
+
 export interface WalletTransactionResult {
   signature: string
   status?: string
@@ -69,7 +71,7 @@ export interface WalletState {
 
 export type WalletEvent =
   | { type: 'state'; state: WalletState }
-  | { type: 'transaction:confirmation'; id: string; intent: WalletTransactionIntent }
+  | { type: 'transaction:confirmation'; id: string; intent: WalletTransactionIntentSnapshot }
   | { type: 'transaction:complete'; id: string; result: WalletTransactionResult }
   | { type: 'transaction:error'; id: string; error: Error }
 
