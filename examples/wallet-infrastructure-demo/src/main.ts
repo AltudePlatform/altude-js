@@ -186,7 +186,7 @@ openButton.addEventListener('click', () => {
   if (unmountWalletUi) return
   unmountWalletUi = mountWalletUI(document.body, wallet, {
     presentation: 'modal',
-    title: 'Wallet access',
+    title: 'Embedded wallet',
     onClose: closeWalletUi,
   })
 })

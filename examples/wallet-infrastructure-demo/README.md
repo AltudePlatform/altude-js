@@ -31,7 +31,7 @@ const wallet = new AltudeWallet({
 
 const unmount = mountWalletUI(document.body, wallet, {
   presentation: 'modal',
-  title: 'Wallet access',
+  title: 'Embedded wallet',
   onClose: () => unmount(),
 })
 ```

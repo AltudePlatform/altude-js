@@ -9,6 +9,75 @@ describe('mountWalletUI', () => {
     document.body.replaceChildren()
   })
 
+  it('renders the embedded-wallet sign-in flow in the managed UI', async () => {
+    const state: WalletState = {
+      status: 'disconnected',
+      session: null,
+      address: null,
+      protection: null,
+      custody: null,
+      externalProviderId: null,
+      externalChain: null,
+    }
+    const startOtp = vi.fn(() => Promise.resolve())
+    const verifyOtp = vi.fn(() => Promise.resolve(state))
+    const wallet = {
+      get state() {
+        return state
+      },
+      canStartOtp: true,
+      canSignInWithSocial: false,
+      canSignInWithPasskey: false,
+      externalWalletProviders: [],
+      onEvent: () => () => {},
+      restoreSession: () => Promise.resolve(state),
+      startOtp,
+      verifyOtp,
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, {
+      presentation: 'modal',
+      title: 'Embedded wallet',
+      onClose: vi.fn(),
+    })
+
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('Sign in to Embedded wallet')
+    expect(dialog?.textContent).toContain('or continue with')
+    expect(dialog?.textContent).not.toContain('a passkey')
+    expect(dialog?.querySelector('[aria-label="Email address"]')).not.toBeNull()
+    expect(dialog?.querySelector('select')).toBeNull()
+    expect(dialog?.querySelector('[aria-label="Close wallet"]')).not.toBeNull()
+
+    const email = dialog?.querySelector<HTMLInputElement>('[aria-label="Email address"]')
+    const form = email?.closest('form')
+    if (!email || !form) throw new Error('Expected the primary email sign-in form.')
+    email.value = 'wallet@example.test'
+    email.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(form.querySelector('button')?.disabled).toBe(false)
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => {
+      expect(startOtp).toHaveBeenCalledWith('email', 'wallet@example.test')
+      expect(dialog?.textContent).toContain('Check your email')
+    })
+
+    const code = dialog?.querySelector<HTMLInputElement>('[autocomplete="one-time-code"]')
+    if (!code) throw new Error('Expected the one-time code field.')
+    code.value = '246810'
+    code.dispatchEvent(new Event('input', { bubbles: true }))
+    const verify = [...(dialog?.querySelectorAll('button') ?? [])].find(
+      (control) => control.textContent === 'Verify and continue',
+    )
+    if (!verify) throw new Error('Expected the verification button.')
+    verify.click()
+    await vi.waitFor(() => {
+      expect(verifyOtp).toHaveBeenCalledWith('email', 'wallet@example.test', '246810')
+    })
+
+    unmount()
+  })
+
   it('scopes every mounted stylesheet selector to the wallet UI root', () => {
     const state: WalletState = {
       status: 'disconnected',
