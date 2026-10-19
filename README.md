@@ -19,9 +19,9 @@ browser wallet primitives, API session integration, and a managed UI. It is
 not published or part of the supported production package set.
 
 The [`wallet-infrastructure-demo`](./examples/wallet-infrastructure-demo)
-example is a local React playground for the experimental wallet package. Run
-it with `pnpm --filter wallet-infrastructure-demo dev`; its identity, API, and
-relay adapters are simulated and do not submit on-chain transactions.
+example shows how to mount the experimental wallet package's managed modal UI.
+Run it with `pnpm --filter wallet-infrastructure-demo dev`; its identity, API,
+and relay adapters are simulated and do not submit on-chain transactions.
 
 ## Quick Start
 
