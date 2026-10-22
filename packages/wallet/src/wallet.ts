@@ -67,6 +67,7 @@ export class AltudeWallet {
   readonly #crypto: Crypto
   readonly #listeners = new Set<(event: WalletEvent) => void>()
   readonly #pendingTransactions = new Map<string, PendingTransaction>()
+  readonly #pendingExternalConnections = new Set<ExternalWalletProviderId>()
   #active: ActiveWallet | null = null
   #lifecycleGeneration = 0
   #sessionTokenQueue: Promise<void> = Promise.resolve()
@@ -352,6 +353,21 @@ export class AltudeWallet {
         'Sign out or disconnect the current wallet before connecting an external wallet.',
       )
     }
+    if (this.#pendingExternalConnections.has(providerId)) {
+      throw new AltudeWalletError(
+        'SESSION',
+        `An external wallet connection for "${providerId}" is already in progress.`,
+      )
+    }
+    this.#pendingExternalConnections.add(providerId)
+    try {
+      return await this.#connectExternalWallet(provider)
+    } finally {
+      this.#pendingExternalConnections.delete(providerId)
+    }
+  }
+
+  async #connectExternalWallet(provider: ExternalWalletProvider): Promise<WalletState> {
     const generation = ++this.#lifecycleGeneration
     const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
     if (!this.#isCurrentLifecycle(generation)) return this.state

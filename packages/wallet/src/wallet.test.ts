@@ -409,6 +409,133 @@ describe('AltudeWallet', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('rejects an overlapping connection to the same provider until it finishes', async () => {
+    const olderConnection = deferred<{
+      address: string
+      chain: 'solana'
+    }>()
+    const address = '11111111111111111111111111111111'
+    const disconnect = vi.fn()
+    const connect = vi.fn(() => olderConnection.promise)
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect,
+      disconnect,
+    }
+    const wallet = createWallet([provider])
+
+    const olderAttempt = wallet.connectExternalWallet('phantom')
+    await vi.waitFor(() => {
+      expect(connect).toHaveBeenCalledOnce()
+    })
+    await expect(wallet.connectExternalWallet('phantom')).rejects.toMatchObject({
+      code: 'SESSION',
+      message: 'An external wallet connection for "phantom" is already in progress.',
+    })
+
+    olderConnection.resolve({ address, chain: 'solana' })
+    await expect(olderAttempt).resolves.toMatchObject({
+      status: 'connected',
+      address,
+      externalProviderId: 'phantom',
+    })
+    expect(connect).toHaveBeenCalledOnce()
+    expect(disconnect).not.toHaveBeenCalled()
+  })
+
+  it('keeps same-provider connections blocked until stale-provider cleanup finishes', async () => {
+    const staleConnection = deferred<{ address: string; chain: 'solana' }>()
+    const cleanup = deferred<boolean>()
+    const connect = vi
+      .fn()
+      .mockImplementationOnce(() => staleConnection.promise)
+      .mockResolvedValue({
+        address: '11111111111111111111111111111111',
+        chain: 'solana',
+      })
+    const disconnect = vi.fn(async () => {
+      await cleanup.promise
+    })
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect,
+      disconnect,
+    }
+    const wallet = createWallet([provider])
+
+    const staleAttempt = wallet.connectExternalWallet('phantom')
+    await vi.waitFor(() => {
+      expect(connect).toHaveBeenCalledOnce()
+    })
+    await wallet.signOut()
+    await expect(wallet.connectExternalWallet('phantom')).rejects.toMatchObject({
+      code: 'SESSION',
+    })
+
+    staleConnection.resolve({
+      address: '11111111111111111111111111111111',
+      chain: 'solana',
+    })
+    await vi.waitFor(() => {
+      expect(disconnect).toHaveBeenCalledOnce()
+    })
+    await expect(wallet.connectExternalWallet('phantom')).rejects.toMatchObject({
+      code: 'SESSION',
+    })
+
+    cleanup.resolve(true)
+    await expect(staleAttempt).resolves.toMatchObject({ status: 'disconnected' })
+    await expect(wallet.connectExternalWallet('phantom')).resolves.toMatchObject({
+      status: 'connected',
+      externalProviderId: 'phantom',
+    })
+    expect(connect).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves overlapping connections to different providers', async () => {
+    const olderConnection = deferred<{ address: string; chain: 'solana' }>()
+    const olderDisconnect = vi.fn()
+    const olderConnect = vi.fn(() => olderConnection.promise)
+    const olderProvider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect: olderConnect,
+      disconnect: olderDisconnect,
+    }
+    const newerProvider: ExternalWalletProvider = {
+      id: 'walletconnect',
+      label: 'WalletConnect',
+      connect: vi.fn().mockResolvedValue({
+        address: '11111111111111111111111111111111',
+        chain: 'solana',
+      }),
+    }
+    const wallet = createWallet([olderProvider, newerProvider])
+
+    const olderAttempt = wallet.connectExternalWallet('phantom')
+    await vi.waitFor(() => {
+      expect(olderConnect).toHaveBeenCalledOnce()
+    })
+    await expect(wallet.connectExternalWallet('walletconnect')).resolves.toMatchObject({
+      status: 'connected',
+      address: '11111111111111111111111111111111',
+      externalProviderId: 'walletconnect',
+    })
+
+    olderConnection.resolve({
+      address: 'Vote111111111111111111111111111111111111111',
+      chain: 'solana',
+    })
+    await olderAttempt
+    expect(olderDisconnect).toHaveBeenCalledOnce()
+    expect(wallet.state).toMatchObject({
+      status: 'connected',
+      externalProviderId: 'walletconnect',
+    })
+  })
+
   it('routes an approved external Solana transfer through its adapter signer', async () => {
     const signer = {
       address: '11111111111111111111111111111111',
