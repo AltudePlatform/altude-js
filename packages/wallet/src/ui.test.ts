@@ -464,6 +464,82 @@ describe('mountWalletUI', () => {
     unmount()
   })
 
+  it('keeps external-wallet confirmations actionable after an unchanged connected-state event', () => {
+    let listener: ((event: WalletEvent) => void) | undefined
+    const state: WalletState = {
+      status: 'connected',
+      session: null,
+      address: '0x1234567890123456789012345678901234567890',
+      protection: null,
+      custody: 'external',
+      externalProviderId: 'metamask',
+      externalChain: 'evm',
+    }
+    const approveTransaction = vi.fn(() => Promise.resolve({ signature: 'signature' }))
+    const wallet = {
+      state,
+      canStartOtp: false,
+      canSignInWithSocial: false,
+      canSignInWithPasskey: false,
+      externalWalletProviders: [],
+      onEvent: (handler: (event: WalletEvent) => void) => {
+        listener = handler
+        return () => {
+          listener = undefined
+        }
+      },
+      restoreSession: () => Promise.resolve(state),
+      signOut: () => Promise.resolve(),
+      lock: () => listener?.({ type: 'state', state }),
+      approveTransaction,
+      rejectTransaction: vi.fn(),
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, { presentation: 'modal' })
+
+    listener?.({
+      type: 'transaction:confirmation',
+      id: 'external-request',
+      intent: {
+        kind: 'sol-transfer',
+        recipient: '11111111111111111111111111111111',
+        amount: 100,
+      },
+    })
+    wallet.lock()
+
+    const group = container.querySelector(
+      '[role="group"][aria-label="Transaction confirmation external-request"]',
+    )
+    expect(group).not.toBeNull()
+    const confirm = [...(group?.querySelectorAll('button') ?? [])].find(
+      (button) => button.textContent === 'Confirm and submit',
+    )
+    expect(confirm).toBeDefined()
+    confirm?.click()
+    expect(approveTransaction).toHaveBeenCalledWith('external-request')
+
+    listener?.({
+      type: 'state',
+      state: {
+        ...state,
+        session: { user: { id: 'changed-user' } },
+        protection: 'device-local',
+        custody: 'embedded',
+        externalProviderId: null,
+        externalChain: null,
+      },
+    })
+    expect(
+      container.querySelector(
+        '[role="group"][aria-label="Transaction confirmation external-request"]',
+      ),
+    ).toBeNull()
+
+    unmount()
+  })
+
   it('offers external providers and avoids embedded-wallet actions for EVM custody', async () => {
     let listener: ((event: WalletEvent) => void) | undefined
     let state: WalletState = {

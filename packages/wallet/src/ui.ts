@@ -239,7 +239,7 @@ export function mountWalletUI(
       } else if (event.state.status === 'connected') {
         for (const [id, request] of pending) {
           if (
-            request.userId !== event.state.session?.user.id ||
+            request.userId !== (event.state.session?.user.id ?? null) ||
             request.address !== event.state.address
           ) {
             pending.delete(id)
