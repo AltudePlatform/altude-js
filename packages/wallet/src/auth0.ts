@@ -6,6 +6,11 @@ export interface Auth0WalletAuthOptions {
   domain: string
   /** Auth0 Single Page Application client ID. */
   clientId: string
+  /**
+   * Client-safe Altude API key forwarded in Auth0 authorization parameters.
+   * Never use a server secret.
+   */
+  apiKey: string
   /** API identifier configured in Auth0 and accepted by the Altude API. */
   audience: string
   /** Display names mapped to enabled Auth0 connections, such as `{ Google: 'google-oauth2' }`. */
@@ -32,6 +37,7 @@ export async function createAuth0WalletAuth(
 ): Promise<Auth0WalletAuth> {
   const domain = normalizeDomain(options.domain)
   const clientId = options.clientId.trim()
+  const apiKey = options.apiKey
   const audience = options.audience.trim()
   const scope = options.scope?.trim() || 'openid profile email phone'
   const connections = normalizeConnections(options.connections ?? {})
@@ -41,6 +47,7 @@ export async function createAuth0WalletAuth(
   }
 
   if (!clientId) throw new Error('An Auth0 SPA client ID is required.')
+  if (!apiKey.trim()) throw new Error('A client-safe Altude API key is required.')
   if (!audience) throw new Error('An Auth0 API audience is required.')
   if (!scope.split(/\s+/).includes('openid')) {
     throw new Error('The Auth0 scope must include openid to return a stable user identifier.')
@@ -53,6 +60,7 @@ export async function createAuth0WalletAuth(
       redirect_uri: options.redirectUri ?? window.location.origin,
       audience,
       scope,
+      customParams: JSON.stringify({ walletApiKey: apiKey }),
     },
     cacheLocation: 'memory',
   })
@@ -65,6 +73,7 @@ export async function createAuth0WalletAuth(
       connection,
       audience,
       scope,
+      customParams: JSON.stringify({ walletApiKey: apiKey }),
       ...(loginHint ? { login_hint: loginHint } : {}),
     }
     await client.loginWithPopup({ authorizationParams })

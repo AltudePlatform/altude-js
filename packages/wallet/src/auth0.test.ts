@@ -32,6 +32,7 @@ describe('createAuth0WalletAuth', () => {
     const auth0 = await createAuth0WalletAuth({
       domain: ' example.auth0.com ',
       clientId: 'public-client-id',
+      apiKey: 'publishable-api-key',
       audience: 'https://api.example.test',
       connections: { Google: 'google-oauth2' },
       redirectUri: 'https://app.example.test/auth/callback',
@@ -44,6 +45,7 @@ describe('createAuth0WalletAuth', () => {
         redirect_uri: 'https://app.example.test/auth/callback',
         audience: 'https://api.example.test',
         scope: 'openid profile email phone',
+        customParams: JSON.stringify({ walletApiKey: 'publishable-api-key' }),
       },
       cacheLocation: 'memory',
     })
@@ -59,6 +61,7 @@ describe('createAuth0WalletAuth', () => {
         connection: 'google-oauth2',
         audience: 'https://api.example.test',
         scope: 'openid profile email phone',
+        customParams: JSON.stringify({ walletApiKey: 'publishable-api-key' }),
       },
     })
     expect(auth0Mocks.getTokenSilently).toHaveBeenCalledWith({
@@ -66,14 +69,28 @@ describe('createAuth0WalletAuth', () => {
         connection: 'google-oauth2',
         audience: 'https://api.example.test',
         scope: 'openid profile email phone',
+        customParams: JSON.stringify({ walletApiKey: 'publishable-api-key' }),
       },
     })
+  })
+
+  it('rejects a blank client-safe API key before creating the Auth0 client', async () => {
+    await expect(
+      createAuth0WalletAuth({
+        domain: 'example.auth0.com',
+        clientId: 'public-client-id',
+        apiKey: '  ',
+        audience: 'https://api.example.test',
+      }),
+    ).rejects.toThrow('A client-safe Altude API key is required.')
+    expect(auth0Mocks.createAuth0Client).not.toHaveBeenCalled()
   })
 
   it('uses configured hosted passwordless connections with an identifier hint', async () => {
     const auth0 = await createAuth0WalletAuth({
       domain: 'example.auth0.com',
       clientId: 'public-client-id',
+      apiKey: 'publishable-api-key',
       audience: 'https://api.example.test',
       otpConnections: { email: 'email-custom', sms: 'sms-custom' },
     })
@@ -89,6 +106,7 @@ describe('createAuth0WalletAuth', () => {
         connection: 'sms-custom',
         audience: 'https://api.example.test',
         scope: 'openid profile email phone',
+        customParams: JSON.stringify({ walletApiKey: 'publishable-api-key' }),
         login_hint: '+12025550123',
       },
     })
@@ -98,6 +116,7 @@ describe('createAuth0WalletAuth', () => {
     const auth0 = await createAuth0WalletAuth({
       domain: 'example.auth0.com',
       clientId: 'public-client-id',
+      apiKey: 'publishable-api-key',
       audience: 'https://api.example.test',
       otpConnections: { sms: null },
     })
@@ -114,6 +133,7 @@ describe('createAuth0WalletAuth', () => {
     const auth0 = await createAuth0WalletAuth({
       domain: 'example.auth0.com',
       clientId: 'public-client-id',
+      apiKey: 'publishable-api-key',
       audience: 'https://api.example.test',
     })
 
@@ -138,6 +158,7 @@ describe('createAuth0WalletAuth', () => {
       createAuth0WalletAuth({
         domain: 'example.auth0.com',
         clientId: 'public-client-id',
+        apiKey: 'publishable-api-key',
         audience: 'https://api.example.test',
         connections: {},
         ...override,
@@ -150,6 +171,7 @@ describe('createAuth0WalletAuth', () => {
     const auth0 = await createAuth0WalletAuth({
       domain: 'example.auth0.com',
       clientId: 'public-client-id',
+      apiKey: 'publishable-api-key',
       audience: 'https://api.example.test',
     })
 

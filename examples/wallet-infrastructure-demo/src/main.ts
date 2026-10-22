@@ -219,6 +219,7 @@ async function createLiveWallet(input: {
   const auth0 = await createAuth0WalletAuth({
     domain: input.auth0Domain,
     clientId: input.auth0ClientId,
+    apiKey: input.apiKey,
     audience,
     connections: input.connections,
     otpConnections: input.otpConnections,

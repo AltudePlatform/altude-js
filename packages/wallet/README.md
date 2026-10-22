@@ -16,9 +16,11 @@ before issuing a wallet session.
 ```ts
 import { AltudeWallet, createAuth0WalletAuth, mountWalletUI } from '@altude/wallet'
 
+const apiKey = import.meta.env.VITE_ALTUDE_API_KEY
 const auth0 = await createAuth0WalletAuth({
   domain: 'your-tenant.auth0.com',
   clientId: 'your-public-spa-client-id',
+  apiKey,
   audience: 'https://api.altude.so',
   connections: {
     Google: 'google-oauth2',
@@ -30,7 +32,7 @@ const auth0 = await createAuth0WalletAuth({
   },
 })
 const wallet = new AltudeWallet({
-  apiKey: import.meta.env.VITE_ALTUDE_API_KEY,
+  apiKey,
   apiBaseUrl: 'https://api.altude.so',
   network: 'devnet',
   auth: auth0.auth,
@@ -55,12 +57,16 @@ const stopListening = wallet.onEvent((event) => {
 
 Register the browser origin in the Auth0 SPA application's **Allowed Callback
 URLs** and **Allowed Web Origins**, and enable the configured database/social
-connections for that application. The `clientId` is public; never put an Auth0
-client secret or server-secret API key in browser code. The helper keeps tokens
-in Auth0 SPA JS's in-memory cache. Email/SMS use Auth0-hosted login and require
-the corresponding passwordless connections and message delivery providers to
-be configured in Auth0. Use `null` for an `otpConnections` channel to disable
-it; defaults are `email` and `sms`.
+connections for that application. `apiKey` must be a client-safe Altude API
+key: the SDK forwards it to Auth0 as
+`customParams: JSON.stringify({ walletApiKey: apiKey })` on authorization
+requests for Auth0 Actions that need the wallet API key. Never use a server
+secret; this value is sent as an authorization parameter and is not a secret.
+The `clientId` is public; never put an Auth0 client secret in browser code. The
+helper keeps tokens in Auth0 SPA JS's in-memory cache. Email/SMS use Auth0-hosted
+login and require the corresponding passwordless connections and message
+delivery providers to be configured in Auth0. Use `null` for an
+`otpConnections` channel to disable it; defaults are `email` and `sms`.
 
 This package is browser-only. It uses the Auth0 SPA application and the existing
 API-validated wallet session contract; it does not use the native callback

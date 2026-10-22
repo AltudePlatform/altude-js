@@ -46,7 +46,10 @@ providers in Auth0. For social sign-in, enter at least one enabled connection
 name. Register the exact example origin shown by Vite in Auth0's **Allowed
 Callback URLs** and **Allowed Web Origins**. The API base URL is also used as
 the Auth0 audience; it must match the audience accepted by the API. Do not
-enter an Auth0 client secret or server-secret API key in the browser.
+enter an Auth0 client secret or server-secret API key in the browser. The SDK
+also forwards the client-safe key to Auth0 as
+`customParams: JSON.stringify({ walletApiKey: apiKey })` for the configured
+wallet Auth0 Action.
 
 ## Key integration
 
@@ -71,6 +74,7 @@ import { AltudeWallet, createAuth0WalletAuth, mountWalletUI } from '@altude/wall
 const auth0 = await createAuth0WalletAuth({
   domain: 'your-tenant.auth0.com',
   clientId: 'your-public-spa-client-id',
+  apiKey,
   audience: 'https://api.altude.so',
   connections: { Google: 'google-oauth2' },
   otpConnections: { email: 'email', sms: 'sms' },
