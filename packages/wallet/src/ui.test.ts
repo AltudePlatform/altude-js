@@ -464,6 +464,86 @@ describe('mountWalletUI', () => {
     unmount()
   })
 
+  it('rejects unsubmitted confirmations on unmount without cancelling a submission', async () => {
+    let listener: ((event: WalletEvent) => void) | undefined
+    const state: WalletState = {
+      status: 'connected',
+      session: { user: { id: 'user-1' } },
+      address: '11111111111111111111111111111111',
+      protection: 'device-local',
+      custody: 'embedded',
+      externalProviderId: null,
+      externalChain: null,
+    }
+    let resolveSubmitting!: (result: { signature: string }) => void
+    const submitting = new Promise<{ signature: string }>((resolve) => {
+      resolveSubmitting = resolve
+    })
+    const approveTransaction = vi.fn(() => submitting)
+    let rejectUnsubmitted!: (error: Error) => void
+    const unsubmittedResult = new Promise<void>((_resolve, reject) => {
+      rejectUnsubmitted = reject
+    })
+    const rejectTransaction = vi.fn((id: string) => {
+      if (id === 'unsubmitted-request') {
+        rejectUnsubmitted(new Error('The wallet user rejected this transaction.'))
+      }
+    })
+    const wallet = {
+      state,
+      canStartOtp: false,
+      canSignInWithSocial: false,
+      canSignInWithPasskey: false,
+      externalWalletProviders: [],
+      onEvent: (handler: (event: WalletEvent) => void) => {
+        listener = handler
+        return () => {
+          listener = undefined
+        }
+      },
+      restoreSession: () => Promise.resolve(state),
+      approveTransaction,
+      rejectTransaction,
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, { presentation: 'modal' })
+
+    for (const id of ['unsubmitted-request', 'submitting-request']) {
+      listener?.({
+        type: 'transaction:confirmation',
+        id,
+        intent: {
+          kind: 'sol-transfer',
+          recipient: '11111111111111111111111111111111',
+          amount: 100,
+        },
+      })
+    }
+    const submittingGroup = container.querySelector(
+      '[aria-label="Transaction confirmation submitting-request"]',
+    )
+    const confirm = [...(submittingGroup?.querySelectorAll('button') ?? [])].find(
+      (button) => button.textContent === 'Confirm and submit',
+    )
+    if (!confirm) throw new Error('Expected a transaction confirmation button.')
+    confirm.click()
+    expect(approveTransaction).toHaveBeenCalledWith('submitting-request')
+
+    const unsubmittedRejection = expect(unsubmittedResult).rejects.toThrow(
+      'The wallet user rejected this transaction.',
+    )
+    unmount()
+
+    await unsubmittedRejection
+    expect(rejectTransaction).toHaveBeenCalledTimes(1)
+    expect(rejectTransaction).toHaveBeenCalledWith('unsubmitted-request')
+    expect(rejectTransaction).not.toHaveBeenCalledWith('submitting-request')
+    resolveSubmitting({ signature: 'signature' })
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
   it('keeps external-wallet confirmations actionable after an unchanged connected-state event', () => {
     let listener: ((event: WalletEvent) => void) | undefined
     const state: WalletState = {

@@ -1032,6 +1032,10 @@ export function mountWalletUI(
   })
   return () => {
     mounted = false
+    for (const id of pending.keys()) {
+      if (!submitting.has(id)) wallet.rejectTransaction(id)
+    }
+    pending.clear()
     events()
     root.remove()
     if (previousFocus instanceof HTMLElement) previousFocus.focus()
