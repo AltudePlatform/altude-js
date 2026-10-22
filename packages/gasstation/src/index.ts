@@ -12,6 +12,7 @@ export { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient, 
 export type {
   BlockhashResponse,
   ConfigResponse,
+  WalletUiConfiguration,
   SendTransactionOptions,
   SendTransactionResponse,
   BatchTransactionOptions,

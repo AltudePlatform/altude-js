@@ -35,6 +35,27 @@ export interface ConfigResponse {
   Token: string
   RpcEnvironment: string
   TokenExpiration: string | null
+  walletUi?: WalletUiConfiguration | null
+}
+
+export interface WalletUiConfiguration {
+  appName?: string | null
+  tagline?: string | null
+  logoUrl?: string | null
+  termsUrl?: string | null
+  privacyUrl?: string | null
+  enabledMethods?: {
+    emailOtp?: boolean
+    smsOtp?: boolean
+    socialProviders?: readonly string[]
+    passkey?: boolean
+    externalWalletProviders?: readonly ('metamask' | 'phantom' | 'walletconnect')[]
+  } | null
+  trustedBadges?: {
+    nonCustodialVerified?: boolean
+    ikaRecoveryVerified?: boolean
+    soc2Verified?: boolean
+  } | null
 }
 
 export interface SendTransactionOptions {
