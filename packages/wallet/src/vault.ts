@@ -17,6 +17,60 @@ interface VaultOperation {
   identityEpoch: number
 }
 
+const protectionFields = ['secret', 'ciphertext', 'iv', 'prfSalt', 'credentialId', 'rpId'] as const
+
+function sameBytes(left?: Uint8Array, right?: Uint8Array): boolean {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      left.length === right.length &&
+      left.every((value, index) => value === right[index]))
+  )
+}
+
+function sameProtection(left: WalletStoreRecord, right: WalletStoreRecord): boolean {
+  return (
+    left.publicKey === right.publicKey &&
+    left.protection === right.protection &&
+    protectionFields.every((field) =>
+      field === 'rpId' ? left.rpId === right.rpId : sameBytes(left[field], right[field]),
+    )
+  )
+}
+
+function sameRecord(left: WalletStoreRecord, right: WalletStoreRecord): boolean {
+  return (
+    left.identityKey === right.identityKey &&
+    left.publicKey === right.publicKey &&
+    left.serverUserId === right.serverUserId &&
+    sameProtection(left, right)
+  )
+}
+
+function withProtection(
+  current: WalletStoreRecord,
+  protection: WalletStoreRecord,
+): WalletStoreRecord {
+  const next = Object.fromEntries(
+    Object.entries(current).filter(
+      ([key]) => !protectionFields.includes(key as (typeof protectionFields)[number]),
+    ),
+  ) as WalletStoreRecord
+  next.protection = protection.protection
+  const fields =
+    protection.protection === 'device-local'
+      ? (['secret'] as const)
+      : (['ciphertext', 'iv', 'prfSalt', 'credentialId', 'rpId'] as const)
+  for (const field of fields) {
+    const value = protection[field]
+    if (value !== undefined) {
+      Object.assign(next, { [field]: value instanceof Uint8Array ? value.slice() : value })
+    }
+  }
+  return next
+}
+
 export class WalletVault {
   readonly #store: WalletStore
   readonly #passkeys: PasskeyAdapter
@@ -38,14 +92,24 @@ export class WalletVault {
     const secret = randomBytes(this.#crypto, 32)
     const publicKey = encodeBase58(ed25519.getPublicKey(secret))
     try {
-      const { record, created } = await this.#write(identityKey, operation, () =>
-        this.#store.createIfAbsent({
-          identityKey,
-          publicKey,
-          protection: 'device-local',
-          secret: secret.slice(),
-        }),
-        (result) => result.created ? this.#store.delete(identityKey) : Promise.resolve(),
+      const { record, created } = await this.#write(
+        identityKey,
+        operation,
+        () =>
+          this.#store.createIfAbsent({
+            identityKey,
+            publicKey,
+            protection: 'device-local',
+            secret: secret.slice(),
+          }),
+        (result) =>
+          result.created
+            ? this.#store
+                .update(identityKey, (current) =>
+                  current && sameRecord(current, result.record) ? undefined : current,
+                )
+                .then(() => undefined)
+            : Promise.resolve(),
       )
       this.#assertCurrent(identityKey, operation)
       if (created) this.#unlocked.set(identityKey, secret)
@@ -156,6 +220,12 @@ export class WalletVault {
     try {
       const record = await this.#requireRecord(identityKey)
       this.#assertCurrent(identityKey, operation)
+      if (encodeBase58(ed25519.getPublicKey(secret)) !== record.publicKey) {
+        throw new AltudeWalletError(
+          'WALLET_LOCKED',
+          'The local wallet key changed before passkey protection could be applied.',
+        )
+      }
       const currentLocation = Reflect.get(globalThis, 'location') as Location | undefined
       const rpId = currentLocation?.hostname
       if (!rpId)
@@ -201,22 +271,47 @@ export class WalletVault {
           ),
         )
         this.#assertCurrent(identityKey, operation)
-        const protectedRecord: WalletStoreRecord = {
-          identityKey,
-          ...(record.serverUserId ? { serverUserId: record.serverUserId } : {}),
-          publicKey: record.publicKey,
-          protection: 'passkey',
-          ciphertext,
-          iv,
-          prfSalt,
-          credentialId: registration.credentialId,
-          rpId,
-        }
         await this.#write(
           identityKey,
           operation,
-          () => this.#store.put(protectedRecord),
-          () => this.#store.put(record),
+          () =>
+            this.#store.update(identityKey, (current) => {
+              if (!current) {
+                throw new AltudeWalletError(
+                  'WALLET_NOT_FOUND',
+                  'No local wallet exists for this identity.',
+                )
+              }
+              if (!sameProtection(current, record)) {
+                throw new AltudeWalletError(
+                  'WALLET_LOCKED',
+                  'Wallet protection changed while passkey registration was in progress.',
+                )
+              }
+              return withProtection(current, {
+                identityKey: current.identityKey,
+                publicKey: current.publicKey,
+                ...(current.serverUserId !== undefined
+                  ? { serverUserId: current.serverUserId }
+                  : {}),
+                protection: 'passkey',
+                ciphertext,
+                iv,
+                prfSalt,
+                credentialId: registration.credentialId,
+                rpId,
+              })
+            }),
+          (written) =>
+            written
+              ? this.#store
+                  .update(identityKey, (current) =>
+                    current && sameProtection(current, written)
+                      ? withProtection(current, record)
+                      : current,
+                  )
+                  .then(() => undefined)
+              : Promise.resolve(),
         )
         this.#assertCurrent(identityKey, operation)
         this.#unlocked.set(identityKey, secret.slice())
@@ -274,19 +369,43 @@ export class WalletVault {
   async associateServerUser(identityKey: string, userId: string): Promise<void> {
     this.#assertIdentityKey(identityKey)
     const operation = this.#operation(identityKey)
-    const record = await this.#requireRecord(identityKey)
-    this.#assertCurrent(identityKey, operation)
-    if (record.serverUserId && record.serverUserId !== userId) {
-      throw new AltudeWalletError(
-        'SESSION',
-        'This local wallet is already associated with a different server account.',
-      )
-    }
+    let changed = false
+    let previousServerUserId: string | undefined
     await this.#write(
       identityKey,
       operation,
-      () => this.#store.put({ ...record, serverUserId: userId }),
-      () => this.#store.put(record),
+      () =>
+        this.#store.update(identityKey, (record) => {
+          if (!record) {
+            throw new AltudeWalletError(
+              'WALLET_NOT_FOUND',
+              'No local wallet exists for this identity.',
+            )
+          }
+          if (record.serverUserId !== undefined && record.serverUserId !== userId) {
+            throw new AltudeWalletError(
+              'SESSION',
+              'This local wallet is already associated with a different server account.',
+            )
+          }
+          previousServerUserId = record.serverUserId
+          changed = previousServerUserId !== userId
+          return { ...record, serverUserId: userId }
+        }),
+      () =>
+        changed
+          ? this.#store
+              .update(identityKey, (record) => {
+                if (!record || record.serverUserId !== userId) return record
+                if (previousServerUserId !== undefined) {
+                  return { ...record, serverUserId: previousServerUserId }
+                }
+                return Object.fromEntries(
+                  Object.entries(record).filter(([key]) => key !== 'serverUserId'),
+                ) as WalletStoreRecord
+              })
+              .then(() => undefined)
+          : Promise.resolve(),
     )
   }
 
@@ -308,14 +427,7 @@ export class WalletVault {
   async delete(identityKey: string): Promise<void> {
     this.lock(identityKey)
     const operation = this.#operation(identityKey)
-    const record = await this.#store.get(identityKey)
-    this.#assertCurrent(identityKey, operation)
-    await this.#write(
-      identityKey,
-      operation,
-      () => this.#store.delete(identityKey),
-      () => record ? this.#store.put(record) : Promise.resolve(),
-    )
+    await this.#write(identityKey, operation, () => this.#store.delete(identityKey))
   }
 
   async #requireRecord(identityKey: string): Promise<WalletStoreRecord> {
@@ -347,7 +459,10 @@ export class WalletVault {
       operation.identityEpoch !== (this.#identityEpochs.get(identityKey) ?? 0) ||
       operation.globalEpoch !== this.#globalEpoch
     ) {
-      throw new AltudeWalletError('WALLET_LOCKED', 'The wallet changed while the operation was in progress.')
+      throw new AltudeWalletError(
+        'WALLET_LOCKED',
+        'The wallet changed while the operation was in progress.',
+      )
     }
   }
 

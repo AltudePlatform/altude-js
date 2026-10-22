@@ -34,6 +34,16 @@ class TestWalletStore implements WalletStore {
     return Promise.resolve({ record: created, created: true })
   }
 
+  update(
+    identityKey: string,
+    update: (record: WalletStoreRecord | undefined) => WalletStoreRecord | undefined,
+  ): Promise<WalletStoreRecord | undefined> {
+    const record = update(this.records.get(identityKey))
+    if (record) this.records.set(identityKey, structuredClone(record))
+    else this.records.delete(identityKey)
+    return Promise.resolve(record)
+  }
+
   put(record: WalletStoreRecord): Promise<void> {
     this.records.set(record.identityKey, structuredClone(record))
     return Promise.resolve()

@@ -116,13 +116,12 @@ describe('WalletVault', () => {
       get: (identityKey) => store.get(identityKey),
       getByServerUserId: (userId) => store.getByServerUserId(userId),
       createIfAbsent: (record) => store.createIfAbsent(record),
-      async put(record) {
-        if (record.protection === 'passkey') {
-          writeStarted.resolve(true)
-          await finishWrite.promise
-        }
-        await store.put(record)
+      async update(identityKey, update) {
+        writeStarted.resolve(true)
+        await finishWrite.promise
+        return store.update(identityKey, update)
       },
+      put: (record) => store.put(record),
       delete: (identityKey) => store.delete(identityKey),
     }
     const vault = new WalletVault({
@@ -171,8 +170,16 @@ describe('WalletVault', () => {
   it('creates one stable wallet when tabs race to initialize the same identity', async () => {
     const firstStore = new IndexedDbWalletStore(indexedDB)
     const secondStore = new IndexedDbWalletStore(indexedDB)
-    const first = new WalletVault({ store: firstStore, crypto: globalThis.crypto, passkeys: testPasskey })
-    const second = new WalletVault({ store: secondStore, crypto: globalThis.crypto, passkeys: testPasskey })
+    const first = new WalletVault({
+      store: firstStore,
+      crypto: globalThis.crypto,
+      passkeys: testPasskey,
+    })
+    const second = new WalletVault({
+      store: secondStore,
+      crypto: globalThis.crypto,
+      passkeys: testPasskey,
+    })
     const addresses = await Promise.all([
       first.getOrCreateAddress('issuer|racing'),
       second.getOrCreateAddress('issuer|racing'),
@@ -180,5 +187,119 @@ describe('WalletVault', () => {
 
     expect(addresses[0]).toBe(addresses[1])
     expect((await firstStore.get('issuer|racing'))?.publicKey).toBe(addresses[0])
+  })
+
+  it('allows only one server user to claim a wallet across vault instances', async () => {
+    const firstStore = new IndexedDbWalletStore(indexedDB)
+    const secondStore = new IndexedDbWalletStore(indexedDB)
+    const first = new WalletVault({
+      store: firstStore,
+      crypto: globalThis.crypto,
+      passkeys: testPasskey,
+    })
+    const second = new WalletVault({
+      store: secondStore,
+      crypto: globalThis.crypto,
+      passkeys: testPasskey,
+    })
+    const identityKey = 'issuer|claim-race'
+    await first.getOrCreateAddress(identityKey)
+
+    const results = await Promise.allSettled([
+      first.associateServerUser(identityKey, 'server-user-a'),
+      second.associateServerUser(identityKey, 'server-user-b'),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.find((result) => result.status === 'rejected')
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: { code: 'SESSION' },
+    })
+    expect(['server-user-a', 'server-user-b']).toContain(
+      (await firstStore.get(identityKey))?.serverUserId,
+    )
+  })
+
+  it('preserves the winning passkey when two vault instances protect concurrently', async () => {
+    vi.stubGlobal('location', { hostname: 'localhost' })
+    const firstStore = new IndexedDbWalletStore(indexedDB)
+    const secondStore = new IndexedDbWalletStore(indexedDB)
+    const firstPasskeys: PasskeyAdapter = {
+      ...testPasskey,
+      register: () =>
+        Promise.resolve({ credentialId: new Uint8Array([1]), kek: new Uint8Array(32).fill(1) }),
+    }
+    const secondRegistration = deferred<{ credentialId: Uint8Array; kek: Uint8Array }>()
+    const secondRegistrationStarted = deferred<boolean>()
+    const secondPasskeys: PasskeyAdapter = {
+      ...testPasskey,
+      register: () => {
+        secondRegistrationStarted.resolve(true)
+        return secondRegistration.promise
+      },
+    }
+    const first = new WalletVault({
+      store: firstStore,
+      crypto: globalThis.crypto,
+      passkeys: firstPasskeys,
+    })
+    const second = new WalletVault({
+      store: secondStore,
+      crypto: globalThis.crypto,
+      passkeys: secondPasskeys,
+    })
+    const identityKey = 'issuer|passkey-race'
+    await first.getOrCreateAddress(identityKey)
+    await second.unlock(identityKey)
+
+    const firstProtection = first.protectWithPasskey(identityKey)
+    const secondProtection = second.protectWithPasskey(identityKey)
+    await secondRegistrationStarted.promise
+    await firstProtection
+    secondRegistration.resolve({
+      credentialId: new Uint8Array([2]),
+      kek: new Uint8Array(32).fill(2),
+    })
+
+    await expect(secondProtection).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+    const stored = await firstStore.get(identityKey)
+    expect(stored?.protection).toBe('passkey')
+    expect(Array.from(stored?.credentialId ?? [])).toEqual([1])
+    expect(stored?.secret).toBeUndefined()
+  })
+
+  it('preserves server association when passkey protection races another vault', async () => {
+    vi.stubGlobal('location', { hostname: 'localhost' })
+    const store = new IndexedDbWalletStore(indexedDB)
+    const registration = deferred<{ credentialId: Uint8Array; kek: Uint8Array }>()
+    const registrationStarted = deferred<boolean>()
+    const passkeys: PasskeyAdapter = {
+      ...testPasskey,
+      register: () => {
+        registrationStarted.resolve(true)
+        return registration.promise
+      },
+    }
+    const protectingVault = new WalletVault({ store, crypto: globalThis.crypto, passkeys })
+    const associatingVault = new WalletVault({
+      store: new IndexedDbWalletStore(indexedDB),
+      crypto: globalThis.crypto,
+      passkeys: testPasskey,
+    })
+    const identityKey = 'issuer|association-protection-race'
+    await protectingVault.getOrCreateAddress(identityKey)
+    const protecting = protectingVault.protectWithPasskey(identityKey)
+    await registrationStarted.promise
+    await associatingVault.associateServerUser(identityKey, 'server-user')
+    registration.resolve({
+      credentialId: new Uint8Array([3]),
+      kek: new Uint8Array(32).fill(7),
+    })
+
+    await protecting
+    const stored = await store.get(identityKey)
+    expect(stored?.serverUserId).toBe('server-user')
+    expect(stored?.protection).toBe('passkey')
   })
 })

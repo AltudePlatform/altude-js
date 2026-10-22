@@ -128,6 +128,11 @@ export interface WalletStore {
   get(identityKey: string): Promise<WalletStoreRecord | undefined>
   getByServerUserId(serverUserId: string): Promise<WalletStoreRecord | undefined>
   createIfAbsent(record: WalletStoreRecord): Promise<WalletStoreCreateResult>
+  /** Atomically reads and replaces or deletes a record; the callback must be synchronous. */
+  update(
+    identityKey: string,
+    update: (record: WalletStoreRecord | undefined) => WalletStoreRecord | undefined,
+  ): Promise<WalletStoreRecord | undefined>
   put(record: WalletStoreRecord): Promise<void>
   delete(identityKey: string): Promise<void>
 }

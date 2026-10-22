@@ -69,6 +69,50 @@ export class IndexedDbWalletStore implements WalletStore {
     })
   }
 
+  async update(
+    identityKey: string,
+    update: (record: WalletStoreRecord | undefined) => WalletStoreRecord | undefined,
+  ): Promise<WalletStoreRecord | undefined> {
+    const database = await this.#open()
+    return new Promise<WalletStoreRecord | undefined>((resolve, reject) => {
+      const transaction = database.transaction(WALLET_STORE, 'readwrite')
+      const store = transaction.objectStore(WALLET_STORE)
+      const request = store.get(identityKey) as IDBRequest<WalletStoreRecord | undefined>
+      let result: WalletStoreRecord | undefined
+      let updateError: unknown
+      request.onsuccess = () => {
+        try {
+          result = update(request.result)
+          if (result) store.put(result)
+          else store.delete(identityKey)
+        } catch (error) {
+          updateError = error
+          transaction.abort()
+        }
+      }
+      request.onerror = () => {
+        reject(request.error ?? new Error('Unable to read the local wallet record.'))
+      }
+      transaction.oncomplete = () => {
+        resolve(result)
+      }
+      transaction.onerror = () => {
+        reject(
+          updateError instanceof Error
+            ? updateError
+            : (transaction.error ?? new Error('IndexedDB wallet transaction failed.')),
+        )
+      }
+      transaction.onabort = () => {
+        reject(
+          updateError instanceof Error
+            ? updateError
+            : (transaction.error ?? new Error('IndexedDB wallet transaction aborted.')),
+        )
+      }
+    })
+  }
+
   async put(record: WalletStoreRecord): Promise<void> {
     await this.#request('readwrite', (store) => {
       return store.put(record)
