@@ -179,17 +179,19 @@ export class AltudeWallet {
   }
 
   async verifyOtp(channel: OtpChannel, identifier: string, code: string): Promise<WalletState> {
-    if (typeof this.#auth.verifyOtp !== 'function')
+    const auth = this.#auth
+    if (typeof auth.verifyOtp !== 'function')
       throw new AltudeWalletError(
         'AUTHENTICATION',
         'This auth provider does not support OTP sign-in.',
       )
-    const token = await this.#auth.verifyOtp(channel, identifier.trim(), code.trim())
-    return this.connect(token)
+    const verifyOtp = auth.verifyOtp.bind(auth)
+    return this.#authenticateAndConnect(() => verifyOtp(channel, identifier.trim(), code.trim()))
   }
 
   async signInWithOtp(channel: OtpChannel, identifier: string): Promise<WalletState> {
-    if (typeof this.#auth.signInWithOtp !== 'function') {
+    const auth = this.#auth
+    if (typeof auth.signInWithOtp !== 'function') {
       throw new AltudeWalletError(
         'AUTHENTICATION',
         'This auth provider does not support hosted OTP sign-in.',
@@ -198,26 +200,46 @@ export class AltudeWallet {
     const value = identifier.trim()
     if (!value)
       throw new AltudeWalletError('INVALID_INPUT', 'Enter an email address or phone number.')
-    return this.connect(await this.#auth.signInWithOtp(channel, value))
+    const signInWithOtp = auth.signInWithOtp.bind(auth)
+    return this.#authenticateAndConnect(() => signInWithOtp(channel, value))
   }
 
   async signInWithSocial(provider: string): Promise<WalletState> {
-    if (typeof this.#auth.signInWithSocial !== 'function')
+    const auth = this.#auth
+    if (typeof auth.signInWithSocial !== 'function')
       throw new AltudeWalletError(
         'AUTHENTICATION',
         'This auth provider does not support social sign-in.',
       )
-    return this.connect(await this.#auth.signInWithSocial(provider))
+    const signInWithSocial = auth.signInWithSocial.bind(auth)
+    return this.#authenticateAndConnect(() => signInWithSocial(provider))
   }
 
   async signInWithPasskey(): Promise<WalletState> {
-    if (typeof this.#auth.signInWithPasskey !== 'function') {
+    const auth = this.#auth
+    if (typeof auth.signInWithPasskey !== 'function') {
       throw new AltudeWalletError(
         'AUTHENTICATION',
         'This auth provider does not support passkey authentication.',
       )
     }
-    return this.connect(await this.#auth.signInWithPasskey())
+    const signInWithPasskey = auth.signInWithPasskey.bind(auth)
+    return this.#authenticateAndConnect(() => signInWithPasskey())
+  }
+
+  async #authenticateAndConnect(
+    authenticate: () => Promise<WalletIdentityToken>,
+  ): Promise<WalletState> {
+    const generation = ++this.#lifecycleGeneration
+    let identity: WalletIdentityToken
+    try {
+      identity = await authenticate()
+    } catch (error) {
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      throw error
+    }
+    if (!this.#isCurrentLifecycle(generation)) return this.state
+    return this.connect(identity)
   }
 
   async connect(identity: WalletIdentityToken): Promise<WalletState> {

@@ -171,6 +171,84 @@ describe('AltudeWallet', () => {
     expect(sessionTokens.token).toBe('wallet-session-token')
   })
 
+  it('does not connect a provider result that resolves after sign-out', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        sessionToken: 'existing-session',
+        user: { id: 'existing-user' },
+      }),
+    )
+    const providerResult = deferred<{ accessToken: string; identityKey: string }>()
+    const wallet = new AltudeWallet({
+      apiKey: 'test-api-key',
+      apiBaseUrl: 'https://api.example.test',
+      auth: { signInWithSocial: () => providerResult.promise },
+      store,
+      sessionTokenStore: sessionTokens,
+      fetch: fetchMock as typeof fetch,
+      gasStation: gasStation as unknown as AltudeGasStation,
+    })
+    await wallet.connect({ accessToken: 'existing-token', identityKey: 'auth0|existing-user' })
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true }))
+
+    const signIn = wallet.signInWithSocial('google')
+    await wallet.signOut()
+    providerResult.resolve({
+      accessToken: 'stale-token',
+      identityKey: 'auth0|stale-user',
+    })
+
+    expect(await signIn).toMatchObject({ status: 'disconnected' })
+    expect(wallet.state.status).toBe('disconnected')
+    expect(sessionTokens.token).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets a newer login supersede an older pending provider result', async () => {
+    const olderProviderResult = deferred<{ accessToken: string; identityKey: string }>()
+    const wallet = new AltudeWallet({
+      apiKey: 'test-api-key',
+      apiBaseUrl: 'https://api.example.test',
+      auth: {
+        signInWithSocial: () => olderProviderResult.promise,
+        signInWithPasskey: () =>
+          Promise.resolve({
+            accessToken: 'new-token',
+            identityKey: 'auth0|new-user',
+          }),
+      },
+      store,
+      sessionTokenStore: sessionTokens,
+      fetch: fetchMock as typeof fetch,
+      gasStation: gasStation as unknown as AltudeGasStation,
+    })
+    fetchMock.mockImplementation((_url: string, request: RequestInit) => {
+      const body = parseBody(request.body)
+      return Promise.resolve(
+        jsonResponse({
+          success: true,
+          sessionToken: 'new-session',
+          user: { id: 'new-user', walletAddress: body.walletAddress },
+        }),
+      )
+    })
+    const olderSignIn = wallet.signInWithSocial('google')
+    const newerState = await wallet.signInWithPasskey()
+    olderProviderResult.resolve({
+      accessToken: 'old-token',
+      identityKey: 'auth0|old-user',
+    })
+
+    expect(await olderSignIn).toEqual(newerState)
+    expect(wallet.state).toMatchObject({
+      status: 'connected',
+      session: { user: { id: 'new-user' } },
+    })
+    expect(sessionTokens.token).toBe('new-session')
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
   it('exchanges provider tokens for validated API sessions and isolates local identities', async () => {
     fetchMock.mockImplementation((_url: string, request: RequestInit) => {
       expect(new Headers(request.headers).get('X-API-Key')).toBe('test-api-key')
