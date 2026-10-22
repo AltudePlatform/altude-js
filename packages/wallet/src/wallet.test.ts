@@ -1,5 +1,5 @@
 ﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AltudeGasStation } from '@altude/gasstation'
+import type { AltudeGasStation, GaslessTransactionSigner, SendOptions } from '@altude/gasstation'
 import { AltudeWallet, AltudeWalletError } from './index.js'
 import type {
   ExternalWalletProvider,
@@ -357,17 +357,25 @@ describe('AltudeWallet', () => {
       recipient: 'Vote111111111111111111111111111111111111111',
       amount: 500,
     })
+    let receivedOptions: SendOptions | undefined
+    gasStation.send.mockImplementation(
+      (options: SendOptions) => {
+        receivedOptions = options
+        return Promise.resolve({ Signature: 'transaction-signature', Status: 'Success' })
+      },
+    )
     await wallet.approveTransaction(transactionId)
 
     await expect(result).resolves.toMatchObject({ signature: 'transaction-signature' })
-    expect(gasStation.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account: signer.address,
-        sourceSigner: signer,
-        toAddress: 'Vote111111111111111111111111111111111111111',
-        amount: 500,
-      }),
-    )
+    expect(gasStation.send).toHaveBeenCalledOnce()
+    expect(receivedOptions).toMatchObject({
+      account: signer.address,
+      toAddress: 'Vote111111111111111111111111111111111111111',
+      amount: 500,
+    })
+    expect(receivedOptions?.sourceSigner).toHaveProperty('address', signer.address)
+    expect(receivedOptions?.sourceSigner).toHaveProperty('sign')
+    expect(receivedOptions?.sourceSigner).not.toBe(signer)
     expect(store.records.size).toBe(0)
     expect(sessionTokens.token).toBeNull()
   })
@@ -657,6 +665,117 @@ describe('AltudeWallet', () => {
       })
     }
     expect(gasStation.send).not.toHaveBeenCalled()
+  })
+
+  it('does not sign when approval is cancelled during transaction preparation', async () => {
+    const signer = {
+      address: '11111111111111111111111111111111',
+      sign: vi.fn().mockResolvedValue(new Uint8Array(64)),
+    }
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect: vi.fn().mockResolvedValue({
+        address: signer.address,
+        chain: 'solana',
+        signer,
+      }),
+    }
+    const wallet = createWallet([provider])
+    await wallet.connectExternalWallet('phantom')
+    let confirmationId = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') confirmationId = event.id
+    })
+    const preparation = deferred<boolean>()
+    const preparing = deferred<boolean>()
+    gasStation.send.mockImplementation(
+      async (options: { sourceSigner?: GaslessTransactionSigner }) => {
+        const sourceSigner = options.sourceSigner
+        if (!sourceSigner?.sign) throw new Error('Expected a signer.')
+        preparing.resolve(true)
+        await preparation.promise
+        await sourceSigner.sign(new Uint8Array([1]))
+        return { Signature: 'should-not-relay' }
+      },
+    )
+
+    const requested = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: 'Vote111111111111111111111111111111111111111',
+      amount: 1_000,
+    })
+    const approval = wallet.approveTransaction(confirmationId)
+    const outcomes = Promise.allSettled([requested, approval])
+    await preparing.promise
+    wallet.rejectTransaction(confirmationId)
+    preparation.resolve(true)
+
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'TRANSACTION', message: 'The wallet user rejected this transaction.' },
+      })
+    }
+    expect(signer.sign).not.toHaveBeenCalled()
+  })
+
+  it('discards a signature when approval is cancelled while the signer is executing', async () => {
+    const signing = deferred<Uint8Array>()
+    const signStarted = deferred<boolean>()
+    const signer = {
+      address: '11111111111111111111111111111111',
+      signTransactionMessage: vi.fn(() => {
+        signStarted.resolve(true)
+        return signing.promise
+      }),
+    }
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect: vi.fn().mockResolvedValue({
+        address: signer.address,
+        chain: 'solana',
+        signer,
+      }),
+    }
+    const wallet = createWallet([provider])
+    await wallet.connectExternalWallet('phantom')
+    let confirmationId = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') confirmationId = event.id
+    })
+    const relay = vi
+      .fn<() => Promise<{ Signature: string }>>()
+      .mockResolvedValue({ Signature: 'should-not-relay' })
+    gasStation.send.mockImplementation(
+      async (options: { sourceSigner?: GaslessTransactionSigner }) => {
+        const sourceSigner = options.sourceSigner
+        if (!sourceSigner?.signTransactionMessage) throw new Error('Expected a signer.')
+        await sourceSigner.signTransactionMessage(new Uint8Array([1]))
+        return relay()
+      },
+    )
+
+    const requested = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: 'Vote111111111111111111111111111111111111111',
+      amount: 1_000,
+    })
+    const approval = wallet.approveTransaction(confirmationId)
+    const outcomes = Promise.allSettled([requested, approval])
+    await signStarted.promise
+    wallet.rejectTransaction(confirmationId)
+    signing.resolve(new Uint8Array(64))
+
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'TRANSACTION', message: 'The wallet user rejected this transaction.' },
+      })
+    }
+    expect(signer.signTransactionMessage).toHaveBeenCalledOnce()
+    expect(relay).not.toHaveBeenCalled()
   })
 
   it.each(['identity change', 'sign-out', 'rejection'])(

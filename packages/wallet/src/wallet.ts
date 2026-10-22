@@ -563,8 +563,33 @@ export class AltudeWallet {
         )
       }
       this.#assertNotCancelled(pending)
+      const signTransactionMessage = signer.signTransactionMessage
+      const sign = signer.sign
+      const cancellableSigner = {
+        address: signer.address,
+        ...(signTransactionMessage
+          ? {
+              signTransactionMessage: async (txBytes: Uint8Array) => {
+                this.#assertNotCancelled(pending)
+                const signature = await signTransactionMessage.call(signer, txBytes)
+                this.#assertNotCancelled(pending)
+                return signature
+              },
+            }
+          : {}),
+        ...(sign
+          ? {
+              sign: async (txBytes: Uint8Array) => {
+                this.#assertNotCancelled(pending)
+                const signature = await sign.call(signer, txBytes)
+                this.#assertNotCancelled(pending)
+                return signature
+              },
+            }
+          : {}),
+      }
       const response = await this.#gasStation.send({
-        sourceSigner: signer,
+        sourceSigner: cancellableSigner,
         account: active.address,
         toAddress: pending.intent.recipient,
         amount: pending.intent.amount,
