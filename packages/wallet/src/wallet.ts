@@ -1,5 +1,9 @@
 import { AltudeGasStation } from '@altude/gasstation'
-import type { GetHistoryOptions, GetHistoryResponse } from '@altude/gasstation'
+import type {
+  GetHistoryOptions,
+  GetHistoryResponse,
+  WalletUiConfiguration,
+} from '@altude/gasstation'
 import { AltudeWalletError } from './errors.js'
 import { assertPublicKey } from './crypto.js'
 import { EmbeddedWalletApi } from './api.js'
@@ -101,6 +105,16 @@ export class AltudeWallet {
     }
   }
 
+  get network(): NonNullable<AltudeWalletConfig['network']> {
+    return this.#network
+  }
+
+  /** Read the optional wallet UI settings returned by transaction config. */
+  async getWalletUiConfiguration(): Promise<WalletUiConfiguration | null> {
+    const config = await this.#gasStation.getConfig()
+    return config.walletUi ?? null
+  }
+
   get address(): string {
     if (!this.#active)
       throw new AltudeWalletError('SESSION', 'Connect a wallet before requesting its address.')
@@ -108,7 +122,22 @@ export class AltudeWallet {
   }
 
   get canStartOtp(): boolean {
-    return typeof this.#auth.startOtp === 'function' && typeof this.#auth.verifyOtp === 'function'
+    return (
+      (typeof this.#auth.startOtp === 'function' && typeof this.#auth.verifyOtp === 'function') ||
+      typeof this.#auth.signInWithOtp === 'function'
+    )
+  }
+
+  get usesHostedOtp(): boolean {
+    return typeof this.#auth.signInWithOtp === 'function'
+  }
+
+  canSignInWithOtp(channel: OtpChannel): boolean {
+    if (this.#auth.supportsOtpChannel && !this.#auth.supportsOtpChannel(channel)) return false
+    return (
+      typeof this.#auth.signInWithOtp === 'function' ||
+      (typeof this.#auth.startOtp === 'function' && typeof this.#auth.verifyOtp === 'function')
+    )
   }
 
   get canSignInWithSocial(): boolean {
@@ -119,8 +148,17 @@ export class AltudeWallet {
     return typeof this.#auth.signInWithPasskey === 'function'
   }
 
-  get externalWalletProviders(): readonly Pick<ExternalWalletProvider, 'id' | 'label'>[] {
-    return this.#externalWallets.map(({ id, label }) => ({ id, label }))
+  get externalWalletProviders(): readonly Pick<
+    ExternalWalletProvider,
+    'id' | 'label' | 'isAvailable'
+  >[] {
+    return this.#externalWallets.map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      ...(provider.isAvailable
+        ? { isAvailable: () => provider.isAvailable?.() ?? false }
+        : {}),
+    }))
   }
 
   onEvent(listener: (event: WalletEvent) => void): () => void {
@@ -148,6 +186,19 @@ export class AltudeWallet {
       )
     const token = await this.#auth.verifyOtp(channel, identifier.trim(), code.trim())
     return this.connect(token)
+  }
+
+  async signInWithOtp(channel: OtpChannel, identifier: string): Promise<WalletState> {
+    if (typeof this.#auth.signInWithOtp !== 'function') {
+      throw new AltudeWalletError(
+        'AUTHENTICATION',
+        'This auth provider does not support hosted OTP sign-in.',
+      )
+    }
+    const value = identifier.trim()
+    if (!value)
+      throw new AltudeWalletError('INVALID_INPUT', 'Enter an email address or phone number.')
+    return this.connect(await this.#auth.signInWithOtp(channel, value))
   }
 
   async signInWithSocial(provider: string): Promise<WalletState> {
@@ -179,6 +230,7 @@ export class AltudeWallet {
     const generation = ++this.#lifecycleGeneration
     this.#assertIdentity(identity)
     let address: string
+    this.#emit({ type: 'setup:progress', stage: 'securing-device' })
     try {
       address = await this.#vault.getOrCreateAddress(identity.identityKey)
     } catch (error) {
@@ -190,6 +242,7 @@ export class AltudeWallet {
       return this.state
     }
     let result: Awaited<ReturnType<EmbeddedWalletApi['exchangeAuth0']>>
+    this.#emit({ type: 'setup:progress', stage: 'connecting-account' })
     try {
       result = await this.#api.exchangeAuth0(identity.accessToken, address)
     } catch (error) {
@@ -242,6 +295,7 @@ export class AltudeWallet {
       return this.state
     }
     try {
+      this.#emit({ type: 'setup:progress', stage: 'finishing' })
       await this.#withSessionTokens(generation, () => this.#sessionTokens.set(token))
     } catch (error) {
       this.#lockStaleIdentity(identity.identityKey)

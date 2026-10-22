@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AltudeGasStation } from '@altude/gasstation'
 import { AltudeWallet, AltudeWalletError } from './index.js'
 import type {
@@ -70,6 +70,7 @@ describe('AltudeWallet', () => {
   let gasStation: {
     send: ReturnType<typeof vi.fn>
     createAccount: ReturnType<typeof vi.fn>
+    getConfig: ReturnType<typeof vi.fn>
     getBalance: ReturnType<typeof vi.fn>
     getHistory: ReturnType<typeof vi.fn>
   }
@@ -83,6 +84,7 @@ describe('AltudeWallet', () => {
       createAccount: vi
         .fn()
         .mockResolvedValue({ Signature: 'account-signature', Status: 'Success' }),
+      getConfig: vi.fn().mockResolvedValue({ walletUi: null }),
       getBalance: vi.fn().mockResolvedValue({ address: 'wallet', uiAmount: 2 }),
       getHistory: vi
         .fn()
@@ -104,6 +106,61 @@ describe('AltudeWallet', () => {
     })
   }
 
+  it('reads the optional wallet UI settings from transaction config', async () => {
+    const walletUi = {
+      appName: 'Example',
+      enabledMethods: { emailOtp: false, socialProviders: ['google'] },
+    }
+    gasStation.getConfig.mockResolvedValue({ walletUi })
+    const wallet = createWallet()
+
+    expect(wallet.network).toBe('devnet')
+    await expect(wallet.getWalletUiConfiguration()).resolves.toEqual(walletUi)
+    gasStation.getConfig.mockResolvedValue({})
+    await expect(wallet.getWalletUiConfiguration()).resolves.toBeNull()
+  })
+
+  it('routes hosted OTP through the auth provider and exchanges its token with the API', async () => {
+    const signInWithOtp = vi.fn().mockResolvedValue({
+      accessToken: 'auth0-api-token',
+      identityKey: 'auth0|email-user',
+    })
+    let exchangedAccessToken: string | undefined
+    fetchMock.mockImplementation((_url: string, request: RequestInit) => {
+      exchangedAccessToken = parseBody(request.body).accessToken
+      return Promise.resolve(
+        jsonResponse({
+          success: true,
+          sessionToken: 'wallet-session-token',
+          user: { id: 'wallet-user' },
+        }),
+      )
+    })
+    const wallet = new AltudeWallet({
+      apiKey: 'test-api-key',
+      apiBaseUrl: 'https://api.example.test',
+      auth: {
+        signInWithOtp,
+        supportsOtpChannel: (channel) => channel === 'email',
+      },
+      store,
+      sessionTokenStore: sessionTokens,
+      fetch: fetchMock as typeof fetch,
+      gasStation: gasStation as unknown as AltudeGasStation,
+    })
+
+    expect(wallet.canStartOtp).toBe(true)
+    expect(wallet.usesHostedOtp).toBe(true)
+    expect(wallet.canSignInWithOtp('email')).toBe(true)
+    expect(wallet.canSignInWithOtp('sms')).toBe(false)
+    const state = await wallet.signInWithOtp('email', ' user@example.test ')
+
+    expect(signInWithOtp).toHaveBeenCalledWith('email', 'user@example.test')
+    expect(exchangedAccessToken).toBe('auth0-api-token')
+    expect(state.status).toBe('connected')
+    expect(sessionTokens.token).toBe('wallet-session-token')
+  })
+
   it('exchanges provider tokens for validated API sessions and isolates local identities', async () => {
     fetchMock.mockImplementation((_url: string, request: RequestInit) => {
       expect(new Headers(request.headers).get('X-API-Key')).toBe('test-api-key')
@@ -118,6 +175,10 @@ describe('AltudeWallet', () => {
       )
     })
     const wallet = createWallet()
+    const progressStages: string[] = []
+    wallet.onEvent((event: WalletEvent) => {
+      if (event.type === 'setup:progress') progressStages.push(event.stage)
+    })
 
     const first = await wallet.connect({
       accessToken: 'provider-access-token',
@@ -133,6 +194,14 @@ describe('AltudeWallet', () => {
     expect(second.address).not.toBe(firstAddress)
     expect(sessionTokens.token).toBe('server-session-token')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(progressStages).toEqual([
+      'securing-device',
+      'connecting-account',
+      'finishing',
+      'securing-device',
+      'connecting-account',
+      'finishing',
+    ])
   })
 
   it('restores only a server-authenticated session and unlocks the matching local wallet', async () => {
@@ -224,6 +293,7 @@ describe('AltudeWallet', () => {
     const provider: ExternalWalletProvider = {
       id: 'phantom',
       label: 'Phantom',
+      isAvailable: () => true,
       connect: vi.fn().mockResolvedValue({
         address: signer.address,
         chain: 'solana',
@@ -244,7 +314,9 @@ describe('AltudeWallet', () => {
       externalProviderId: 'phantom',
       externalChain: 'solana',
     })
-    expect(wallet.externalWalletProviders).toEqual([{ id: 'phantom', label: 'Phantom' }])
+    expect(wallet.externalWalletProviders).toHaveLength(1)
+    expect(wallet.externalWalletProviders[0]).toMatchObject({ id: 'phantom', label: 'Phantom' })
+    expect(wallet.externalWalletProviders[0]?.isAvailable?.()).toBe(true)
     expect(store.records.size).toBe(0)
     expect(fetchMock).not.toHaveBeenCalled()
   })

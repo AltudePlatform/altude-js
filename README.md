@@ -20,8 +20,9 @@ not published or part of the supported production package set.
 
 The [`wallet-infrastructure-demo`](./examples/wallet-infrastructure-demo)
 example shows how to mount the experimental wallet package's managed modal UI.
-Run it with `pnpm --filter wallet-infrastructure-demo dev`; its identity, API,
-and relay adapters are simulated and do not submit on-chain transactions.
+Run it with `pnpm --filter wallet-infrastructure-demo dev`. Its simulated mode
+is the default; an optional live mode uses the Auth0 SPA integration included
+in `@altude/wallet` and a publishable API key to call the backend and Gas Station.
 
 ## Quick Start
 

@@ -1,5 +1,9 @@
 import type { GetHistoryOptions, GetHistoryResponse } from '@altude/gasstation'
-import type { AltudeGasStation, GaslessTransactionSigner } from '@altude/gasstation'
+import type {
+  AltudeGasStation,
+  GaslessTransactionSigner,
+  WalletUiConfiguration,
+} from '@altude/gasstation'
 
 export type WalletProtection = 'device-local' | 'passkey'
 export type OtpChannel = 'email' | 'sms'
@@ -29,6 +33,9 @@ export interface WalletSession {
 export interface WalletAuthProvider {
   startOtp?(channel: OtpChannel, identifier: string): Promise<void>
   verifyOtp?(channel: OtpChannel, identifier: string, code: string): Promise<WalletIdentityToken>
+  /** Auth providers such as Auth0 can collect and verify the code in their hosted login UI. */
+  signInWithOtp?(channel: OtpChannel, identifier: string): Promise<WalletIdentityToken>
+  supportsOtpChannel?(channel: OtpChannel): boolean
   signInWithSocial?(provider: string): Promise<WalletIdentityToken>
   /** Must return an API-audience access token from a server-validated auth flow. */
   signInWithPasskey?(): Promise<WalletIdentityToken>
@@ -46,6 +53,7 @@ export interface ExternalWalletConnection {
 export interface ExternalWalletProvider {
   id: ExternalWalletProviderId
   label: string
+  isAvailable?(): boolean
   connect(): Promise<ExternalWalletConnection>
   disconnect?(): Promise<void>
 }
@@ -90,6 +98,10 @@ export interface WalletState {
 
 export type WalletEvent =
   | { type: 'state'; state: WalletState }
+  | {
+      type: 'setup:progress'
+      stage: 'securing-device' | 'connecting-account' | 'finishing'
+    }
   | { type: 'transaction:confirmation'; id: string; intent: WalletTransactionIntentSnapshot }
   | { type: 'transaction:complete'; id: string; result: WalletTransactionResult }
   | { type: 'transaction:error'; id: string; error: Error }
@@ -169,6 +181,9 @@ export interface AltudeWalletConfig {
 export interface WalletUiOptions {
   presentation?: 'modal' | 'inline' | 'fullscreen'
   title?: string
+  /** Developer-configured providers used when the API has no walletUi settings. */
   socialProviders?: readonly string[]
+  /** API walletUi settings; when present, enabledMethods is an allowlist. */
+  walletUi?: WalletUiConfiguration | null
   onClose?: () => void
 }

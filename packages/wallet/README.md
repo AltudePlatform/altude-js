@@ -7,45 +7,69 @@ and optional Gas Station sponsorship. This package is in development and is
 ## Integration
 
 `AltudeWallet` works headlessly or with the framework-independent managed UI.
-Integrators provide their existing identity SDK adapter; the wallet SDK does
-not accept profile claims as authentication. It sends the provider's API-
-audience access token to `POST /api/EmbeddedWallet/auth0`, and the Altude API
-validates that token before issuing a wallet session.
+For browser apps using Auth0, the SDK includes a first-party SPA adapter for
+hosted social and email/SMS passwordless login. The SDK does not accept profile
+claims as authentication: it sends Auth0's API-audience access token to
+`POST /api/EmbeddedWallet/auth0`, and the Altude API validates that token
+before issuing a wallet session.
 
 ```ts
-import { AltudeWallet, mountWalletUI } from '@altude/wallet'
+import { AltudeWallet, createAuth0WalletAuth, mountWalletUI } from '@altude/wallet'
 
+const auth0 = await createAuth0WalletAuth({
+  domain: 'your-tenant.auth0.com',
+  clientId: 'your-public-spa-client-id',
+  audience: 'https://api.altude.so',
+  connections: {
+    Google: 'google-oauth2',
+    Apple: 'apple',
+  },
+  otpConnections: {
+    email: 'email',
+    sms: 'sms',
+  },
+})
 const wallet = new AltudeWallet({
   apiKey: import.meta.env.VITE_ALTUDE_API_KEY,
   apiBaseUrl: 'https://api.altude.so',
   network: 'devnet',
-  auth: {
-    // Implement these with the supported auth SDK/flow for your application.
-    startOtp: (channel, identifier) => auth.startOtp(channel, identifier),
-    verifyOtp: async (channel, identifier, code) => {
-      const result = await auth.verifyOtp(channel, identifier, code)
-      return {
-        accessToken: result.accessToken,
-        identityKey: result.stableSubject,
-      }
-    },
-    signInWithSocial: (provider) => auth.signInWithSocial(provider),
-    signInWithPasskey: () => auth.signInWithPasskey(),
-  },
+  auth: auth0.auth,
 })
 
 const unmount = mountWalletUI(document.querySelector('#wallet')!, wallet, {
   presentation: 'modal', // "inline" or "fullscreen" are also supported
-  socialProviders: ['Google', 'Apple'],
+  title: 'Altude',
+  socialProviders: auth0.socialProviders,
+  walletUi: await wallet.getWalletUiConfiguration(),
 })
 
 // The same typed methods are available to custom/headless interfaces.
 const stopListening = wallet.onEvent((event) => {
-  if (event.type === 'transaction:confirmation') {
+  if (event.type === 'setup:progress') {
+    // Track local wallet creation and server-session setup.
+  } else if (event.type === 'transaction:confirmation') {
     // Render your own confirmation. Approve only after explicit user consent.
   }
 })
 ```
+
+Register the browser origin in the Auth0 SPA application's **Allowed Callback
+URLs** and **Allowed Web Origins**, and enable the configured database/social
+connections for that application. The `clientId` is public; never put an Auth0
+client secret or server-secret API key in browser code. The helper keeps tokens
+in Auth0 SPA JS's in-memory cache. Email/SMS use Auth0-hosted login and require
+the corresponding passwordless connections and message delivery providers to
+be configured in Auth0. Use `null` for an `otpConnections` channel to disable
+it; defaults are `email` and `sms`.
+
+This package is browser-only. It uses the Auth0 SPA application and the existing
+API-validated wallet session contract; it does not use the native callback
+broker proposed in
+[AltudePlatform/Altude-Platform-API#338](https://github.com/AltudePlatform/Altude-Platform-API/issues/338).
+That separate API work explicitly excludes web SDK sign-in. Native iOS/Android
+callback setup and token exchange belong to their respective mobile SDKs.
+Applications using another identity provider can continue supplying a custom
+`WalletAuthProvider` adapter.
 
 ## External wallets
 
@@ -102,11 +126,11 @@ const provider = new WalletEmbedProvider({
 const state = await provider.init()
 ```
 
-The provider adapter's `identityKey` must be a stable identifier from the
+The custom provider adapter's `identityKey` must be a stable identifier from the
 configured identity SDK. It is used only to find this browser's local key; it
 does not authenticate the user. The access token is independently validated by
 the API. The SDK supports the API's current Auth0 exchange/session/signout
-contract; it does not invent native OTP, social, or passkey API endpoints.
+contract; it does not invent native broker, OTP, social, or passkey API endpoints.
 
 ## Custody and passkeys
 
@@ -156,10 +180,26 @@ Gas Station's supported account/RPC capabilities. Transaction lookup searches
 the most recent 100 history entries; the current Gas Station API does not
 provide a direct lookup endpoint.
 
-The managed UI offers email/SMS OTP, configured social/passkey sign-in, local
-passkey protection, transaction confirmation, account provisioning, and
-balance display. Authentication itself is delegated to the app's supported
-identity SDK; no API secrets are embedded in browser code.
+`getWalletUiConfiguration()` reads the optional `walletUi` section from
+`GET /api/transaction/config`. When that section exists, its enabled methods
+act as an allowlist and are intersected with the app's configured auth handlers
+and external-wallet adapters; an enabled method without an adapter is not shown.
+When the API returns no wallet UI settings, use explicit developer configuration
+as a fallback.
+
+The managed UI places email/SMS first, configured social and passkey buttons
+next, and an expandable Web3 wallet row last. The row lists only enabled,
+configured providers. For Auth0, the SDK launches hosted login from the
+corresponding sign-in action; other identity providers can use the custom
+adapter methods.
+During embedded sign-in, `setup:progress` reports local device-key protection,
+account connection, and session finalization. The managed UI shows those
+milestones and returns to the configured sign-in options after a failed login;
+it does not imply that an unimplemented recovery mechanism was configured.
+After sign-in, the managed UI shows the account contact, shortened address,
+device/passkey protection state, connected app, and the configured Solana
+explorer. Recovery is explicitly shown as not set up until a recovery feature
+is implemented; the recovery control remains unavailable.
 
 ## Runtime and support
 
