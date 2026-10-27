@@ -611,11 +611,12 @@ export function mountWalletUI(
           )
           providerButton.className = 'wallet-provider-card'
           providerButton.setAttribute('aria-label', `Connect ${provider.label}`)
-          const providerIcon = document.createElement('span')
+          const providerIcon = document.createElement('div')
+          providerIcon.innerHTML = web3icon(provider.label)
           providerIcon.className = 'wallet-provider-icon'
           providerIcon.dataset.provider = provider.id
           providerIcon.setAttribute('aria-hidden', 'true')
-          providerIcon.textContent = provider.label.slice(0, 1).toUpperCase()
+          //providerIcon.textContent = provider.label.slice(0, 1).toUpperCase()
           const providerName = document.createElement('span')
           providerName.className = 'wallet-provider-name'
           providerName.textContent = provider.label
@@ -1172,4 +1173,31 @@ function button(
   if (secondary) element.className = 'secondary'
   element.addEventListener('click', () => void action())
   return element
+}
+
+function web3icon(
+  web3icon:string,
+): string {
+  
+  const icontHtmlString = '';
+  if(web3icon.toLowerCase() == 'metamask')
+    return '<svg viewBox="0 0 40 38" width="26" height="26" aria-hidden="true">' +
+                              '<path fill="#E17726" stroke="#E17726" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m36.9 1-14.6 10.8 2.7-6.4z"/>' +      
+                              '<path fill="#E27625" stroke="#E27625" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m3.1 1 14.5 10.9-2.6-6.5zM31.5 27.1l-3.9 6 8.4 2.3 2.4-8.1zM1.7 27.3l2.4 8.1 8.3-2.3-3.8-6z"/>' +
+                              '<path fill="#E27625" stroke="#E27625" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m11.9 17.1-2.3 3.5 8.3.4-.3-9zM28.1 17.1l-5.8-5.2-.2 9.1 8.3-.4zM12.4 33.1l5-2.4-4.3-3.4zM22.6 30.7l5 2.4-.7-5.8z"/>' +
+                              '<path fill="#D5BFB2" stroke="#D5BFB2" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m27.6 33.1-5-2.4.4 3.3v1.4zM12.4 33.1l4.6 2.3v-1.4l.4-3.3z"/>' +
+                              '<path fill="#233447" stroke="#233447" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m17.1 24.8-4.1-1.2 2.9-1.3zM22.9 24.8l1.2-2.5 2.9 1.3z"/>' +
+                              '<path fill="#CC6228" stroke="#CC6228" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m12.4 33.1.7-6-4.6.1zM26.9 27.1l.7 6 3.9-5.9zM30.4 20.6l-8.3.4.8 4.2 1.2-2.5 2.9 1.3zM13 23.6l2.9-1.3 1.2 2.5.8-4.2-8.3-.4z"/>' +
+                              '<path fill="#E27525" stroke="#E27525" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m9.6 20.6 3.5 6.8-.1-3.4zM27.1 24l-.2 3.4 3.5-6.8zM17.9 21l-.8 4.2 1 5.3.2-7zM22.1 21l-.4 2.5.2 7 1-5.3z"/>' +
+                              '<path fill="#F5841F" stroke="#F5841F" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m22.9 24.8-1 5.3.7.5 4.3-3.4.2-3.4zM13 23.6l.1 3.4 4.3 3.4.7-.5-1-5.3z"/>' +
+                              '<path fill="#C0AC9D" stroke="#C0AC9D" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m23 35.4v-1.4l-.4-.3h-5.2l-.4.3v1.4l-4.6-2.3 1.6 1.3 3.3 2.3h5.3l3.3-2.3 1.6-1.3z"/>' +
+                              '<path fill="#763E1A" stroke="#763E1A" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m37.5 11.8 1.2-6-1.8-5.5-13.4 9.9 5.2 4.4 7.3 2.1 1.6-1.9-.7-.5 1.1-1-.8-.6 1.1-.9zM1.3 5.8l1.3 6-.8.6 1.1.9-.8.6 1.1 1-.7.5 1.6 1.9 7.3-2.1 5.2-4.4L3.1.3z"/>' +
+                              '<path fill="#F5841F" stroke="#F5841F" stroke-width=".25" stroke-linecap="round" stroke-linejoin="round" d="m35.8 18.2-7.3-2.1 2.2 3.3-3.3 6.4 4.4-.1h6.5zM11.5 16.1l-7.3 2.1-2.4 7.5h6.5l4.3.1-3.2-6.4zM22.1 21l.5-8-2.1-5.7h-1L17.4 13l.5 8 .2 2.6v6.9h3.8l.2-6.9z"/>' +
+                            '</svg>'
+  if(web3icon.toLowerCase() == 'phantom')
+    return '<svg viewBox="0 0 128 128" width="26" height="26" aria-hidden="true">'+
+                              '<rect width="128" height="128" rx="28" fill="#AB9FF2"/>' +
+                              '<path fill="#FFFDF8" d="M110.6 64.9h-9.9c0-20.3-16.4-36.9-36.8-36.9-20.1 0-36.5 16.2-36.9 36.2C26.6 84.9 45 105 65.4 105h2.6c17.9 0 41.9-14 45.6-31 .7-3.1-1.6-9.1-3-9.1zM52.5 66c0 2.8-2.3 5-5 5s-5-2.3-5-5 2.3-5.1 5-5.1 5 2.3 5 5.1zm17.3 0c0 2.8-2.3 5-5 5s-5-2.3-5-5 2.3-5.1 5-5.1 5 2.3 5 5.1z"/>' +
+                            '</svg>'
+  return icontHtmlString
 }
