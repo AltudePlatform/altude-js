@@ -11,8 +11,14 @@ Production TypeScript SDK for Altude gasless Solana infrastructure.
 | [`@altude/core`](./packages/core) | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
 | [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API |
 
-Only packages in this table are supported and published. Experimental package
-work does not live on the production branch and carries no release commitment.
+Only packages in this table are supported and published. Experimental packages
+remain unpublished and carry no release commitment.
+
+## Experimental packages
+
+[`@altude/wallet-react-native`](./packages/wallet-react-native) is a separate
+React Native client for the native wallet callback broker. It is not part of
+the production release set.
 
 ## Quick Start
 

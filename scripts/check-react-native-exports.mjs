@@ -5,18 +5,22 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const packageDirectories = ['core', 'gasstation']
+const packageDirectories = ['core', 'gasstation', 'wallet-react-native']
 
 for (const directory of packageDirectories) {
   const packageRoot = join(root, 'packages', directory)
   const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
   const nativeEntry = packageJson.exports['.']['react-native']
-  const browserEntry = packageJson.exports['.'].browser
-
   assert.equal(packageJson['react-native'], nativeEntry)
-  assert.equal(packageJson.browser, browserEntry)
-
   const nativeArtifact = await readFile(join(packageRoot, nativeEntry), 'utf8')
+  if (directory === 'wallet-react-native') {
+    assert.doesNotMatch(nativeArtifact, /\b(?:Buffer|ws)\b/)
+    assert.doesNotMatch(nativeArtifact, /(?:from|require\() ['"]node:/)
+    continue
+  }
+
+  const browserEntry = packageJson.exports['.'].browser
+  assert.equal(packageJson.browser, browserEntry)
   const browserArtifact = await readFile(join(packageRoot, browserEntry), 'utf8')
 
   assert.match(nativeArtifact, /from 'gill\/react-native'/)
@@ -46,6 +50,13 @@ async function bundleNativePackage(directory) {
 
 await bundleNativePackage('core')
 const bundledSource = await bundleNativePackage('gasstation')
+const walletNativeSource = await bundleNativePackage('wallet-react-native')
+assert.doesNotMatch(walletNativeSource, /\bBuffer\b/)
+assert.doesNotMatch(walletNativeSource, /(?:from|require\() ['"](?:ws|node:)/)
+
+const nativeWalletModuleUrl = `data:text/javascript;base64,${Buffer.from(walletNativeSource).toString('base64')}`
+const nativeWallet = await import(nativeWalletModuleUrl)
+assert.equal(typeof nativeWallet.NativeWalletClient, 'function')
 
 const hermesLikeSource = `const Buffer = undefined;\nconst DOMException = undefined;\n${bundledSource}`
 const bundledModuleUrl = `data:text/javascript;base64,${Buffer.from(hermesLikeSource).toString('base64')}`
