@@ -8,15 +8,24 @@ import type {
 export type WalletProtection = 'device-local' | 'passkey'
 export type OtpChannel = 'email' | 'sms'
 
-export interface WalletIdentityToken {
-  /** Access token for the API's configured Auth0 audience. The API validates it. */
-  accessToken: string
+export type WalletIdentityToken = {
   /**
    * Stable opaque identity key from the configured identity SDK. It is used
    * only to select this browser's local key; it never authenticates a session.
    */
   identityKey: string
-}
+} & (
+  | {
+      /** Access token for the API's configured Auth0 audience. The API validates it. */
+      accessToken: string
+      broker?: never
+    }
+  | {
+      /** One-time browser-broker ticket, never an Auth0 provider token. */
+      broker: { identityTicket: string }
+      accessToken?: never
+    }
+)
 
 export interface WalletUser {
   id: string
@@ -33,11 +42,11 @@ export interface WalletSession {
 export interface WalletAuthProvider {
   startOtp?(channel: OtpChannel, identifier: string): Promise<void>
   verifyOtp?(channel: OtpChannel, identifier: string, code: string): Promise<WalletIdentityToken>
-  /** Auth providers such as Auth0 can collect and verify the code in their hosted login UI. */
+  /** Custom providers may opt into collecting the code in their own hosted login UI. */
   signInWithOtp?(channel: OtpChannel, identifier: string): Promise<WalletIdentityToken>
   supportsOtpChannel?(channel: OtpChannel): boolean
   signInWithSocial?(provider: string): Promise<WalletIdentityToken>
-  /** Must return an API-audience access token from a server-validated auth flow. */
+  /** Must return credentials from a server-validated auth flow. */
   signInWithPasskey?(): Promise<WalletIdentityToken>
 }
 
@@ -188,7 +197,7 @@ export interface WalletUiOptions {
   title?: string
   /** Developer-configured providers used when the API has no walletUi settings. */
   socialProviders?: readonly string[]
-  /** API walletUi settings; when present, enabledMethods is an allowlist. */
+  /** API walletUi settings; when present, authMethods is an allowlist. */
   walletUi?: WalletUiConfiguration | null
   onClose?: () => void
 }

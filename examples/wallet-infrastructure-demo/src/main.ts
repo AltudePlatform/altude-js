@@ -13,7 +13,12 @@ import type {
   SendTransactionResponse,
   WalletUiConfiguration,
 } from '@altude/gasstation'
-import { AltudeWallet, createAuth0WalletAuth, mountWalletUI } from '@altude/wallet'
+import {
+  AltudeWallet,
+  createAuth0WalletAuth,
+  createBrowserWalletAuth,
+  mountWalletUI,
+} from '@altude/wallet'
 import type { ExternalWalletProvider } from '@altude/wallet'
 import './styles.css'
 
@@ -208,32 +213,35 @@ function getInjectedWallets(enabled: boolean): ExternalWalletProvider[] {
 async function createLiveWallet(input: {
   apiKey: string
   apiBaseUrl: string
+  authMode: string
   auth0Domain: string
   auth0ClientId: string
+  auth0Audience: string
   connections: Record<string, string>
   otpConnections: { email: string | null; sms: string | null }
   externalWallets: readonly ExternalWalletProvider[]
 }): Promise<{ wallet: AltudeWallet; providers: string[] }> {
-  const apiUrl = new URL(input.apiBaseUrl)
-  const audience = apiUrl.toString().replace(/\/$/, '')
-  const auth0 = await createAuth0WalletAuth({
-    domain: input.auth0Domain,
-    clientId: input.auth0ClientId,
-    apiKey: input.apiKey,
-    audience,
-    connections: input.connections,
-    otpConnections: input.otpConnections,
-    redirectUri: window.location.origin,
-  })
+  const authentication =
+    input.authMode === 'broker'
+      ? await createBrowserWalletAuth({ apiKey: input.apiKey, apiBaseUrl: input.apiBaseUrl })
+      : await createAuth0WalletAuth({
+          domain: input.auth0Domain,
+          clientId: input.auth0ClientId,
+          apiKey: input.apiKey,
+          audience: input.auth0Audience,
+          connections: input.connections,
+          otpConnections: input.otpConnections,
+          redirectUri: window.location.origin,
+        })
 
   return {
-    providers: [...auth0.socialProviders],
+    providers: [...authentication.socialProviders],
     wallet: new AltudeWallet({
       apiKey: input.apiKey,
       apiBaseUrl: input.apiBaseUrl,
       network: 'devnet',
       externalWallets: input.externalWallets,
-      auth: auth0.auth,
+      auth: authentication.auth,
     }),
   }
 }
@@ -299,6 +307,19 @@ root.innerHTML = `
             <span>Altude API base URL</span>
             <input id="api-base-url" type="url" value="https://api.altude.so" autocomplete="url" />
           </label>
+          <label class="api-key-field" for="auth-mode">
+            <span>Authentication</span>
+            <select id="auth-mode">
+              <option value="broker">Altude browser broker (recommended)</option>
+              <option value="direct">Direct Auth0 SPA (advanced)</option>
+            </select>
+          </label>
+          <p id="broker-help" class="api-key-help">
+            The SDK discovers sign-in methods from Altude using your API key. Keep your own
+            email/SMS code screen without registering this site as an Auth0 callback.
+            An operator must enroll this exact origin with the deployed browser broker.
+          </p>
+          <div id="direct-auth0-settings" class="social-settings" hidden>
           <label class="api-key-field" for="auth0-domain">
             <span>Auth0 domain</span>
             <input id="auth0-domain" type="text" placeholder="your-tenant.auth0.com" autocomplete="off" />
@@ -307,6 +328,15 @@ root.innerHTML = `
             <span>Auth0 SPA client ID</span>
             <input id="auth0-client-id" type="text" autocomplete="off" />
           </label>
+          <label class="api-key-field" for="auth0-audience">
+            <span>Auth0 API audience</span>
+            <input id="auth0-audience" type="text" value="https://api.altude.so" placeholder="Your Auth0 API identifier" autocomplete="off" aria-describedby="auth0-audience-help" />
+          </label>
+          <p id="auth0-audience-help" class="api-key-help">
+            Public API identifier, not a secret. Must match the API configured in Auth0 and
+            the audience accepted by the Altude backend; it can differ from the API base URL.
+            Changing this does not change the backend's token validation.
+          </p>
           <p class="api-key-help">
             Configure this origin in Auth0 Allowed Callback URLs and Allowed Web Origins.
             Passwordless connections default to <code>email</code> and <code>sms</code>;
@@ -320,8 +350,9 @@ root.innerHTML = `
             <span>SMS passwordless connection</span>
             <input id="sms-connection" type="text" value="sms" autocomplete="off" />
           </label>
+          </div>
           <label class="toggle-row" for="enable-social-login">
-            <span><strong>Social login</strong><small>Use configured Auth0 connections; API wallet settings can filter them.</small></span>
+            <span><strong>Social login</strong><small>Use broker-discovered providers, or explicit direct Auth0 connections.</small></span>
             <input id="enable-social-login" type="checkbox" role="switch" checked />
           </label>
           <fieldset class="config-source-controls" aria-labelledby="config-source-title">
@@ -342,7 +373,7 @@ root.innerHTML = `
               Uses API wallet UI methods when returned; otherwise, the demo switches provide the fallback.
             </p>
           </fieldset>
-          <div id="social-settings" class="social-settings">
+          <div id="social-settings" class="social-settings" hidden>
             <label class="api-key-field" for="google-connection">
               <span>Google connection (optional)</span>
               <input id="google-connection" type="text" placeholder="google-oauth2" autocomplete="off" />
@@ -369,14 +400,19 @@ root.innerHTML = `
           <h2 id="integration-title">Add the SDK UI to your app</h2>
           <p>Pass your client-safe API key when configuring the wallet, then mount its modal.</p>
         </div>
-        <pre><code>const wallet = new AltudeWallet({
+        <pre><code>const apiBaseUrl = 'https://api.altude.so'
+const { auth, socialProviders } =
+  await createBrowserWalletAuth({ apiKey, apiBaseUrl })
+
+const wallet = new AltudeWallet({
   apiKey,
-  apiBaseUrl: 'https://api.altude.so',
+  apiBaseUrl,
   auth,
 })
 
 mountWalletUI(document.body, wallet, {
   presentation: 'modal',
+  socialProviders,
 })</code></pre>
       </section>
       <p class="simulation-note">
@@ -397,8 +433,12 @@ const modeInput = root.querySelector<HTMLSelectElement>('#connection-mode')
 const liveSettings = root.querySelector<HTMLElement>('#live-settings')
 const demoCode = root.querySelector<HTMLElement>('#demo-code')
 const apiBaseUrlInput = root.querySelector<HTMLInputElement>('#api-base-url')
+const authModeInput = root.querySelector<HTMLSelectElement>('#auth-mode')
+const directAuth0Settings = root.querySelector<HTMLElement>('#direct-auth0-settings')
+const brokerHelp = root.querySelector<HTMLElement>('#broker-help')
 const auth0DomainInput = root.querySelector<HTMLInputElement>('#auth0-domain')
 const auth0ClientIdInput = root.querySelector<HTMLInputElement>('#auth0-client-id')
+const auth0AudienceInput = root.querySelector<HTMLInputElement>('#auth0-audience')
 const emailConnectionInput = root.querySelector<HTMLInputElement>('#email-connection')
 const smsConnectionInput = root.querySelector<HTMLInputElement>('#sms-connection')
 const googleConnectionInput = root.querySelector<HTMLInputElement>('#google-connection')
@@ -418,8 +458,12 @@ if (
   !liveSettings ||
   !demoCode ||
   !apiBaseUrlInput ||
+  !authModeInput ||
+  !directAuth0Settings ||
+  !brokerHelp ||
   !auth0DomainInput ||
   !auth0ClientIdInput ||
+  !auth0AudienceInput ||
   !emailConnectionInput ||
   !smsConnectionInput ||
   !googleConnectionInput ||
@@ -473,10 +517,17 @@ modeInput.addEventListener('change', () => {
   walletUiConfiguration = null
   serverWalletUiConfiguration = null
   updateConfigSource(false)
+  updateAuthSettings()
 })
-socialLoginInput.addEventListener('change', () => {
-  socialSettings.hidden = !socialLoginInput.checked
-})
+const updateAuthSettings = () => {
+  const direct = authModeInput.value === 'direct'
+  directAuth0Settings.hidden = !direct
+  brokerHelp.hidden = direct
+  socialSettings.hidden = !direct || !socialLoginInput.checked
+}
+socialLoginInput.addEventListener('change', updateAuthSettings)
+authModeInput.addEventListener('change', updateAuthSettings)
+updateAuthSettings()
 const updateWeb3WalletStatus = () => {
   const available = getInjectedWallets(true)
     .filter((provider) => provider.isAvailable?.())
@@ -513,8 +564,10 @@ openButton.addEventListener('click', () => {
   void (async () => {
     try {
       const apiBaseUrl = apiBaseUrlInput.value.trim()
+      const authMode = authModeInput.value
       const auth0Domain = auth0DomainInput.value.trim()
       const auth0ClientId = auth0ClientIdInput.value.trim()
+      const auth0Audience = auth0AudienceInput.value.trim()
       const otpConnections = {
         email: emailConnectionInput.value.trim() || null,
         sms: smsConnectionInput.value.trim() || null,
@@ -530,13 +583,15 @@ openButton.addEventListener('click', () => {
           }
         : {}
       const externalWallets = getInjectedWallets(web3WalletsInput.checked)
-      const configuredSocialProviders = Object.keys(connections)
       const walletKey = JSON.stringify({
         mode,
+        authMode,
+        socialEnabled: socialLoginInput.checked,
         apiKey,
         apiBaseUrl,
         auth0Domain,
         auth0ClientId,
+        auth0Audience,
         connections,
         otpConnections,
         externalWallets: externalWallets.map(({ id }) => id),
@@ -547,14 +602,19 @@ openButton.addEventListener('click', () => {
           wallet = createDemoWallet(apiKey, 'https://wallet-api.demo.invalid', externalWallets)
           socialProviders = []
         } else {
-          if (!auth0Domain || !auth0ClientId) {
+          if (authMode === 'direct' && (!auth0Domain || !auth0ClientId)) {
             throw new Error('Enter the Auth0 domain and SPA client ID for live mode.')
+          }
+          if (authMode === 'direct' && !auth0Audience) {
+            throw new Error('Enter the Auth0 API audience for live mode.')
           }
           const live = await createLiveWallet({
             apiKey,
             apiBaseUrl,
+            authMode,
             auth0Domain,
             auth0ClientId,
+            auth0Audience,
             connections,
             otpConnections,
             externalWallets,
@@ -566,29 +626,39 @@ openButton.addEventListener('click', () => {
       }
 
       if (!wallet) throw new Error('The wallet could not be configured.')
+      const configuredSocialProviders = socialLoginInput.checked ? socialProviders : []
       serverWalletUiConfiguration = mode === 'live' ? await wallet.getWalletUiConfiguration() : null
       const serverWalletUi = serverWalletUiConfiguration
-      const fallbackWalletUi: WalletUiConfiguration = {
-        appName: 'Altude',
-        enabledMethods: {
+      const fallbackWalletUi = {
+        branding: { appName: 'Altude' },
+        legal: {
+          smsConsentText:
+            'Continue to receive a one-time sign-in code by SMS. Message and data rates may apply.',
+        },
+        authMethods: {
           emailOtp: true,
           smsOtp: true,
           socialProviders: configuredSocialProviders,
           passkey: false,
-          externalWalletProviders: externalWallets.map(({ id }) => id),
+          externalWallets: externalWallets.map(({ id }) => id),
         },
-      }
+      } satisfies WalletUiConfiguration
       walletUiConfiguration =
         overrideTransactionConfig && mode === 'live'
           ? {
               ...(serverWalletUi ?? fallbackWalletUi),
-              enabledMethods: {
-                ...serverWalletUi?.enabledMethods,
+              legal: {
+                ...serverWalletUi?.legal,
+                smsConsentText:
+                  serverWalletUi?.legal?.smsConsentText ?? fallbackWalletUi.legal?.smsConsentText,
+              },
+              authMethods: {
+                ...serverWalletUi?.authMethods,
                 emailOtp: true,
                 smsOtp: true,
                 socialProviders: configuredSocialProviders,
                 passkey: false,
-                externalWalletProviders: externalWallets.map(({ id }) => id),
+                externalWallets: externalWallets.map(({ id }) => id),
               },
             }
           : (serverWalletUi ?? fallbackWalletUi)
@@ -597,7 +667,7 @@ openButton.addEventListener('click', () => {
       unmountWalletUi = mountWalletUI(document.body, wallet, {
         presentation: 'modal',
         title: 'Altude Demo',
-        socialProviders,
+        socialProviders: configuredSocialProviders,
         walletUi: walletUiConfiguration,
         onClose: closeWalletUi,
       })

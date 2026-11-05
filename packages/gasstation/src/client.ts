@@ -39,20 +39,24 @@ export interface ConfigResponse {
 }
 
 export interface WalletUiConfiguration {
-  appName?: string | null
-  tagline?: string | null
-  logoUrl?: string | null
-  termsUrl?: string | null
-  privacyUrl?: string | null
-  enabledMethods?: {
+  branding?: {
+    appName?: string | null
+    tagline?: string | null
+    logoUrl?: string | null
+  } | null
+  legal?: {
+    termsUrl?: string | null
+    privacyUrl?: string | null
+    smsConsentText?: string | null
+  } | null
+  authMethods?: {
     emailOtp?: boolean
     smsOtp?: boolean
     socialProviders?: readonly string[]
     passkey?: boolean
-    externalWalletProviders?: readonly ('metamask' | 'phantom' | 'walletconnect')[]
+    externalWallets?: readonly string[]
   } | null
-  trustedBadges?: {
-    nonCustodialVerified?: boolean
+  trust?: {
     ikaRecoveryVerified?: boolean
     soc2Verified?: boolean
   } | null

@@ -2,6 +2,8 @@ export { AltudeWallet } from './wallet.js'
 export { AltudeWalletError } from './errors.js'
 export { createAuth0WalletAuth } from './auth0.js'
 export type { Auth0WalletAuth, Auth0WalletAuthOptions } from './auth0.js'
+export { createBrowserWalletAuth } from './broker.js'
+export type { BrowserWalletAuth, BrowserWalletAuthOptions } from './broker.js'
 export {
   IndexedDbWalletStore,
   MemorySessionTokenStore,

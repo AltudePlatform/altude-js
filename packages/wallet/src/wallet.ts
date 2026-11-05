@@ -267,7 +267,9 @@ export class AltudeWallet {
     let result: Awaited<ReturnType<EmbeddedWalletApi['exchangeAuth0']>>
     this.#emit({ type: 'setup:progress', stage: 'connecting-account' })
     try {
-      result = await this.#api.exchangeAuth0(identity.accessToken, address)
+      result = identity.broker
+        ? await this.#api.exchangeBrowserBroker(identity.broker.identityTicket, address)
+        : await this.#api.exchangeAuth0(identity.accessToken, address)
     } catch (error) {
       if (!this.#isCurrentLifecycle(generation)) {
         this.#lockStaleIdentity(identity.identityKey)
@@ -805,10 +807,11 @@ export class AltudeWallet {
   }
 
   #assertIdentity(identity: WalletIdentityToken): void {
-    if (!identity.accessToken.trim())
+    const credential = identity.broker ? identity.broker.identityTicket : identity.accessToken
+    if (!credential.trim())
       throw new AltudeWalletError(
         'AUTHENTICATION',
-        'The identity provider returned no access token.',
+        'The identity provider must return an access token or a browser identity ticket.',
       )
     if (!identity.identityKey.trim() || identity.identityKey.length > 512) {
       throw new AltudeWalletError(

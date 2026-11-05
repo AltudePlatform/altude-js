@@ -1,4 +1,12 @@
 import { createAuth0Client } from '@auth0/auth0-spa-js'
+import { WebAuth } from 'auth0-js'
+import type {
+  Auth0Callback,
+  Auth0DecodedHash,
+  Auth0Error,
+  Auth0UserProfile,
+  PasswordlessLoginOptions,
+} from 'auth0-js'
 import type { WalletAuthProvider } from './types.js'
 
 export interface Auth0WalletAuthOptions {
@@ -53,28 +61,55 @@ export async function createAuth0WalletAuth(
     throw new Error('The Auth0 scope must include openid to return a stable user identifier.')
   }
 
+  const redirectUri = options.redirectUri ?? window.location.origin
+  const customParams = JSON.stringify({ walletApiKey: apiKey })
   const client = await createAuth0Client({
     domain,
     clientId,
     authorizationParams: {
-      redirect_uri: options.redirectUri ?? window.location.origin,
+      redirect_uri: redirectUri,
       audience,
       scope,
       customParams: JSON.stringify({ walletApiKey: apiKey }),
     },
     cacheLocation: 'memory',
   })
+  const passwordless = new WebAuth({
+    domain,
+    clientID: clientId,
+    redirectUri,
+    audience,
+    scope,
+    responseType: 'token id_token',
+  })
+
+  const otpParameters = (channel: 'email' | 'sms', identifier: string) => {
+    const connection = otpConnections[channel]
+    if (!connection) {
+      throw new Error(`No Auth0 ${channel} passwordless connection is configured.`)
+    }
+    const value = identifier.trim()
+    if (channel === 'email') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        throw new Error('Enter an email address.')
+      }
+      return { connection, email: value }
+    }
+    const phoneNumber = value.replace(/[\s().-]/g, '')
+    if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber)) {
+      throw new Error('Enter a phone number including its country code.')
+    }
+    return { connection, phoneNumber }
+  }
 
   const signIn = async (
     connection: string,
-    loginHint?: string,
   ): Promise<{ accessToken: string; identityKey: string }> => {
     const authorizationParams = {
       connection,
       audience,
       scope,
       customParams: JSON.stringify({ walletApiKey: apiKey }),
-      ...(loginHint ? { login_hint: loginHint } : {}),
     }
     await client.loginWithPopup({ authorizationParams })
     const accessToken = await client.getTokenSilently({ authorizationParams })
@@ -94,16 +129,46 @@ export async function createAuth0WalletAuth(
       supportsOtpChannel(channel) {
         return Boolean(otpConnections[channel])
       },
-      async signInWithOtp(channel, identifier) {
-        const connection = otpConnections[channel]
-        if (!connection) {
-          throw new Error(`No Auth0 ${channel} passwordless connection is configured.`)
+      async startOtp(channel, identifier) {
+        const parameters = otpParameters(channel, identifier)
+        const authParams = { audience, scope, customParams }
+        await passwordlessRequest<unknown>((callback) => {
+          passwordless.passwordlessStart({ ...parameters, send: 'code', authParams }, callback)
+        })
+      },
+      async verifyOtp(channel, identifier, code) {
+        const parameters = otpParameters(channel, identifier)
+        const verificationCode = code.trim()
+        if (!verificationCode) throw new Error('Enter the verification code.')
+        // Auth0.js uses a hidden web_message iframe for popup:true in this flow,
+        // not a visible popup or redirect. It validates OAuth state and ID-token nonce.
+        const loginOptions: PasswordlessLoginOptions & {
+          popup: true
+          customParams: string
+        } = {
+          ...parameters,
+          verificationCode,
+          audience,
+          scope,
+          customParams,
+          popup: true,
         }
-        const value = identifier.trim()
-        if (!value) {
-          throw new Error(channel === 'email' ? 'Enter an email address.' : 'Enter a phone number.')
+        const result = await passwordlessRequest<Auth0DecodedHash | null>((callback) => {
+          passwordless.passwordlessLogin(loginOptions, callback)
+        })
+        if (!result?.accessToken?.trim()) {
+          throw new Error('Auth0 did not return an API-audience access token.')
         }
-        return signIn(connection, value)
+        const accessToken = result.accessToken
+        const user = await passwordlessRequest<Partial<Pick<Auth0UserProfile, 'sub'>> | null>(
+          (callback) => {
+            passwordless.client.userInfo(accessToken, callback)
+          },
+        )
+        if (!user?.sub?.trim()) {
+          throw new Error('Auth0 did not return a stable user identifier.')
+        }
+        return { accessToken, identityKey: user.sub }
       },
       async signInWithSocial(provider) {
         const connection = connections[provider]
@@ -113,6 +178,40 @@ export async function createAuth0WalletAuth(
         return signIn(connection)
       },
     },
+  }
+}
+
+function passwordlessRequest<T>(request: (callback: Auth0Callback<T>) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request((error, result) => {
+      if (error) reject(passwordlessError(error))
+      else resolve(result)
+    })
+  })
+}
+
+function passwordlessError(error: Auth0Error): Error {
+  switch (error.code ?? error.error) {
+    case 'too_many_attempts':
+    case 'too_many_requests':
+      return new Error('Too many verification attempts. Wait a few minutes and try again.')
+    case 'invalid_password':
+    case 'invalid_grant':
+    case 'unauthorized':
+      return new Error('The verification code is invalid or expired. Request a new code.')
+    case 'timeout':
+    case 'login_required':
+    case 'origin_mismatch':
+    case 'unauthorized_client':
+    case 'access_denied':
+    case 'consent_required':
+      return new Error(
+        'Auth0 could not complete embedded sign-in. Check the passwordless connection, allowed origins, consent, and browser cookie settings.',
+      )
+    default:
+      return new Error(
+        'Auth0 passwordless sign-in failed. Try again or check the Auth0 configuration.',
+      )
   }
 }
 

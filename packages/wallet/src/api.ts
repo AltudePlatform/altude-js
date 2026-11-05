@@ -52,18 +52,22 @@ export class EmbeddedWalletApi {
       method: 'POST',
       body: JSON.stringify({ accessToken, walletAddress }),
     })
-    const success = field(data, 'success', 'Success') === true
-    const tokenValue = field(data, 'sessionToken', 'SessionToken')
-    const token = typeof tokenValue === 'string' ? tokenValue : ''
-    const user = normalizeUser(field(data, 'user', 'User'))
-    if (!success || !token || !user) {
-      throw new AltudeWalletError(
-        'AUTHENTICATION',
-        stringField(data, 'message', 'Message') ||
-          'The API did not establish an authenticated wallet session.',
-      )
-    }
-    return { token, user }
+    return normalizeExchange(data)
+  }
+
+  async exchangeBrowserBroker(
+    identityTicket: string,
+    walletAddress: string,
+  ): Promise<{ token: string; user: WalletUser }> {
+    if (!identityTicket.trim())
+      throw new AltudeWalletError('AUTHENTICATION', 'A browser identity ticket is required.')
+    if (!walletAddress.trim())
+      throw new AltudeWalletError('INVALID_INPUT', 'A local wallet address is required.')
+    const data = await this.#request('/api/browser-wallet/session', {
+      method: 'POST',
+      body: JSON.stringify({ IdentityTicket: identityTicket, WalletAddress: walletAddress }),
+    })
+    return normalizeExchange(data)
   }
 
   async getSession(token: string): Promise<WalletSession | null> {
@@ -111,6 +115,9 @@ export class EmbeddedWalletApi {
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method: options.method,
       headers,
+      credentials: 'omit',
+      redirect: 'error',
+      cache: 'no-store',
       ...(options.body !== undefined ? { body: options.body } : {}),
     })
     const data: unknown = await response.json().catch(() => null)
@@ -132,6 +139,21 @@ export class EmbeddedWalletApi {
     }
     return data
   }
+}
+
+function normalizeExchange(data: unknown): { token: string; user: WalletUser } {
+  const success = field(data, 'success', 'Success') === true
+  const tokenValue = field(data, 'sessionToken', 'SessionToken')
+  const token = typeof tokenValue === 'string' ? tokenValue : ''
+  const user = normalizeUser(field(data, 'user', 'User'))
+  if (!success || !token || !user) {
+    throw new AltudeWalletError(
+      'AUTHENTICATION',
+      stringField(data, 'message', 'Message') ||
+        'The API did not establish an authenticated wallet session.',
+    )
+  }
+  return { token, user }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

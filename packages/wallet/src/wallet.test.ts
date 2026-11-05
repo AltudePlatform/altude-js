@@ -118,8 +118,8 @@ describe('AltudeWallet', () => {
 
   it('reads the optional wallet UI settings from transaction config', async () => {
     const walletUi = {
-      appName: 'Example',
-      enabledMethods: { emailOtp: false, socialProviders: ['google'] },
+      branding: { appName: 'Example' },
+      authMethods: { emailOtp: false, socialProviders: ['google'] },
     }
     gasStation.getConfig.mockResolvedValue({ walletUi })
     const wallet = createWallet()
@@ -128,6 +128,49 @@ describe('AltudeWallet', () => {
     await expect(wallet.getWalletUiConfiguration()).resolves.toEqual(walletUi)
     gasStation.getConfig.mockResolvedValue({})
     await expect(wallet.getWalletUiConfiguration()).resolves.toBeNull()
+  })
+
+  it('exchanges browser identity tickets separately and reuses the same local signer', async () => {
+    fetchMock.mockImplementation((_url: string, request: RequestInit) => {
+      const body: unknown = typeof request.body === 'string' ? JSON.parse(request.body) : null
+      if (typeof body !== 'object' || body === null || !('WalletAddress' in body)) {
+        throw new Error('Expected browser broker session binding')
+      }
+      return Promise.resolve(jsonResponse({
+        Success: true,
+        SessionToken: 'broker-session',
+        User: { Id: 'broker-user', WalletAddress: body.WalletAddress },
+      }))
+    })
+    const wallet = createWallet()
+    const first = await wallet.connect({ identityKey: 'auth0|broker-user', broker: { identityTicket: 'ticket-1' } })
+    expect(first.status).toBe('connected')
+    expect(sessionTokens.token).toBe('broker-session')
+    const second = await wallet.connect({ identityKey: 'auth0|broker-user', broker: { identityTicket: 'ticket-2' } })
+    expect(second.address).toBe(first.address)
+    expect(store.records.size).toBe(1)
+    expect(store.records.get('auth0|broker-user')?.serverUserId).toBe('broker-user')
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://api.example.test/api/browser-wallet/session', expect.objectContaining({
+      body: JSON.stringify({ IdentityTicket: 'ticket-1', WalletAddress: first.address }),
+      credentials: 'omit',
+      redirect: 'error',
+    }))
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(new Headers(request.headers).get('X-API-Key')).toBe('test-api-key')
+    expect(new Headers(request.headers).has('Authorization')).toBe(false)
+  })
+
+  it('preserves local-wallet binding checks for broker sessions', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      Success: true, SessionToken: 'broker-session',
+      User: { Id: 'broker-user', WalletAddress: 'different-wallet' },
+    }))
+    const wallet = createWallet()
+    await expect(wallet.connect({
+      identityKey: 'auth0|broker-user', broker: { identityTicket: 'ticket' },
+    })).rejects.toThrow('does not match')
+    expect(sessionTokens.token).toBeNull()
+    expect(wallet.state.status).toBe('disconnected')
   })
 
   it('routes hosted OTP through the auth provider and exchanges its token with the API', async () => {

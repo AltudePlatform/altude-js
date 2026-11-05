@@ -267,11 +267,11 @@ describe('AltudeHttpClient — live mode', () => {
         RpcEnvironment: 'devnet',
         TokenExpiration: '2099-01-01T00:00:00Z',
         walletUi: {
-          appName: 'Example',
-          enabledMethods: {
+          branding: { appName: 'Example' },
+          authMethods: {
             emailOtp: true,
             socialProviders: ['google'],
-            externalWalletProviders: ['phantom'],
+            externalWallets: ['phantom'],
           },
         },
       }),
@@ -285,7 +285,7 @@ describe('AltudeHttpClient — live mode', () => {
     const requestInit = fetchSpy.mock.calls[0]?.[1]
 
     expect(first).toEqual(second)
-    expect(first.walletUi?.enabledMethods?.externalWalletProviders).toEqual(['phantom'])
+    expect(first.walletUi?.authMethods?.externalWallets).toEqual(['phantom'])
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.altude.so/api/transaction/config')
     expect(requestInit).toMatchObject({

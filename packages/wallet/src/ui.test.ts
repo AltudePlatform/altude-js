@@ -26,6 +26,7 @@ describe('mountWalletUI', () => {
         return state
       },
       canStartOtp: true,
+      canSignInWithOtp: (channel: 'email' | 'sms') => channel === 'email',
       canSignInWithSocial: false,
       canSignInWithPasskey: false,
       externalWalletProviders: [],
@@ -60,18 +61,48 @@ describe('mountWalletUI', () => {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => {
       expect(startOtp).toHaveBeenCalledWith('email', 'wallet@example.test')
-      expect(dialog?.textContent).toContain('Check your email')
+      expect(dialog?.textContent).toContain('Check your inbox')
+      expect(dialog?.querySelector('.subtitle strong')?.textContent).toBe('wallet@example.test')
     })
 
-    const code = dialog?.querySelector<HTMLInputElement>('[autocomplete="one-time-code"]')
-    if (!code) throw new Error('Expected the one-time code field.')
-    code.value = '246810'
-    code.dispatchEvent(new Event('input', { bubbles: true }))
+    const codes = [...(dialog?.querySelectorAll<HTMLInputElement>('.otp-fields input') ?? [])]
+    const codeAt = (index: number) => {
+      const field = codes[index]
+      if (!field) throw new Error('Expected a code digit input.')
+      return field
+    }
+    expect(codes).toHaveLength(6)
+    expect(document.activeElement).toBe(codes[0])
     const verify = [...(dialog?.querySelectorAll('button') ?? [])].find(
       (control) => control.textContent === 'Verify and continue',
     )
     if (!verify) throw new Error('Expected the verification button.')
-    verify.click()
+    expect(verify.disabled).toBe(true)
+    expect(verify.hidden).toBe(true)
+    expect(dialog?.querySelector('.otp-resend')?.textContent).toContain("Didn't get it?Resend code")
+    for (const [index, digit] of ['2', '4', '6', '8', '1'].entries()) {
+      const field = codeAt(index)
+      expect(field.inputMode).toBe('numeric')
+      expect(field.getAttribute('aria-label')).toBe(`Digit ${String(index + 1)} of 6`)
+      field.value = digit
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(document.activeElement).toBe(codes[index + 1])
+    }
+    expect(verifyOtp).not.toHaveBeenCalled()
+    codeAt(5).dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }))
+    expect(document.activeElement).toBe(codes[4])
+    expect(codeAt(4).value).toBe('')
+    codeAt(4).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    expect(document.activeElement).toBe(codes[3])
+    codeAt(3).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    expect(document.activeElement).toBe(codes[4])
+    codeAt(4).value = 'x'
+    codeAt(4).dispatchEvent(new Event('input', { bubbles: true }))
+    expect(codeAt(4).value).toBe('')
+    codeAt(4).value = '1'
+    codeAt(4).dispatchEvent(new Event('input', { bubbles: true }))
+    codeAt(5).value = '0'
+    codeAt(5).dispatchEvent(new Event('input', { bubbles: true }))
     await vi.waitFor(() => {
       expect(verifyOtp).toHaveBeenCalledWith('email', 'wallet@example.test', '246810')
     })
@@ -79,7 +110,120 @@ describe('mountWalletUI', () => {
     unmount()
   })
 
-  it('uses the Auth0-hosted OTP service instead of rendering a local code step', async () => {
+  it.each(['email', 'sms'] as const)('accepts pasted and autofilled six-digit %s codes', async (channel) => {
+    const state: WalletState = {
+      status: 'disconnected', session: null, address: null, protection: null,
+      custody: null, externalProviderId: null, externalChain: null,
+    }
+    const verifyOtp = vi.fn(() => Promise.resolve(state))
+    const wallet = {
+      state, canStartOtp: true, canSignInWithSocial: false,
+      canSignInWithPasskey: false, externalWalletProviders: [],
+      onEvent: () => () => {}, restoreSession: () => Promise.resolve(state),
+      startOtp: vi.fn(() => Promise.resolve()), verifyOtp,
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, {
+      walletUi: { authMethods: { emailOtp: channel === 'email', smsOtp: channel === 'sms' } },
+    })
+    const identifier = channel === 'email' ? 'wallet@example.test' : '+12025550123'
+    const identity = container.querySelector<HTMLInputElement>('.magic input')
+    const form = identity?.closest('form')
+    if (!identity || !form) throw new Error('Expected an identifier form.')
+    identity.value = identifier
+    identity.dispatchEvent(new Event('input', { bubbles: true }))
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('.otp-fields input')).toHaveLength(6)
+    })
+    const digits = container.querySelectorAll<HTMLInputElement>('.otp-fields input')
+    const first = digits[0]
+    const third = digits[2]
+    if (!first || !third) throw new Error('Expected six code inputs.')
+    if (channel === 'email') {
+      const paste = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(paste, 'clipboardData', { value: { getData: () => '246 810' } })
+      third.dispatchEvent(paste)
+      expect(paste.defaultPrevented).toBe(true)
+    } else {
+      first.value = '246810'
+      first.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    await vi.waitFor(() => {
+      expect(verifyOtp).toHaveBeenCalledWith(channel, identifier, '246810')
+    })
+    expect(verifyOtp).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
+  it('keeps OTP errors inline and resends to the same identifier without changing the method', async () => {
+    const state: WalletState = {
+      status: 'disconnected',
+      session: null,
+      address: null,
+      protection: null,
+      custody: null,
+      externalProviderId: null,
+      externalChain: null,
+    }
+    const startOtp = vi.fn(() => Promise.resolve())
+    const verifyOtp = vi.fn(() => Promise.reject(new Error('That code has expired. Request a new one.')))
+    const wallet = {
+      state,
+      canStartOtp: true,
+      canSignInWithSocial: false,
+      canSignInWithPasskey: false,
+      externalWalletProviders: [],
+      onEvent: () => () => {},
+      restoreSession: () => Promise.resolve(state),
+      startOtp,
+      verifyOtp,
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet)
+    const phone = container.querySelector<HTMLButtonElement>('[aria-label="Continue with phone"]')
+    if (!phone) throw new Error('Expected the phone sign-in action.')
+    expect(phone.querySelector('svg')).not.toBeNull()
+    phone.click()
+    const identity = container.querySelector<HTMLInputElement>('.magic input')
+    const form = identity?.closest('form')
+    if (!identity || !form) throw new Error('Expected the phone identifier form.')
+    identity.value = '+12025550123'
+    identity.dispatchEvent(new Event('input', { bubbles: true }))
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => {
+      expect(container.querySelector('h2')?.textContent).toBe('Check your messages')
+    })
+    const digit = container.querySelector<HTMLInputElement>('.otp-fields input')
+    if (!digit) throw new Error('Expected the OTP form.')
+    digit.value = '246810'
+    digit.dispatchEvent(new Event('input', { bubbles: true }))
+    await vi.waitFor(() => {
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain('That code has expired.')
+    })
+    expect(container.querySelector('.login-error')).toBeNull()
+    expect(container.querySelectorAll('.otp-fields input')).toHaveLength(6)
+    const resend = [...container.querySelectorAll('button')].find((control) => control.textContent === 'Resend code')
+    if (!resend) throw new Error('Expected the resend action.')
+    resend.click()
+    await vi.waitFor(() => {
+      expect(startOtp).toHaveBeenCalledTimes(2)
+      expect(container.querySelector('[role="status"]')?.textContent).toBe('We sent a fresh code to your phone.')
+    })
+    expect(startOtp).toHaveBeenLastCalledWith('sms', '+12025550123')
+    expect([...container.querySelectorAll<HTMLInputElement>('.otp-fields input')].map((field) => field.value)).toEqual(['', '', '', '', '', ''])
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    const back = container.querySelector<HTMLButtonElement>('[aria-label="Back to sign-in"]')
+    if (!back) throw new Error('Expected back navigation.')
+    back.click()
+    expect(container.querySelector<HTMLInputElement>('.magic input')?.value).toBe('+12025550123')
+    expect(container.querySelector('.otp-fields')).toBeNull()
+    unmount()
+  })
+
+  it('supports explicitly hosted OTP adapters without rendering a local code step', async () => {
     const state: WalletState = {
       status: 'disconnected',
       session: null,
@@ -107,7 +251,7 @@ describe('mountWalletUI', () => {
     const container = document.createElement('div')
     document.body.append(container)
     const unmount = mountWalletUI(container, wallet, {
-      walletUi: { enabledMethods: { emailOtp: true, smsOtp: true } },
+      walletUi: { authMethods: { emailOtp: true, smsOtp: true } },
     })
 
     expect(container.querySelector('[aria-label="Email address"]')).not.toBeNull()
@@ -687,7 +831,7 @@ describe('mountWalletUI', () => {
     const expandedList = container.querySelector<HTMLElement>('.wallet-provider-list')
     if (!expandedList) throw new Error('Expected the expanded provider list.')
     expect(expandedList.hidden).toBe(false)
-    expect(expandedList.querySelector('.wallet-provider-card')?.textContent).toContain('DETECTED')
+    expect(expandedList.querySelector('.wallet-provider-card')?.textContent).toContain('Detected')
     const connect = [...container.querySelectorAll('button')].find(
       (button) => button.getAttribute('aria-label') === 'Connect MetaMask',
     )
@@ -733,11 +877,12 @@ describe('mountWalletUI', () => {
     })
 
     expect(container.textContent).toContain('Continue with Google')
-    expect(container.textContent).toContain('Passkey')
+    expect(container.querySelector('.passkey-action')?.getAttribute('aria-label')).toBe('Use a passkey')
     expect(container.textContent).toContain('Connect a Web3 wallet')
     expect(container.textContent).not.toContain('Continue with Apple')
     expect(container.querySelector('[aria-label="Email address"]')).toBeNull()
-    expect(container.querySelector('.provider-glyph')?.textContent).toBe('G')
+    expect(container.querySelector('.provider-glyph svg')).not.toBeNull()
+    expect(container.querySelector('.provider-method')?.getAttribute('aria-label')).toBe('Continue with Google')
 
     unmount()
   })
@@ -769,12 +914,18 @@ describe('mountWalletUI', () => {
     const unmount = mountWalletUI(container, wallet, {
       socialProviders: ['Google', 'Apple'],
       walletUi: {
-        enabledMethods: {
+        branding: { appName: 'Example Pay', tagline: 'Your wallet, your control' },
+        legal: {
+          termsUrl: 'https://example.test/terms',
+          privacyUrl: 'https://example.test/privacy',
+        },
+        trust: { ikaRecoveryVerified: false, soc2Verified: true },
+        authMethods: {
           emailOtp: false,
           smsOtp: false,
           socialProviders: ['google-oauth2'],
           passkey: false,
-          externalWalletProviders: ['phantom'],
+          externalWallets: ['phantom'],
         },
       },
     })
@@ -783,6 +934,14 @@ describe('mountWalletUI', () => {
     expect(container.querySelector('button.provider-method')?.textContent).toContain('Google')
     expect(container.querySelectorAll('button.provider-method')).toHaveLength(1)
     expect(container.querySelector('.passkey-action')).toBeNull()
+    expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe(
+      'Example Pay',
+    )
+    expect(container.textContent).toContain('Your wallet, your control')
+    expect(container.querySelector('a[href="https://example.test/terms"]')).not.toBeNull()
+    expect(container.querySelector('a[href="https://example.test/privacy"]')).not.toBeNull()
+    expect(container.textContent).toContain('SOC 2')
+    expect(container.textContent).not.toContain('Secure recovery by Ika')
     expect(container.textContent).toContain('Connect a Web3 wallet')
     expect(container.textContent).toContain('Phantom')
     expect(container.textContent).not.toContain('MetaMask')
@@ -800,6 +959,46 @@ describe('mountWalletUI', () => {
       divider.compareDocumentPosition(web3Wallets) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
 
+    unmount()
+  })
+
+  it('renders API SMS consent as text and does not infer unavailable auth methods', () => {
+    const wallet = {
+      state: {
+        status: 'disconnected',
+        session: null,
+        address: null,
+        protection: null,
+        custody: null,
+        externalProviderId: null,
+        externalChain: null,
+      },
+      canStartOtp: true,
+      canSignInWithSocial: true,
+      canSignInWithPasskey: true,
+      externalWalletProviders: [],
+      onEvent: () => () => {},
+      restoreSession: () => Promise.resolve(),
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, {
+      socialProviders: ['Google'],
+      walletUi: {
+        legal: { smsConsentText: 'Receive a sign-in code. <script>not markup</script>' },
+        authMethods: { smsOtp: true, socialProviders: ['unconfigured-provider'] },
+      },
+    })
+    expect(container.querySelector('[aria-label="Email address"]')).toBeNull()
+    expect(
+      container.querySelector('[aria-label="Phone number including country code"]'),
+    ).not.toBeNull()
+    expect(container.textContent).toContain('<script>not markup</script>')
+    expect(container.querySelector('script')).toBeNull()
+    expect(container.querySelector('.passkey-action')).toBeNull()
+    expect(container.querySelector('.provider-method')).toBeNull()
+    expect(container.textContent).not.toContain('SOC 2')
+    expect(container.textContent).not.toContain('Secure recovery by Ika')
     unmount()
   })
 })

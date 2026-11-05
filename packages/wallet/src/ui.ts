@@ -4,138 +4,145 @@ import type { AltudeWallet } from './wallet.js'
 let walletUiInstance = 0
 
 const styles = `
-.altude-wallet-ui{font:14px/1.5 Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0f172a}
+.altude-wallet-ui{font:14px/1.5 Manrope,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--altude-ink,#071922)}
 .altude-wallet-ui *{box-sizing:border-box}
-.altude-wallet-ui .overlay{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;padding:20px;background-color:rgba(244,247,250,.94);background-image:repeating-radial-gradient(ellipse at 50% 0%,transparent 0 15px,rgba(148,163,184,.09) 16px,transparent 17px 29px)}
-.altude-wallet-ui .panel{width:min(100%,520px);max-height:min(92vh,820px);overflow:auto;padding:30px 34px 24px;background:linear-gradient(180deg,#fff 0%,#fcfdff 100%);border:1px solid #e5eaf0;border-radius:25px;box-shadow:0 1px 0 #fff inset,0 30px 70px -28px rgba(15,23,42,.24),0 8px 24px -14px rgba(15,23,42,.14)}
-.altude-wallet-ui .inline{width:100%;max-width:520px;margin:auto;padding:28px 32px 24px;background:linear-gradient(180deg,#fff 0%,#fcfdff 100%);border:1px solid #e5eaf0;border-radius:25px;box-shadow:0 1px 0 #fff inset,0 18px 36px -18px rgba(15,23,42,.16)}
-.altude-wallet-ui .fullscreen{position:fixed;inset:0;z-index:2147483000;overflow:auto;padding:24px;background:#f8fafc}
-.altude-wallet-ui .header{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;min-height:32px;margin-bottom:25px}
-.altude-wallet-ui .brand{display:inline-flex;align-items:center;gap:9px;color:#071922;font-size:16px;font-weight:700;letter-spacing:-.02em}
-.altude-wallet-ui .brand-mark{display:grid;width:25px;height:25px;place-items:center;border:1.6px solid #071922;border-radius:7px;color:#071922;font-size:16px;font-weight:750;line-height:1}
+.altude-wallet-ui [hidden]{display:none!important}
+.altude-wallet-ui .overlay{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));background:rgba(7,25,34,.4)}
+.altude-wallet-ui .panel{width:min(100%,420px);max-height:calc(100dvh - 32px);overflow:auto;padding:24px clamp(16px,5%,28px);container-type:inline-size;overflow-wrap:anywhere;background:var(--altude-surface,#fff);border:1px solid var(--altude-line,#dce2e5);border-radius:20px;box-shadow:0 24px 80px -24px rgba(7,25,34,.3)}
+.altude-wallet-ui .inline{width:100%;max-width:420px;margin:auto;padding:24px clamp(16px,5%,28px) 28px;container-type:inline-size;overflow-wrap:anywhere;background:var(--altude-surface,#fff);border:1px solid var(--altude-line,#dce2e5);border-radius:20px;box-shadow:0 16px 48px -24px rgba(7,25,34,.22)}
+.altude-wallet-ui .fullscreen{position:fixed;inset:0;z-index:2147483000;overflow:auto;padding:24px;background:var(--altude-canvas,#efefef)}
+.altude-wallet-ui .header{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:24px}
+.altude-wallet-ui .brand{display:inline-flex;min-width:0;align-items:center;gap:10px;color:var(--altude-ink,#071922);font-size:14px;font-weight:700;letter-spacing:-.02em}
+.altude-wallet-ui .brand-mark{display:grid;width:24px;height:24px;flex:none;place-items:center;border:0;border-radius:0;background:transparent;color:var(--altude-ink,#071922)}
+.altude-wallet-ui .brand-mark svg{width:18px;height:18px}
 .altude-wallet-ui .brand-mark img{display:block;width:100%;height:100%;object-fit:contain}
 .altude-wallet-ui .header-actions{display:flex;gap:8px}
-.altude-wallet-ui .icon-button{display:grid;width:32px;height:32px;min-height:32px;margin:0;padding:0;place-items:center;border:0;border-radius:999px;background:#f1f5f9;color:#334155;cursor:pointer}
-.altude-wallet-ui .icon-button:hover{background:#e2e8f0}
+.altude-wallet-ui .icon-button{display:grid;width:44px;height:44px;min-height:44px;margin:0;padding:0;place-items:center;border:1px solid var(--altude-line,#dce2e5);border-radius:50%;background:transparent;color:var(--altude-ink-2,#24404e);cursor:pointer}
+.altude-wallet-ui .icon-button:hover{background:var(--altude-line-soft,#edf0f1)}
 .altude-wallet-ui .icon-button svg{width:15px;height:15px}
-.altude-wallet-ui .content{display:flex;flex-direction:column;gap:17px}
-.altude-wallet-ui h2{margin:0;color:#172337;font-size:28px;line-height:1.2;font-weight:700;letter-spacing:-.035em}
-.altude-wallet-ui p{margin:0;color:#64748b}
-.altude-wallet-ui .headline{display:flex;flex-direction:column;gap:6px}
-.altude-wallet-ui .subtitle{font-size:15px;line-height:1.55}
-.altude-wallet-ui .magic{display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 7px 7px 15px;background:linear-gradient(180deg,#fff,#fcfdff);border:1px solid #d9e1ea;border-radius:15px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px -16px rgba(15,23,42,.08)}
-.altude-wallet-ui .field-icon{display:grid;place-items:center;color:#91a2b8}
+.altude-wallet-ui .content{display:flex;flex-direction:column;gap:20px}
+.altude-wallet-ui h2{margin:0;color:var(--altude-ink,#071922);font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-.045em}
+.altude-wallet-ui .headline--hero h2{font-size:28px}
+.altude-wallet-ui p{margin:0;color:var(--altude-muted,#5d7079)}
+.altude-wallet-ui .headline{display:flex;flex-direction:column;gap:8px}
+.altude-wallet-ui .subtitle{font-size:14px;line-height:1.65}
+.altude-wallet-ui .magic{display:grid;grid-template-columns:24px minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 6px 6px 12px;background:var(--altude-surface,#fff);border:1px solid var(--altude-line,#dce2e5);border-radius:12px}
+.altude-wallet-ui .field-icon{display:grid;place-items:center;color:var(--altude-muted,#5d7079)}
 .altude-wallet-ui .field-icon svg{width:17px;height:17px}
-.altude-wallet-ui input{width:100%;min-width:0;min-height:40px;padding:8px 4px;border:0;background:transparent;color:#0f172a;font:inherit;outline:none}
-.altude-wallet-ui input::placeholder{color:#94a3b8}
-.altude-wallet-ui .magic:focus-within{border-color:#3dbff2;box-shadow:0 0 0 3px rgba(61,191,242,.12)}
-.altude-wallet-ui button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;margin:0;padding:9px 14px;border:1px solid transparent;border-radius:11px;background:#071922;color:#fff;font:600 13px/1.2 Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;transition:background 160ms ease,border-color 160ms ease,transform 160ms ease}
-.altude-wallet-ui button:hover:not(:disabled){background:#084360}
+.altude-wallet-ui input{width:100%;min-width:0;min-height:40px;padding:10px 2px;border:0;background:transparent;color:var(--altude-ink,#071922);font:inherit;font-size:16px;outline:none}
+.altude-wallet-ui input::placeholder{color:var(--altude-muted-2,#687b84)}
+.altude-wallet-ui .magic:focus-within{border-color:var(--altude-sky-600,#087da9);outline:2px solid var(--altude-sky-600,#087da9);outline-offset:2px}
+.altude-wallet-ui button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;margin:0;padding:12px 16px;border:1px solid transparent;border-radius:10px;background:var(--altude-fuji,#084360);color:#fff;font:600 14px/1.2 Manrope,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;transition:background 160ms ease,border-color 160ms ease,transform 160ms ease}
+.altude-wallet-ui button:hover:not(:disabled){background:var(--altude-sky-700,#084360)}
 .altude-wallet-ui button:active:not(:disabled){transform:translateY(1px)}
-.altude-wallet-ui button:disabled{background:#9ca3af;color:#fff;cursor:not-allowed}
-.altude-wallet-ui button.secondary{border-color:#dfe6ee;background:#fff;color:#243248}
-.altude-wallet-ui button.secondary:hover:not(:disabled){border-color:#b8c7d6;background:#f9fbfd}
-.altude-wallet-ui .magic-cta{min-height:40px;padding:8px 15px;border-radius:10px}
-.altude-wallet-ui .channel-switch-button{align-self:flex-start;min-height:28px;padding:4px 0;border:0;background:transparent;color:#688096;font-size:12px;font-weight:550}
-.altude-wallet-ui .channel-switch-button:hover:not(:disabled){background:transparent;color:#084360;text-decoration:underline}
-.altude-wallet-ui .divider{display:flex;align-items:center;gap:12px;color:#92a2b8;font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase}
-.altude-wallet-ui .divider:before,.altude-wallet-ui .divider:after{height:1px;flex:1;background:#e7ecf2;content:""}
-.altude-wallet-ui .method-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-.altude-wallet-ui .method-list button{min-height:54px;border-color:#e0e7ef;background:linear-gradient(180deg,#fff,#fcfdff);color:#172337}
-.altude-wallet-ui .method-list button:hover:not(:disabled){border-color:#b8deea;background:#f8fdff}
-.altude-wallet-ui .provider-method{justify-content:flex-start}
-.altude-wallet-ui .provider-glyph{display:grid;width:24px;height:24px;flex:0 0 auto;place-items:center;border-radius:7px;background:#f0f4f8;color:#34465a;font-size:13px;font-weight:700}
-.altude-wallet-ui .passkey-action{grid-column:1/-1;width:100%;min-height:54px;border-color:#e0e7ef;background:#fff;color:#172337}
+.altude-wallet-ui button:disabled{opacity:.45;cursor:not-allowed}
+.altude-wallet-ui button.secondary{border-color:var(--altude-line,#dce2e5);background:var(--altude-surface,#fff);color:var(--altude-ink,#071922)}
+.altude-wallet-ui button.secondary:hover:not(:disabled){border-color:var(--altude-muted-2,#687b84);background:var(--altude-line-soft,#edf0f1)}
+.altude-wallet-ui .magic-cta{min-height:44px;padding:0 14px;border-radius:8px;background:var(--altude-brand-ink,#071922);color:var(--altude-offwhite,#efefef);font-size:13px}
+.altude-wallet-ui .magic-cta svg{width:14px;height:14px;flex:none}
+.altude-wallet-ui .channel-switch-button{align-self:flex-start;min-height:44px;padding:8px 0;border:0;background:transparent;color:var(--altude-sky-700,#084360);font-size:13px}
+.altude-wallet-ui .channel-switch-button:hover:not(:disabled){background:transparent;text-decoration:underline}
+.altude-wallet-ui .divider{margin:-4px 0;text-align:center;color:var(--altude-muted,#5d7079);font-size:12px}
+.altude-wallet-ui .method-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(48px,1fr));gap:8px}
+.altude-wallet-ui .method-list button{min-width:0;min-height:48px;padding:12px;border-color:var(--altude-line,#dce2e5);background:var(--altude-surface,#fff);color:var(--altude-ink,#071922)}
+.altude-wallet-ui .method-list button:hover:not(:disabled){border-color:var(--altude-muted-2,#687b84);background:var(--altude-line-soft,#edf0f1)}
+.altude-wallet-ui .provider-glyph{display:grid;width:24px;height:24px;flex:none;place-items:center;color:var(--altude-ink,#071922);font-size:13px;font-weight:700}
+.altude-wallet-ui .provider-glyph svg{width:20px;height:20px}
+.altude-wallet-ui .method-label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .altude-wallet-ui .passkey-glyph{background:transparent}
-.altude-wallet-ui .or-divider{display:flex;align-items:center;gap:10px;color:#94a3b8;font-size:11px}
-.altude-wallet-ui .or-divider:before,.altude-wallet-ui .or-divider:after{height:1px;flex:1;background:#e7ecf2;content:""}
-.altude-wallet-ui .or-divider span{padding:4px 10px;border:1px solid #e2e8f0;border-radius:999px;background:#fbfcfe}
-.altude-wallet-ui .wallet-group{overflow:hidden;border:1px solid #e0e7ef;border-radius:15px;background:linear-gradient(180deg,#fff,#fcfdff);box-shadow:0 2px 5px rgba(15,23,42,.035)}
-.altude-wallet-ui .wallet-group-toggle{display:flex;width:100%;min-height:80px;align-items:center;justify-content:space-between;padding:13px 15px;border:0;border-radius:0;background:transparent;color:#172337;text-align:left}
-.altude-wallet-ui .wallet-group-toggle:hover:not(:disabled){background:#f8fbfd}
+.altude-wallet-ui .or-divider{display:flex;align-items:center;gap:12px;color:var(--altude-muted,#5d7079);font-size:12px}
+.altude-wallet-ui .or-divider:before,.altude-wallet-ui .or-divider:after{height:1px;flex:1;background:var(--altude-line,#dce2e5);content:""}
+.altude-wallet-ui .wallet-group{overflow:hidden;border:1px solid var(--altude-line,#dce2e5);border-radius:12px;background:var(--altude-surface,#fff)}
+.altude-wallet-ui .wallet-group-toggle{display:flex;width:100%;min-height:64px;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:0;border-radius:0;background:transparent;color:var(--altude-ink,#071922);text-align:left}
+.altude-wallet-ui .wallet-group-toggle:hover:not(:disabled){background:var(--altude-line-soft,#edf0f1)}
 .altude-wallet-ui .wallet-group-copy{display:grid;flex:1;gap:3px;text-align:left}
-.altude-wallet-ui .wallet-group-icon{display:grid;width:44px;height:44px;flex:0 0 auto;place-items:center;margin-right:13px;border:1px solid #d7effb;border-radius:12px;background:#f1fbff;color:#048abf}
+.altude-wallet-ui .wallet-group-icon{display:grid;width:36px;height:36px;flex:none;place-items:center;border-radius:8px;background:var(--altude-line-soft,#edf0f1);color:var(--altude-ink,#071922)}
 .altude-wallet-ui .wallet-group-icon svg{width:22px;height:22px}
-.altude-wallet-ui .wallet-group-title{font-size:15px;font-weight:650}
-.altude-wallet-ui .wallet-group-detail{max-width:340px;color:#64748b;font-size:12px;font-weight:400;line-height:1.4}
-.altude-wallet-ui .wallet-group-chevron{display:grid;width:30px;height:30px;flex:0 0 auto;place-items:center;border-radius:9px;background:#f0f4f8;color:#64748b}
+.altude-wallet-ui .wallet-group-title{font-size:14px;font-weight:600}
+.altude-wallet-ui .wallet-group-detail{color:var(--altude-muted,#5d7079);font-size:12px;font-weight:400;line-height:1.4}
+.altude-wallet-ui .wallet-group-chevron{display:grid;width:24px;height:24px;flex:none;place-items:center;color:var(--altude-muted,#5d7079)}
 .altude-wallet-ui .wallet-group-chevron svg{width:16px;height:16px;transition:transform 160ms ease}
 .altude-wallet-ui .wallet-group-toggle[aria-expanded="true"] .wallet-group-chevron svg{transform:rotate(180deg)}
-.altude-wallet-ui .wallet-provider-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:0 12px 13px}
+.altude-wallet-ui .wallet-provider-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:0 12px 12px}
 .altude-wallet-ui .wallet-provider-list[hidden]{display:none}
-.altude-wallet-ui .wallet-provider-card{min-height:112px;flex-direction:column;gap:5px;padding:10px 6px 9px;border-color:#e0e7ef;border-radius:14px;background:#fff;color:#243248}
-.altude-wallet-ui .wallet-provider-card:hover:not(:disabled){border-color:#b8deea;background:#f8fdff}
-.altude-wallet-ui .wallet-provider-icon{display:grid;width:40px;height:40px;place-items:center;border:1px solid #edf1f6;border-radius:12px;background:#f7f9fc;color:#34465a;font-size:14px;font-weight:750}
+.altude-wallet-ui .wallet-provider-card{min-width:0;min-height:100px;flex-direction:column;gap:6px;padding:14px 4px;border-color:var(--altude-line,#dce2e5);border-radius:8px;background:var(--altude-surface,#fff);color:var(--altude-ink,#071922)}
+.altude-wallet-ui .wallet-provider-card:hover:not(:disabled){border-color:var(--altude-muted-2,#687b84);background:var(--altude-line-soft,#edf0f1)}
+.altude-wallet-ui .wallet-provider-icon{display:grid;width:38px;height:38px;place-items:center;color:var(--altude-ink,#071922);font-size:14px;font-weight:700}
 .altude-wallet-ui .wallet-provider-icon[data-provider="metamask"]{color:#b45c22}
 .altude-wallet-ui .wallet-provider-icon[data-provider="phantom"]{color:#7860d9}
 .altude-wallet-ui .wallet-provider-icon[data-provider="walletconnect"]{color:#2786f7}
-.altude-wallet-ui .wallet-provider-name{font-size:12px;font-weight:650}
-.altude-wallet-ui .wallet-provider-status{color:#00a876;font-size:9px;font-weight:750;letter-spacing:.06em}
-.altude-wallet-ui .wallet-provider-status[data-available="false"]{color:#8b95a5}
-.altude-wallet-ui .otp-field{display:flex;flex-direction:column;gap:7px;color:#334155;font-size:12px;font-weight:600}
-.altude-wallet-ui .otp-field input{min-height:46px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:11px;background:#fff;font-size:16px;letter-spacing:.16em}
-.altude-wallet-ui .otp-field input:focus{border-color:#60a5fa;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+.altude-wallet-ui .wallet-provider-name{font-size:11px;font-weight:600}
+.altude-wallet-ui .wallet-provider-status{color:var(--altude-muted,#5d7079);font-size:10px;font-weight:500}
+.altude-wallet-ui .wallet-provider-status[data-available="false"]{color:var(--altude-muted,#5d7079)}
+.altude-wallet-ui .otp-form{display:flex;flex-direction:column;gap:20px}
+.altude-wallet-ui .otp-fields{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-self:center;gap:clamp(4px,2cqi,8px);width:100%;max-width:316px;min-width:0;padding:8px 0}
+.altude-wallet-ui .otp-fields input{width:100%;min-width:0;height:52px;padding:0;border:1px solid var(--altude-line,#dce2e5);border-radius:8px;background:var(--altude-surface,#fff);font:20px/1 "DM Mono",monospace;text-align:center}
+.altude-wallet-ui .otp-fields input:focus{border-color:var(--altude-sky-600,#087da9);box-shadow:0 0 0 3px rgba(4,138,191,.12)}
+.altude-wallet-ui .otp-resend{display:flex;align-items:center;justify-content:center;gap:4px;color:var(--altude-muted,#5d7079);font-size:13px}
+.altude-wallet-ui .otp-resend button{min-height:44px;padding:4px;border:0;background:transparent;color:var(--altude-sky-700,#084360);font:inherit;font-weight:600}
+.altude-wallet-ui .otp-resend button:hover:not(:disabled){background:transparent;text-decoration:underline}
 .altude-wallet-ui .actions{display:flex;flex-direction:column;gap:8px}
 .altude-wallet-ui .actions button{width:100%;justify-content:flex-start}
-.altude-wallet-ui .status-card{padding:14px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}
-.altude-wallet-ui .status-label{margin-bottom:5px;color:#64748b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
-.altude-wallet-ui .status{overflow-wrap:anywhere;color:#0f172a;font-size:13px;font-weight:550}
-.altude-wallet-ui .note{padding:11px 12px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;color:#1e40af;font-size:12px}
-.altude-wallet-ui .error{padding:11px 12px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#b91c1c;font-size:12px}
-.altude-wallet-ui .confirm{display:flex;flex-direction:column;gap:10px;margin-top:4px;padding:14px;border:1px solid #dbeafe;border-radius:14px;background:#eff6ff}
-.altude-wallet-ui .confirm p{color:#1e3a8a}
-.altude-wallet-ui .login-state{display:flex;min-height:330px;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:18px 0 26px;text-align:center}
-.altude-wallet-ui .login-state h2{font-size:26px}
-.altude-wallet-ui .login-state-copy{max-width:420px;color:#64748b;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
-.altude-wallet-ui .login-state-icon{display:grid;width:90px;height:90px;place-items:center;border:1px solid #e7eefb;border-radius:50%;background:#fff}
-.altude-wallet-ui .login-state-icon svg{width:37px;height:37px}
-.altude-wallet-ui .login-error .login-state-icon{border-color:#fecaca;background:#fff5f5;color:#dc2626}
-.altude-wallet-ui .login-retry{min-width:150px;min-height:48px;border-radius:12px;background:#3b82f6;font-size:15px}
-.altude-wallet-ui .login-retry:hover:not(:disabled){background:#2563eb}
-.altude-wallet-ui .setup-orb{position:relative;width:90px;height:90px;border:1px solid #e7eefb;border-radius:50%;background:radial-gradient(circle,#edf4ff 0 38%,#fff 39%)}
-.altude-wallet-ui .setup-orb:before{position:absolute;inset:34px;border:1px solid #8bb8fb;border-radius:50%;background:radial-gradient(circle at 35% 30%,#7bb5ff,#2874e8 70%);box-shadow:0 2px 8px #377fe855;content:""}
-.altude-wallet-ui .setup-copy{margin-top:-4px}
+.altude-wallet-ui .status-card{padding:14px;border:1px solid var(--altude-line,#dce2e5);border-radius:12px;background:var(--altude-canvas,#efefef)}
+.altude-wallet-ui .status-label{margin-bottom:5px;color:var(--altude-muted,#5d7079);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.altude-wallet-ui .status{overflow-wrap:anywhere;color:var(--altude-ink,#071922);font-size:13px;font-weight:600}
+.altude-wallet-ui .note{padding:12px 14px;border:1px solid var(--altude-line,#dce2e5);border-radius:8px;background:var(--altude-selection,#eaf5fa);color:var(--altude-ink-2,#24404e);font-size:13px}
+.altude-wallet-ui .error{padding:12px 14px;border:1px solid rgba(166,38,45,.25);border-radius:8px;background:color-mix(in srgb,#a6262d 6%,var(--altude-surface,#fff));color:#a6262d;font-size:13px}
+.altude-wallet-ui .confirm{display:flex;flex-direction:column;gap:10px;margin-top:4px;padding:14px;border:1px solid var(--altude-line,#dce2e5);border-radius:12px;background:var(--altude-selection,#eaf5fa)}
+.altude-wallet-ui .confirm p{color:var(--altude-ink,#071922)}
+.altude-wallet-ui .login-state{display:flex;flex-direction:column;align-items:center;gap:20px;padding:16px 0;text-align:center}
+.altude-wallet-ui .login-state h2{font-size:24px}
+.altude-wallet-ui .login-state-copy{color:var(--altude-muted,#5d7079);font-size:14px;line-height:1.65;overflow-wrap:anywhere}
+.altude-wallet-ui .login-state-icon{display:grid;width:64px;height:64px;place-items:center;border:1px solid var(--altude-line,#dce2e5);border-radius:50%}
+.altude-wallet-ui .login-state-icon svg{width:28px;height:28px}
+.altude-wallet-ui .login-error .login-state-icon{color:#a6262d}
+.altude-wallet-ui .login-retry{width:100%;min-height:48px;font-size:14px}
+.altude-wallet-ui .setup-orb{position:relative;display:grid;width:64px;height:64px;place-items:center}
+.altude-wallet-ui .setup-orb:before{width:14px;height:14px;border-radius:50%;background:var(--altude-sky-600,#087da9);content:""}
+.altude-wallet-ui .setup-orb:after{position:absolute;inset:4px;border:2px solid var(--altude-line,#dce2e5);border-top-color:var(--altude-sky-600,#087da9);border-radius:50%;animation:altude-wallet-spin 1s linear infinite;content:""}
 .altude-wallet-ui .setup-copy p{font-size:14px}
-.altude-wallet-ui .setup-steps{display:grid;width:100%;gap:11px;padding:14px 16px;border:1px solid #dce5f1;border-radius:16px;background:linear-gradient(180deg,#fff,#f7faff);text-align:left}
-.altude-wallet-ui .setup-step{display:flex;align-items:center;gap:11px;color:#64748b;font-size:14px}
-.altude-wallet-ui .setup-step-indicator{display:grid;width:25px;height:25px;flex:0 0 auto;place-items:center;border-radius:50%;background:#eef2f7;color:#64748b}
-.altude-wallet-ui .setup-step[data-state="active"]{color:#172337;font-weight:650}
-.altude-wallet-ui .setup-step[data-state="active"] .setup-step-indicator{background:#eaf1ff;color:#3479e8}
-.altude-wallet-ui .setup-step[data-state="complete"] .setup-step-indicator{background:#e5f7ef;color:#00a876}
-.altude-wallet-ui .setup-step-spinner{width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:altude-wallet-spin .8s linear infinite}
+.altude-wallet-ui .setup-steps{display:grid;width:100%;gap:16px;padding:16px;border:1px solid var(--altude-line,#dce2e5);border-radius:12px;background:var(--altude-canvas,#efefef);text-align:left}
+.altude-wallet-ui .setup-step{display:flex;align-items:center;gap:12px;color:var(--altude-muted,#5d7079);font-size:13px}
+.altude-wallet-ui .setup-step-indicator{display:grid;width:22px;height:22px;flex:none;place-items:center;border-radius:50%;background:var(--altude-line-soft,#edf0f1);color:var(--altude-sky-700,#084360)}
+.altude-wallet-ui .setup-step-indicator svg{width:14px;height:14px}
+.altude-wallet-ui .setup-step[data-state="active"]{color:var(--altude-ink,#071922);font-weight:600}
+.altude-wallet-ui .setup-step[data-state="active"] .setup-step-indicator{background:var(--altude-sky-600,#087da9);color:#fff}
+.altude-wallet-ui .setup-step[data-state="complete"] .setup-step-indicator{background:var(--altude-sky-100,#d8effa)}
+.altude-wallet-ui .setup-step-spinner{width:10px;height:10px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:altude-wallet-spin .8s linear infinite}
 @keyframes altude-wallet-spin{to{transform:rotate(360deg)}}
 .altude-wallet-ui .account-identity{display:flex;align-items:center;gap:13px}
-.altude-wallet-ui .account-avatar{display:grid;width:54px;height:54px;flex:0 0 auto;place-items:center;border:3px solid #dceaff;border-radius:50%;background:linear-gradient(145deg,#74a8ff,#2452b8);box-shadow:0 5px 14px #377fe833;color:#fff;font-size:20px;font-weight:700}
+.altude-wallet-ui .account-avatar{display:grid;width:48px;height:48px;flex:none;place-items:center;border-radius:12px;background:var(--altude-sky-100,#d8effa);color:var(--altude-brand-ink,#071922);font-size:18px;font-weight:700}
 .altude-wallet-ui .account-contact{display:grid;min-width:0;gap:6px}
-.altude-wallet-ui .account-contact strong{overflow-wrap:anywhere;color:#172337;font-size:16px;font-weight:650}
-.altude-wallet-ui .account-protection{display:inline-flex;align-items:center;gap:6px;justify-self:start;padding:4px 9px;border-radius:999px;background:#edf4ff;color:#2e66c2;font-size:11px;font-weight:600}
+.altude-wallet-ui .account-contact strong{overflow-wrap:anywhere;color:var(--altude-ink,#071922);font-size:15px;font-weight:600}
+.altude-wallet-ui .account-protection{display:inline-flex;align-items:center;gap:6px;justify-self:start;color:var(--altude-muted,#5d7079);font-size:11px}
 .altude-wallet-ui .account-protection svg{width:14px;height:14px}
-.altude-wallet-ui .account-card{display:grid;gap:0;padding:15px 18px;border:1px solid #dce5f1;border-radius:17px;background:linear-gradient(180deg,#fff,#f7faff);box-shadow:0 2px 5px rgba(15,23,42,.035)}
-.altude-wallet-ui .account-row{display:flex;min-height:47px;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid #e8edf4;color:#64748b;font-size:13px}
+.altude-wallet-ui .account-card{display:grid;gap:0;padding:8px 16px;border:1px solid var(--altude-line,#dce2e5);border-radius:12px;background:var(--altude-canvas,#efefef)}
+.altude-wallet-ui .account-row{display:flex;flex-wrap:wrap;min-height:47px;align-items:center;justify-content:space-between;gap:8px 16px;padding:12px 0;border-bottom:1px solid var(--altude-line,#dce2e5);color:var(--altude-muted,#5d7079);font-size:13px}
 .altude-wallet-ui .account-row:last-child{border-bottom:0}
 .altude-wallet-ui .account-row-label{flex:0 0 auto}
-.altude-wallet-ui .account-row-value{display:inline-flex;min-width:0;align-items:center;justify-content:flex-end;gap:7px;color:#172337;font-weight:650;text-align:right}
-.altude-wallet-ui .address-copy{min-height:30px;padding:4px 0;border:0;background:transparent;color:#172337;font-size:12px;font-weight:650}
-.altude-wallet-ui .address-copy:hover:not(:disabled){background:transparent;color:#2563eb}
+.altude-wallet-ui .account-row-value{display:inline-flex;min-width:0;align-items:center;justify-content:flex-end;gap:7px;color:var(--altude-ink,#071922);font-weight:600;text-align:right}
+.altude-wallet-ui .address-copy{min-width:44px;min-height:44px;padding:6px;border:0;background:transparent;color:var(--altude-ink,#071922);font:13px "DM Mono",monospace}
+.altude-wallet-ui .address-copy:hover:not(:disabled){background:transparent;color:var(--altude-sky-700,#084360)}
 .altude-wallet-ui .address-copy svg,.altude-wallet-ui .account-explorer svg{width:14px;height:14px}
-.altude-wallet-ui .recovery-status{padding:5px 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:11px}
-.altude-wallet-ui .account-explorer{display:inline-flex;align-items:center;gap:5px;color:#3479e8;font-size:13px;font-weight:650;text-decoration:none}
+.altude-wallet-ui .recovery-status{color:var(--altude-ink-2,#24404e);font-size:11px}
+.altude-wallet-ui .account-explorer{display:inline-flex;align-items:center;gap:6px;color:var(--altude-sky-700,#084360);font-size:13px;font-weight:600;text-decoration:none}
 .altude-wallet-ui .account-explorer:hover{text-decoration:underline;text-underline-offset:3px}
 .altude-wallet-ui .account-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.altude-wallet-ui .account-actions button{min-height:44px;border-color:#dfe6ee;background:#fff;color:#243248}
-.altude-wallet-ui .account-actions button:disabled{border-color:#e5eaf0;background:#fff;color:#7b8797;cursor:not-allowed;opacity:.8}
+.altude-wallet-ui .account-actions button{min-height:44px;padding:12px;border-color:var(--altude-line,#dce2e5);background:var(--altude-surface,#fff);color:var(--altude-ink,#071922);font-size:13px}
 .altude-wallet-ui .account-actions button svg{width:17px;height:17px;flex:0 0 auto}
-.altude-wallet-ui .account-help{margin-top:-8px;color:#7b8797;font-size:11px;text-align:center}
-.altude-wallet-ui .trust-row{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding:14px 0 12px;border-top:1px solid #eef1f5;color:#617286;font-size:11px;font-weight:600}
-.altude-wallet-ui .trust-row span+span:before{margin-right:8px;color:#cbd5e1;content:"·"}
-.altude-wallet-ui .footer{display:flex;justify-content:center;margin-top:2px;padding-top:13px;border-top:1px solid #eef1f5}
-.altude-wallet-ui .footer span{color:#64748b;font-size:12px}
-.altude-wallet-ui .footer strong{color:#334155;letter-spacing:.08em}
+.altude-wallet-ui .account-help{margin-top:-8px;color:var(--altude-muted,#5d7079);font-size:11px;text-align:center}
+.altude-wallet-ui .trust-row{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding-top:16px;border-top:1px solid var(--altude-line-soft,#edf0f1);color:var(--altude-muted,#5d7079);font-size:11px;line-height:1.6}
+.altude-wallet-ui .trust-row span{display:inline-flex;align-items:flex-start;gap:8px}
+.altude-wallet-ui .trust-row svg{width:14px;height:14px;flex:none;margin-top:2px}
+.altude-wallet-ui .footer{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:24px;padding-top:16px;border-top:1px solid var(--altude-line-soft,#edf0f1);color:var(--altude-muted,#5d7079)}
+.altude-wallet-ui .footer svg{width:12px;height:12px}
+.altude-wallet-ui .footer span{color:var(--altude-muted,#5d7079);font-size:11px}
+.altude-wallet-ui .footer strong{font-family:Montserrat,system-ui,sans-serif;letter-spacing:.06em}
 .altude-wallet-ui .legal-links{display:flex;justify-content:center;gap:14px;margin-top:8px}
-.altude-wallet-ui .legal-links a{color:#718096;font-size:11px;text-decoration:underline;text-underline-offset:2px}
-.altude-wallet-ui .legal-links a:hover{color:#084360}
-.altude-wallet-ui button:focus-visible,.altude-wallet-ui input:focus-visible{outline:3px solid #3dbff2;outline-offset:2px}
-@media(max-width:480px){.altude-wallet-ui .panel{padding:22px 20px 18px;border-radius:21px}.altude-wallet-ui .inline{padding:22px 20px 18px;border-radius:21px}.altude-wallet-ui h2{font-size:25px}.altude-wallet-ui .magic{grid-template-columns:18px minmax(0,1fr);}.altude-wallet-ui .magic-cta{grid-column:1/-1;width:100%}.altude-wallet-ui .method-list{grid-template-columns:1fr}.altude-wallet-ui .wallet-group-toggle{min-height:76px;padding:12px}.altude-wallet-ui .wallet-provider-list{grid-template-columns:repeat(2,minmax(0,1fr))}.altude-wallet-ui .trust-row{gap:5px}}
+.altude-wallet-ui .legal-links a{color:var(--altude-muted,#5d7079);font-size:11px;text-decoration:underline;text-underline-offset:2px}
+.altude-wallet-ui .legal-links a:hover{color:var(--altude-sky-700,#084360)}
+.altude-wallet-ui button:focus-visible,.altude-wallet-ui input:focus-visible{outline:2px solid var(--altude-sky-600,#087da9);outline-offset:2px}
+@container(max-width:300px){.altude-wallet-ui .magic{grid-template-columns:24px minmax(0,1fr)}.altude-wallet-ui .magic-cta{grid-column:1/-1;width:100%}.altude-wallet-ui .wallet-provider-list{grid-template-columns:repeat(2,minmax(0,1fr))}.altude-wallet-ui .account-actions{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.altude-wallet-ui *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 `
 
@@ -165,7 +172,7 @@ export function mountWalletUI(
   if (presentation === 'modal') panel.setAttribute('aria-modal', 'true')
   panel.setAttribute(
     'aria-label',
-    options.walletUi?.appName?.trim() || options.title || 'Altude wallet',
+    options.walletUi?.branding?.appName?.trim() || options.title || 'Altude wallet',
   )
   if (presentation === 'modal') {
     panel.addEventListener('keydown', (event) => {
@@ -174,8 +181,8 @@ export function mountWalletUI(
         options.onClose?.()
       } else if (event.key === 'Tab') {
         const focusable = [
-          ...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input,select'),
-        ]
+          ...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)'),
+        ].filter((element) => !element.closest('[hidden]'))
         const first = focusable[0]
         const last = focusable[focusable.length - 1]
         if (event.shiftKey && document.activeElement === first) {
@@ -195,7 +202,7 @@ export function mountWalletUI(
 
   let otpChannel: 'email' | 'sms' = 'email'
   let otpIdentifier = ''
-  let otpCode = ''
+  let otpDigits = Array<string>(6).fill('')
   let otpStarted = false
   let externalWalletsExpanded = false
   let busy = false
@@ -259,7 +266,7 @@ export function mountWalletUI(
     const mark = document.createElement('span')
     mark.className = 'brand-mark'
     mark.setAttribute('aria-hidden', 'true')
-    const configuredLogo = safeHttpsUrl(options.walletUi?.logoUrl)
+    const configuredLogo = safeHttpsUrl(options.walletUi?.branding?.logoUrl)
     if (configuredLogo) {
       const logo = document.createElement('img')
       logo.src = configuredLogo
@@ -267,10 +274,11 @@ export function mountWalletUI(
       logo.referrerPolicy = 'no-referrer'
       mark.append(logo)
     } else {
-      mark.textContent = 'A'
+      mark.innerHTML =
+        '<svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><rect width="8.7" height="8.7"/><rect x="8.7" y="8.7" width="8.7" height="8.7"/></svg>'
     }
     const brandName = document.createElement('span')
-    brandName.textContent = options.walletUi?.appName?.trim() || 'Altude'
+    brandName.textContent = options.walletUi?.branding?.appName?.trim() || 'Altude'
     brand.append(mark, brandName)
     header.append(brand)
     const headerActions = document.createElement('div')
@@ -279,7 +287,8 @@ export function mountWalletUI(
       headerActions.append(
         iconButton('Back to sign-in', 'back', () => {
           otpStarted = false
-          otpCode = ''
+          otpDigits = Array<string>(6).fill('')
+          errorMessage = ''
           message = ''
           render()
         }),
@@ -310,7 +319,7 @@ export function mountWalletUI(
         loginErrorMessage = ''
         loginProgressStage = null
         otpStarted = false
-        otpCode = ''
+        otpDigits = Array<string>(6).fill('')
         errorMessage = ''
         message = ''
         render()
@@ -371,7 +380,7 @@ export function mountWalletUI(
       content.append(progress)
     } else if (state.status === 'disconnected') {
       const walletUi = options.walletUi
-      const methodConfiguration = walletUi?.enabledMethods
+      const methodConfiguration = walletUi?.authMethods
       const hasWalletUiConfiguration = walletUi !== undefined && walletUi !== null
       const isEnabled = (method: 'emailOtp' | 'smsOtp' | 'passkey') =>
         !hasWalletUiConfiguration || methodConfiguration?.[method] === true
@@ -400,14 +409,14 @@ export function mountWalletUI(
       const externalWalletProviders = wallet.externalWalletProviders.filter(
         (provider) =>
           !hasWalletUiConfiguration ||
-          (methodConfiguration?.externalWalletProviders ?? []).includes(provider.id),
+          (methodConfiguration?.externalWallets ?? []).includes(provider.id),
       )
-      const displayName = walletUi?.appName?.trim() || options.title || 'Altude'
+      const displayName = walletUi?.branding?.appName?.trim() || options.title || 'Altude'
       const headline = document.createElement('div')
-      headline.className = 'headline'
+      headline.className = otpStarted ? 'headline' : 'headline headline--hero'
       const title = document.createElement('h2')
       title.textContent = otpStarted
-        ? `Check your ${otpChannel === 'email' ? 'email' : 'phone'}`
+        ? otpChannel === 'email' ? 'Check your inbox' : 'Check your messages'
         : `Sign in to ${displayName}`
       const intro = document.createElement('p')
       intro.className = 'subtitle'
@@ -423,16 +432,21 @@ export function mountWalletUI(
         ...(canSignInWithPasskey ? ['a passkey'] : []),
         ...(externalWalletProviders.length > 0 ? ['an external wallet'] : []),
       ]
-      intro.textContent = otpStarted
-        ? `Enter the one-time code sent to ${otpIdentifier}.`
-        : walletUi?.tagline?.trim() ||
+      if (otpStarted) {
+        const identifier = document.createElement('strong')
+        identifier.textContent = otpIdentifier
+        intro.append('We sent a code to ', identifier, '.')
+      } else {
+        intro.textContent = walletUi?.branding?.tagline?.trim() ||
           (signInOptions.length > 0
             ? `Continue with ${joinWithOr(signInOptions)}.`
             : 'No sign-in methods are configured for this wallet.')
+      }
       headline.append(title, intro)
       content.append(headline)
 
-      const hasIdentityAlternatives = socialProviders.length > 0 || canSignInWithPasskey
+      const hasIdentityAlternatives =
+        socialProviders.length > 0 || canSignInWithPasskey || (smsOtpEnabled && otpChannel === 'email')
       if (
         !otpStarted &&
         canStartOtp &&
@@ -454,7 +468,7 @@ export function mountWalletUI(
             void run(async () => {
               await wallet.startOtp(otpChannel, otpIdentifier)
               otpStarted = true
-              message = `Check your ${otpChannel === 'email' ? 'inbox' : 'phone'} for the verification code.`
+              message = ''
             })
           }
         })
@@ -472,21 +486,29 @@ export function mountWalletUI(
           otpChannel === 'email' ? 'Email address' : 'Phone number including country code',
         )
         identity.value = otpIdentifier
+        identity.disabled = busy
         const submit = document.createElement('button')
         submit.className = 'magic-cta'
         submit.type = 'submit'
-        submit.textContent = 'Continue'
+        submit.textContent = busy ? 'Sending code...' : 'Send code'
+        submit.append(createIcon('forward'))
         const isIdentityValid = () =>
           otpChannel === 'email'
             ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity.value.trim())
             : /^\+?[\d\s().-]{7,}$/.test(identity.value.trim())
-        submit.disabled = !isIdentityValid()
+        submit.disabled = busy || !isIdentityValid()
         identity.addEventListener('input', () => {
           otpIdentifier = identity.value
           submit.disabled = !isIdentityValid()
         })
         form.append(fieldIcon, identity, submit)
         content.append(form)
+        if (otpChannel === 'sms' && walletUi?.legal?.smsConsentText) {
+          const consent = document.createElement('p')
+          consent.className = 'subtitle'
+          consent.textContent = walletUi.legal.smsConsentText
+          content.append(consent)
+        }
         const channelSwitch = button(
           otpChannel === 'email' ? 'Use a text message instead' : 'Use email instead',
           () => {
@@ -499,10 +521,7 @@ export function mountWalletUI(
           true,
         )
         channelSwitch.classList.add('channel-switch-button')
-        if (
-          (otpChannel === 'email' && smsOtpEnabled) ||
-          (otpChannel === 'sms' && emailOtpEnabled)
-        ) {
+        if (otpChannel === 'sms' && emailOtpEnabled) {
           content.append(channelSwitch)
         }
       }
@@ -517,8 +536,10 @@ export function mountWalletUI(
         const methods = document.createElement('div')
         methods.className = 'method-list'
         for (const provider of socialProviders) {
+          const normalized = normalizeProviderId(provider)
+          const labelText = normalized === 'google' ? 'Google' : normalized === 'apple' ? 'Apple' : provider
           const control = button(
-            `Continue with ${provider}`,
+            `Continue with ${labelText}`,
             () =>
               run(() => wallet.signInWithSocial(provider), {
                 loginAttempt: true,
@@ -527,11 +548,20 @@ export function mountWalletUI(
             true,
           )
           control.classList.add('provider-method')
+          control.setAttribute('aria-label', `Continue with ${labelText}`)
+          control.title = `Continue with ${labelText}`
+          const label = document.createElement('span')
+          label.className = 'method-label'
+          label.textContent = `Continue with ${labelText}`
           const glyph = document.createElement('span')
           glyph.className = 'provider-glyph'
           glyph.setAttribute('aria-hidden', 'true')
-          glyph.textContent = provider.trim().slice(0, 1).toUpperCase()
-          control.prepend(glyph)
+          if (normalized === 'google' || normalized === 'apple') {
+            glyph.innerHTML = iconSvg(normalized)
+          } else {
+            glyph.textContent = provider.trim().slice(0, 1).toUpperCase()
+          }
+          control.replaceChildren(glyph, label)
           methods.append(control)
         }
         if (canSignInWithPasskey) {
@@ -545,12 +575,37 @@ export function mountWalletUI(
             true,
           )
           passkey.classList.add('passkey-action')
+          passkey.setAttribute('aria-label', 'Use a passkey')
+          passkey.title = 'Use a passkey'
+          const label = document.createElement('span')
+          label.className = 'method-label'
+          label.textContent = 'Use a passkey'
           const glyph = document.createElement('span')
           glyph.className = 'provider-glyph passkey-glyph'
           glyph.setAttribute('aria-hidden', 'true')
           glyph.innerHTML = iconSvg('key')
-          passkey.prepend(glyph)
+          passkey.replaceChildren(glyph, label)
           methods.append(passkey)
+        }
+        if (smsOtpEnabled && otpChannel === 'email') {
+          const phone = button('Continue with phone', () => {
+            otpChannel = 'sms'
+            otpIdentifier = ''
+            errorMessage = ''
+            message = ''
+            render()
+            panel.querySelector<HTMLInputElement>('.magic input')?.focus()
+          }, true)
+          phone.setAttribute('aria-label', 'Continue with phone')
+          phone.title = 'Continue with phone'
+          phone.classList.add('phone-method')
+          const glyph = createIcon('phone')
+          glyph.className = 'provider-glyph'
+          const label = document.createElement('span')
+          label.className = 'method-label'
+          label.textContent = 'Continue with phone'
+          phone.replaceChildren(glyph, label)
+          methods.append(phone)
         }
         content.append(methods)
       }
@@ -559,7 +614,7 @@ export function mountWalletUI(
           const divider = document.createElement('div')
           divider.className = 'or-divider'
           const label = document.createElement('span')
-          label.textContent = 'OR'
+          label.textContent = 'or'
           divider.append(label)
           content.append(divider)
         }
@@ -625,12 +680,12 @@ export function mountWalletUI(
           const available = provider.isAvailable?.()
           providerStatus.textContent =
             provider.id === 'walletconnect'
-              ? 'QR & MOBILE'
+              ? 'QR & mobile'
               : available === true
-                ? 'DETECTED'
+                ? 'Detected'
                 : available === false
-                  ? 'NOT DETECTED'
-                  : 'READY TO CONNECT'
+                  ? 'Not detected'
+                  : 'Ready to connect'
           if (available !== undefined) {
             providerStatus.dataset.available = String(available)
           }
@@ -641,45 +696,103 @@ export function mountWalletUI(
         content.append(walletGroup)
       }
       if (otpStarted) {
-        const code = input('One-time code', 'text')
-        code.value = otpCode
-        code.className = 'otp-input'
-        code.addEventListener('input', () => {
-          otpCode = code.value
-        })
-        code.autocomplete = 'one-time-code'
-        const codeLabel = code.parentElement
-        codeLabel?.classList.add('otp-field')
-        content.append(
-          codeLabel ?? code,
-          button('Verify and continue', () =>
-            run(
-              async () => {
-                await wallet.verifyOtp(otpChannel, otpIdentifier, code.value)
-                otpStarted = false
-                otpCode = ''
-              },
-              {
-                loginAttempt: true,
-                showProgress: true,
-              },
-            ),
-          ),
-        )
-        content.append(
-          button(
-            'Use a different method',
-            () => {
+        const form = document.createElement('form')
+        form.className = 'otp-form'
+        const fields = document.createElement('div')
+        fields.className = 'otp-fields'
+        fields.setAttribute('role', 'group')
+        fields.setAttribute('aria-label', 'Six-digit verification code')
+        const verify = document.createElement('button')
+        verify.type = 'submit'
+        verify.textContent = 'Verify and continue'
+        verify.hidden = true
+        verify.disabled = !otpDigits.every((digit) => /^[0-9]$/.test(digit))
+        const submitCode = () => {
+          if (!otpDigits.every((digit) => /^[0-9]$/.test(digit))) return
+          const code = otpDigits.join('')
+          void run(
+            async () => {
+              await wallet.verifyOtp(otpChannel, otpIdentifier, code)
               otpStarted = false
-              otpCode = ''
-              otpIdentifier = ''
-              otpChannel = otpChannel === 'email' ? 'sms' : 'email'
-              message = ''
-              render()
+              otpDigits = Array<string>(6).fill('')
             },
-            true,
-          ),
-        )
+            {
+              showProgress: true,
+            },
+          )
+        }
+        form.addEventListener('submit', (event) => {
+          event.preventDefault()
+          submitCode()
+        })
+        const inputs: HTMLInputElement[] = []
+        const enterDigits = (index: number, value: string) => {
+          const digits = value.replace(/[^0-9]/g, '').slice(0, 6)
+          const start = digits.length === 6 ? 0 : index
+          if (!digits) otpDigits[index] = ''
+          for (let offset = 0; offset < digits.length && start + offset < 6; offset++) {
+            otpDigits[start + offset] = digits.charAt(offset)
+          }
+          inputs.forEach((field, position) => {
+            field.value = otpDigits[position] ?? ''
+          })
+          verify.disabled = !otpDigits.every((digit) => /^[0-9]$/.test(digit))
+          if (digits) inputs[Math.min(start + digits.length, 5)]?.focus()
+          if (!verify.disabled) submitCode()
+        }
+        for (let index = 0; index < 6; index++) {
+          const digit = document.createElement('input')
+          digit.type = 'text'
+          digit.inputMode = 'numeric'
+          digit.maxLength = 1
+          digit.pattern = '[0-9]'
+          digit.required = true
+          digit.disabled = busy
+          digit.autocomplete = index === 0 ? 'one-time-code' : 'off'
+          digit.setAttribute('aria-label', `Digit ${String(index + 1)} of 6`)
+          digit.value = otpDigits[index] ?? ''
+          digit.addEventListener('focus', () => {
+            digit.select()
+          })
+          digit.addEventListener('input', () => {
+            enterDigits(index, digit.value)
+          })
+          digit.addEventListener('paste', (event) => {
+            const text = event.clipboardData?.getData('text')
+            if (text === undefined) return
+            event.preventDefault()
+            enterDigits(index, text)
+          })
+          digit.addEventListener('keydown', (event) => {
+            if (event.key === 'Backspace') {
+              event.preventDefault()
+              const target = otpDigits[index] || index === 0 ? index : index - 1
+              otpDigits[target] = ''
+              const field = inputs[target]
+              if (field) {
+                field.value = ''
+                field.focus()
+              }
+              verify.disabled = true
+            } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+              event.preventDefault()
+              inputs[index + (event.key === 'ArrowLeft' ? -1 : 1)]?.focus()
+            }
+          })
+          inputs.push(digit)
+          fields.append(digit)
+        }
+        form.append(fields, verify)
+        content.append(form)
+        const resend = document.createElement('div')
+        resend.className = 'otp-resend'
+        const resendButton = button('Resend code', () => run(async () => {
+          await wallet.startOtp(otpChannel, otpIdentifier)
+          otpDigits = Array<string>(6).fill('')
+          message = `We sent a fresh code to your ${otpChannel === 'email' ? 'inbox' : 'phone'}.`
+        }), false, busy)
+        resend.append("Didn't get it?", resendButton)
+        content.append(resend)
       }
     } else if (state.status === 'connected' && state.custody === 'embedded') {
       const address = state.address
@@ -743,7 +856,8 @@ export function mountWalletUI(
         accountRow('Connected app', () => {
           const value = document.createElement('span')
           value.className = 'account-row-value'
-          value.textContent = options.title?.trim() || options.walletUi?.appName?.trim() || 'Altude'
+          value.textContent =
+            options.title?.trim() || options.walletUi?.branding?.appName?.trim() || 'Altude'
           return value
         }),
         accountRow('On-chain', () => {
@@ -914,28 +1028,22 @@ export function mountWalletUI(
       error.textContent = errorMessage
       content.append(error)
     }
-    if (state.status === 'disconnected' && !otpStarted && !loginErrorMessage) {
+    if (state.status === 'disconnected' && !otpStarted && !loginErrorMessage && !loginProgressStage) {
       const trustRow = document.createElement('div')
       trustRow.className = 'trust-row'
-      const verifiedBadges = options.walletUi?.trustedBadges
-      if (verifiedBadges?.nonCustodialVerified) {
-        const custody = document.createElement('span')
-        custody.textContent = 'Non-custodial'
-        trustRow.append(custody)
-      } else {
-        const custody = document.createElement('span')
-        custody.textContent = 'Self-custodial'
-        trustRow.append(custody)
-      }
-      const approval = document.createElement('span')
-      approval.textContent = 'You approve each transfer'
-      trustRow.append(approval)
-      if (verifiedBadges?.ikaRecoveryVerified) {
+      const verifiedBadges = options.walletUi?.trust
+      const custody = document.createElement('span')
+      custody.textContent = wallet.canStartOtp
+        ? 'Embedded wallet keys stay in this browser.'
+        : 'Your wallet stays in your control.'
+      custody.prepend(createIcon('shield'))
+      trustRow.append(custody)
+      if (verifiedBadges?.ikaRecoveryVerified === true) {
         const recovery = document.createElement('span')
         recovery.textContent = 'Secure recovery by Ika'
         trustRow.append(recovery)
       }
-      if (verifiedBadges?.soc2Verified) {
+      if (verifiedBadges?.soc2Verified === true) {
         const soc2 = document.createElement('span')
         soc2.textContent = 'SOC 2'
         trustRow.append(soc2)
@@ -946,11 +1054,11 @@ export function mountWalletUI(
     footer.className = 'footer'
     const footerText = document.createElement('span')
     footerText.innerHTML = 'Securely yours, by <strong>ALTUDE</strong>'
-    footer.append(footerText)
+    footer.append(createIcon('shield'), footerText)
     panel.append(footer)
     const legalUrls = [
-      ['Terms', options.walletUi?.termsUrl],
-      ['Privacy', options.walletUi?.privacyUrl],
+      ['Terms', options.walletUi?.legal?.termsUrl],
+      ['Privacy', options.walletUi?.legal?.privacyUrl],
     ] as const
     const legalLinks = legalUrls
       .map(([label, value]) => {
@@ -971,7 +1079,19 @@ export function mountWalletUI(
       legal.append(...legalLinks)
       panel.append(legal)
     }
+    if (busy) {
+      for (const control of panel.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+        'input,button:not([aria-label="Close wallet"])',
+      )) {
+        control.disabled = true
+      }
+    }
     if (focusFirst) {
+      const firstDigit = panel.querySelector<HTMLInputElement>('.otp-fields input:not(:disabled)')
+      if (firstDigit) {
+        firstDigit.focus()
+        return
+      }
       const firstButton = panel.querySelector<HTMLButtonElement>('button')
       if (firstButton) firstButton.focus()
     }
@@ -994,7 +1114,7 @@ export function mountWalletUI(
       const details = error instanceof Error ? error.message : String(error)
       if (options.loginAttempt) {
         otpStarted = false
-        otpCode = ''
+        otpDigits = Array<string>(6).fill('')
         loginErrorMessage = details
       } else {
         errorMessage = details
@@ -1043,17 +1163,6 @@ export function mountWalletUI(
   }
 }
 
-function input(labelText: string, type: string): HTMLInputElement {
-  const wrapper = document.createElement('label')
-  wrapper.textContent = labelText
-  wrapper.className = 'otp-field'
-  const field = document.createElement('input')
-  field.type = type
-  field.autocomplete = type === 'email' ? 'email' : type === 'tel' ? 'tel' : 'one-time-code'
-  wrapper.append(field)
-  return field
-}
-
 function joinWithOr(values: readonly string[]): string {
   if (values.length < 2) return values[0] ?? 'an available option'
   return `${values.slice(0, -1).join(', ')}, or ${values.at(-1) ?? ''}`
@@ -1094,6 +1203,9 @@ function iconButton(
 function iconSvg(
   icon:
     | 'back'
+    | 'forward'
+    | 'google'
+    | 'apple'
     | 'close'
     | 'email'
     | 'phone'
@@ -1107,8 +1219,15 @@ function iconSvg(
     | 'signout'
     | 'external',
 ): string {
+  if (icon === 'google') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.5 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.75h3.57c2.08-1.92 3.22-4.74 3.22-8.3z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.75c-.99.66-2.25 1.06-3.71 1.06-2.85 0-5.27-1.92-6.13-4.51H2.18v2.83C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.87 14.14c-.22-.66-.34-1.36-.34-2.09 0-.73.12-1.43.34-2.09V7.13H2.18C1.43 8.61 1 10.26 1 12c0 1.74.43 3.39 1.18 4.87l3.69-2.73z"/><path fill="#EA4335" d="M12 5.4c1.62 0 3.07.56 4.21 1.65l3.16-3.16C17.45 2.09 14.96 1 12 1 7.7 1 3.99 3.47 2.18 7.13l3.69 2.83C6.73 7.32 9.15 5.4 12 5.4z"/></svg>'
+  }
+  if (icon === 'apple') {
+    return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.36 12.55c-.02-2.24 1.83-3.32 1.91-3.37-1.04-1.52-2.66-1.73-3.24-1.76-1.38-.14-2.7.81-3.4.81-.71 0-1.79-.79-2.95-.77-1.51.02-2.92.88-3.7 2.23-1.58 2.74-.4 6.79 1.13 9 .75 1.08 1.65 2.3 2.83 2.25 1.14-.05 1.57-.73 2.95-.73 1.38 0 1.77.73 2.97.71 1.23-.02 2.01-1.1 2.76-2.19.87-1.26 1.23-2.48 1.25-2.55-.03-.01-2.39-.92-2.51-3.63zM14.13 5.7c.63-.76 1.05-1.82.94-2.87-.91.04-2.01.6-2.66 1.36-.58.67-1.09 1.75-.95 2.79 1.01.08 2.04-.51 2.67-1.28z"/></svg>'
+  }
   const paths = {
     back: '<path d="m15 18-6-6 6-6"/><path d="M9 12h12"/>',
+    forward: '<path d="m9 6 6 6-6 6"/><path d="M3 12h12"/>',
     close: '<path d="m6 6 12 12M18 6 6 18"/>',
     email: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     phone: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>',
