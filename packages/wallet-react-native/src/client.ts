@@ -455,6 +455,9 @@ export class NativeWalletClient {
         method: options.method,
         headers,
         ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+        credentials: 'omit',
+        redirect: 'error',
+        cache: 'no-store',
       })
     } catch (cause) {
       throw new NativeWalletError(

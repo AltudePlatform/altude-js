@@ -16,9 +16,12 @@ remain unpublished and carry no release commitment.
 
 ## Experimental packages
 
-[`@altude/wallet-react-native`](./packages/wallet-react-native) is a separate
-React Native client for the native wallet callback broker. It is not part of
-the production release set.
+The experimental
+[`@altude/wallet-react-native`](./packages/wallet-react-native) package is a
+React Native SDK-owned login-to-wallet flow over the native callback broker,
+with app-scoped wallet lookup, protected local signing keys and explicit
+recovery-required handling. It remains unpublished; the coordinated API/browser
+wallet-access bridge and real-device release gates are described in its README.
 
 ## Quick Start
 

@@ -54,9 +54,114 @@ const walletNativeSource = await bundleNativePackage('wallet-react-native')
 assert.doesNotMatch(walletNativeSource, /\bBuffer\b/)
 assert.doesNotMatch(walletNativeSource, /(?:from|require\() ['"](?:ws|node:)/)
 
-const nativeWalletModuleUrl = `data:text/javascript;base64,${Buffer.from(walletNativeSource).toString('base64')}`
+assert.doesNotMatch(
+  walletNativeSource,
+  /node_modules[\\/](?:auth0-js|@auth0[\\/]auth0-spa-js)[\\/]/,
+)
+const nativeWalletHermesSource = `const Buffer = undefined;
+const TextEncoder = undefined;
+const URL = undefined;
+const DOMException = undefined;
+const document = undefined;
+const window = undefined;
+const indexedDB = undefined;
+${walletNativeSource}`
+const nativeWalletModuleUrl = `data:text/javascript;base64,${Buffer.from(nativeWalletHermesSource).toString('base64')}`
 const nativeWallet = await import(nativeWalletModuleUrl)
 assert.equal(typeof nativeWallet.NativeWalletClient, 'function')
+assert.equal(typeof nativeWallet.AltudeNativeWallet, 'function')
+
+const keys = new Map()
+let nativeRefreshToken = null
+let nativeAddress = null
+let randomCounter = 1
+const wallet = new nativeWallet.AltudeNativeWallet({
+  apiKey: 'smoke-api-key',
+  apiBaseUrl: 'https://api.altude.so',
+  randomBytes: (length) => new Uint8Array(length).fill(randomCounter++),
+  refreshTokenStore: {
+    get: async () => nativeRefreshToken,
+    set: async (_appId, token) => {
+      nativeRefreshToken = token
+    },
+    remove: async () => {
+      nativeRefreshToken = null
+    },
+  },
+  keyStore: {
+    read: async (_scope, address) => keys.get(address)?.slice() ?? null,
+    write: async (_scope, address, secret) => {
+      keys.set(address, secret.slice())
+    },
+  },
+  browser: {
+    openAuthSession: async (url, callback) => ({
+      type: 'success',
+      url: `${callback}?code=smoke-code&state=${/[?&]state=([^&]+)/.exec(url)[1]}`,
+    }),
+  },
+  fetch: async (url, options) => {
+    let data
+    if (url.endsWith('/config')) {
+      data = {
+        AppId: '17.42',
+        NativeScheme: 'so.altude.wallet.t17.a42',
+        Issuer: 'https://api.altude.so/',
+        Audience: 'urn:altude:wallet:app:17.42',
+        AuthorizationUrl: 'https://api.altude.so/api/native-wallet/authorize',
+        JwksUrl: 'https://api.altude.so/api/native-wallet/jwks',
+      }
+    } else if (url.endsWith('/token') || url.endsWith('/refresh')) {
+      data = {
+        AccessToken: 'native-jwt',
+        RefreshToken: 'refresh',
+        ExpiresIn: 300,
+        TokenType: 'Bearer',
+      }
+    } else if (url.endsWith('/native-wallet/wallet')) {
+      assert.equal(options.headers.Authorization, 'Bearer native-jwt')
+      data = {
+        AppId: '17.42',
+        UserId: 'smoke-user',
+        IdentityKey: 'smoke-identity',
+        WalletAddress: nativeAddress,
+        ChallengeId: 'smoke-challenge',
+        Message: 'Native wallet proof',
+        ExpiresIn: 60,
+      }
+    } else if (url.endsWith('/native-wallet/wallet/session')) {
+      const proof = JSON.parse(options.body)
+      assert.equal(proof.ChallengeId, 'smoke-challenge')
+      assert.equal(Buffer.from(proof.Signature, 'base64').length, 64)
+      nativeAddress = proof.WalletAddress
+      data = {
+        Success: true,
+        AppId: '17.42',
+        UserId: 'smoke-user',
+        SessionToken: 'opaque-wallet-session',
+        User: { Id: 'smoke-user', WalletAddress: nativeAddress },
+        ExpiresIn: 120,
+      }
+    } else if (url.endsWith('/EmbeddedWallet/session')) {
+      assert.equal(options.headers.Authorization, 'Bearer opaque-wallet-session')
+      data = {
+        IsAuthenticated: true,
+        AppId: '17.42',
+        UserId: 'smoke-user',
+        User: { Id: 'smoke-user', WalletAddress: nativeAddress },
+      }
+    } else {
+      throw new Error(`Unexpected smoke API request: ${url}`)
+    }
+    return { ok: true, status: 200, json: async () => data }
+  },
+})
+assert.equal((await wallet.connect()).status, 'ready')
+assert.equal(keys.size, 1)
+assert.equal((await wallet.restore()).address, nativeAddress)
+assert.equal(keys.size, 1)
+wallet.lock()
+assert.equal(wallet.state.status, 'locked')
 
 const hermesLikeSource = `const Buffer = undefined;\nconst DOMException = undefined;\n${bundledSource}`
 const bundledModuleUrl = `data:text/javascript;base64,${Buffer.from(hermesLikeSource).toString('base64')}`

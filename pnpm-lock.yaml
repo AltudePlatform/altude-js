@@ -143,9 +143,18 @@ importers:
 
   packages/wallet-react-native:
     dependencies:
+      '@altude/gasstation':
+        specifier: workspace:*
+        version: link:../gasstation
+      '@noble/curves':
+        specifier: ^2.2.0
+        version: 2.2.0
       '@noble/hashes':
         specifier: ^1.8.0
         version: 1.8.0
+      '@scure/base':
+        specifier: ^1.2.6
+        version: 1.2.6
     devDependencies:
       tsup:
         specifier: ^8.3.5

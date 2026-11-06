@@ -9,6 +9,11 @@ export type NativeWalletErrorCode =
   | 'SECURE_STORAGE'
   | 'SESSION'
   | 'CONCURRENT_OPERATION'
+  | 'RECOVERY_REQUIRED'
+  | 'LOCKED'
+  | 'WALLET_CONFLICT'
+  | 'INVALID_INPUT'
+  | 'WALLET_SCOPE_MIGRATION_REQUIRED'
 
 export class NativeWalletError extends Error {
   readonly code: NativeWalletErrorCode

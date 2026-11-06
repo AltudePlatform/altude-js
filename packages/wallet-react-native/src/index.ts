@@ -6,6 +6,18 @@ export type {
 } from './client.js'
 export { NativeWalletError } from './errors.js'
 export type { NativeWalletErrorCode } from './errors.js'
+export { AltudeNativeWallet } from './wallet.js'
+export type {
+  AltudeNativeWalletOptions,
+  NativeWalletEvent,
+  NativeWalletState,
+  NativeWalletStatus,
+  NativeWalletTransfer,
+} from './wallet.js'
+export { NativeWalletSessionAdapter } from './session.js'
+export type { NativeWalletAccess, NativeWalletAccessSession } from './session.js'
+export { NativeWalletVault, createKeychainWalletKeyStore } from './vault.js'
+export type { NativeWalletKeyStore, NativeWalletScope } from './vault.js'
 export {
   createCryptoRandomSource,
   createInAppBrowserAdapter,
