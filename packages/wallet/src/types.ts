@@ -22,7 +22,7 @@ export type WalletIdentityToken = {
     }
   | {
       /** One-time browser-broker ticket, never an Auth0 provider token. */
-      broker: { identityTicket: string }
+      broker: { identityTicket: string; appId: string; walletAccessVersion: number }
       accessToken?: never
     }
 )
@@ -37,9 +37,13 @@ export interface WalletUser {
 export interface WalletSession {
   user: WalletUser
   expiresAt?: string | null
+  appId?: string
+  userId?: string
 }
 
 export interface WalletAuthProvider {
+  /** Discovery scope for the first-party browser broker, including restoration. */
+  browserBroker?: { appId: string; walletAccessVersion: 1 }
   startOtp?(channel: OtpChannel, identifier: string): Promise<void>
   verifyOtp?(channel: OtpChannel, identifier: string, code: string): Promise<WalletIdentityToken>
   /** Custom providers may opt into collecting the code in their own hosted login UI. */

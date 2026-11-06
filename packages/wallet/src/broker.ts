@@ -100,6 +100,12 @@ export async function createBrowserWalletAuth(
     return data
   }
   const config = await request('/config')
+  if (config['WalletAccessVersion'] !== 1) {
+    throw new AltudeWalletError(
+      'CONFIGURATION',
+      'This browser broker does not support wallet access binding v1. Upgrade the backend before signing in.',
+    )
+  }
   const providers = config['SocialProviders']
   if (
     typeof config['AppId'] !== 'string' ||
@@ -111,6 +117,7 @@ export async function createBrowserWalletAuth(
     throw invalidResponse()
   const socialProviders = Object.freeze([...new Set(providers)])
   const enabled = { email: config['EmailOtp'], sms: config['SmsOtp'] }
+  const appId = requiredString(config, 'AppId')
 
   const exclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
     if (busy)
@@ -138,13 +145,18 @@ export async function createBrowserWalletAuth(
       throw invalidResponse()
     return {
       identityKey: requiredString(identity, 'IdentityKey'),
-      broker: { identityTicket: requiredString(identity, 'IdentityTicket') },
+      broker: {
+        identityTicket: requiredString(identity, 'IdentityTicket'),
+        appId,
+        walletAccessVersion: 1,
+      },
     }
   }
 
   return {
     socialProviders,
     auth: {
+      browserBroker: { appId, walletAccessVersion: 1 },
       supportsOtpChannel: (channel) => enabled[channel],
       startOtp: (channel, identifier) =>
         exclusive(async () => {

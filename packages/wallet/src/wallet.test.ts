@@ -1,5 +1,8 @@
-﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AltudeGasStation, GaslessTransactionSigner, SendOptions } from '@altude/gasstation'
+import { createHash } from 'node:crypto'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { decodeBase58, encodeBase58 } from './crypto.js'
 import { AltudeWallet, AltudeWalletError } from './index.js'
 import type {
   ExternalWalletProvider,
@@ -9,6 +12,7 @@ import type {
   WalletStoreRecord,
   WalletTransactionIntent,
   WalletTransactionIntentSnapshot,
+  PasskeyAdapter,
 } from './types.js'
 
 class TestWalletStore implements WalletStore {
@@ -102,13 +106,21 @@ describe('AltudeWallet', () => {
     }
   })
 
-  function createWallet(externalWallets: readonly ExternalWalletProvider[] = []) {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function createWallet(
+    externalWallets: readonly ExternalWalletProvider[] = [],
+    passkeys?: PasskeyAdapter,
+  ) {
     return new AltudeWallet({
       apiKey: 'test-api-key',
       apiBaseUrl: 'https://api.example.test',
       network: 'devnet',
       auth: {},
       externalWallets,
+      ...(passkeys ? { passkeys } : {}),
       store,
       sessionTokenStore: sessionTokens,
       fetch: fetchMock as typeof fetch,
@@ -130,47 +142,420 @@ describe('AltudeWallet', () => {
     await expect(wallet.getWalletUiConfiguration()).resolves.toBeNull()
   })
 
-  it('exchanges browser identity tickets separately and reuses the same local signer', async () => {
-    fetchMock.mockImplementation((_url: string, request: RequestInit) => {
-      const body: unknown = typeof request.body === 'string' ? JSON.parse(request.body) : null
-      if (typeof body !== 'object' || body === null || !('WalletAddress' in body)) {
-        throw new Error('Expected browser broker session binding')
+  function browserIdentity(ticket = 'ticket', appId = '-17.42') {
+    return {
+      identityKey: 'auth0|broker-user',
+      broker: { identityTicket: ticket, appId, walletAccessVersion: 1 as const },
+    }
+  }
+
+  function browserBackend() {
+    const backend = {
+      appId: '-17.42',
+      userId: 'broker-user',
+      address: null as string | null,
+      message: '',
+      sessionStatus: 200,
+      sessionError: 'wallet_conflict',
+      sessionUserId: 'broker-user',
+      sessionAppId: '-17.42',
+      version: 1,
+      mutateMessage: (message: string) => message,
+    }
+    fetchMock.mockImplementation(async (url: string, request: RequestInit) => {
+      await Promise.resolve()
+      expect(new Headers(request.headers).get('X-API-Key')).toBe('test-api-key')
+      if (url.endsWith('/config'))
+        return jsonResponse({ AppId: backend.appId, WalletAccessVersion: backend.version })
+      if (url.endsWith('/wallet')) {
+        const body = JSON.parse(typeof request.body === 'string' ? request.body : '') as {
+          IdentityTicket: string
+        }
+        backend.message = backend.mutateMessage(
+          [
+            'Altude Wallet Access Binding v1',
+            'Issuer: https://api.example.test',
+            `AppId: ${backend.appId}`,
+            'TenantId: -17',
+            `UserId: ${backend.userId}`,
+            'IdentityKey: auth0|broker-user',
+            'RefreshFamilyId: browser',
+            'Origin: https://consumer.example.test',
+            `IdentityTicket: ${createHash('sha256').update(body.IdentityTicket).digest('base64url')}`,
+            'ChallengeId: challenge-id',
+            `WalletAddress: ${backend.address ?? ''}`,
+            'Nonce: random',
+          ].join('\n'),
+        )
+        return jsonResponse({
+          AppId: backend.appId,
+          UserId: backend.userId,
+          IdentityKey: 'auth0|broker-user',
+          WalletAddress: backend.address,
+          ChallengeId: 'challenge-id',
+          Message: backend.message,
+          ExpiresIn: 60,
+        })
       }
-      return Promise.resolve(jsonResponse({
+      if (url.endsWith('/api/EmbeddedWallet/session')) {
+        return jsonResponse({
+          IsAuthenticated: true,
+          AppId: backend.appId,
+          UserId: backend.userId,
+          User: { Id: backend.userId, WalletAddress: backend.address },
+        })
+      }
+      if (url.endsWith('/signout')) return jsonResponse({ Success: true })
+      if (!url.endsWith('/api/browser-wallet/session')) throw new Error(`Unexpected URL ${url}`)
+      const body = JSON.parse(typeof request.body === 'string' ? request.body : '') as {
+        WalletAddress: string
+        Signature: string
+        ChallengeId: string
+      }
+      expect(body.ChallengeId).toBe('challenge-id')
+      const signature = Buffer.from(body.Signature, 'base64')
+      expect(signature).toHaveLength(64)
+      expect(body.Signature).toMatch(/^[A-Za-z0-9+/]{86}==$/)
+      expect(
+        ed25519.verify(
+          signature,
+          new TextEncoder().encode(backend.message),
+          decodeBase58(body.WalletAddress),
+        ),
+      ).toBe(true)
+      if (backend.sessionStatus !== 200) {
+        return new Response(
+          JSON.stringify({
+            Error: backend.sessionError,
+            AppId: backend.appId,
+            UserId: backend.userId,
+            WalletAddress: backend.address,
+          }),
+          { status: backend.sessionStatus, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      backend.address = body.WalletAddress
+      return jsonResponse({
         Success: true,
         SessionToken: 'broker-session',
-        User: { Id: 'broker-user', WalletAddress: body.WalletAddress },
-      }))
+        AppId: backend.sessionAppId,
+        UserId: backend.sessionUserId,
+        User: { Id: backend.sessionUserId, WalletAddress: body.WalletAddress },
+      })
     })
+    return backend
+  }
+
+  it('looks up the authoritative wallet before creating a key and signs the exact challenge', async () => {
+    browserBackend()
     const wallet = createWallet()
-    const first = await wallet.connect({ identityKey: 'auth0|broker-user', broker: { identityTicket: 'ticket-1' } })
+    const first = await wallet.connect(browserIdentity('ticket-1'))
     expect(first.status).toBe('connected')
     expect(sessionTokens.token).toBe('broker-session')
-    const second = await wallet.connect({ identityKey: 'auth0|broker-user', broker: { identityTicket: 'ticket-2' } })
+    const second = await wallet.connect(browserIdentity('ticket-2'))
     expect(second.address).toBe(first.address)
     expect(store.records.size).toBe(1)
-    expect(store.records.get('auth0|broker-user')?.serverUserId).toBe('broker-user')
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://api.example.test/api/browser-wallet/session', expect.objectContaining({
-      body: JSON.stringify({ IdentityTicket: 'ticket-1', WalletAddress: first.address }),
-      credentials: 'omit',
-      redirect: 'error',
-    }))
+    expect([...store.records.values()][0]?.serverUserId).toBe('broker-user')
+    expect(store.records.has('auth0|broker-user')).toBe(false)
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://api.example.test/api/browser-wallet/wallet',
+      expect.objectContaining({
+        body: JSON.stringify({ IdentityTicket: 'ticket-1' }),
+        credentials: 'omit',
+        redirect: 'error',
+      }),
+    )
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit
     expect(new Headers(request.headers).get('X-API-Key')).toBe('test-api-key')
     expect(new Headers(request.headers).has('Authorization')).toBe(false)
   })
 
-  it('preserves local-wallet binding checks for broker sessions', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({
-      Success: true, SessionToken: 'broker-session',
-      User: { Id: 'broker-user', WalletAddress: 'different-wallet' },
-    }))
+  it('rejects a broker session with a different application or user', async () => {
+    const backend = browserBackend()
+    backend.sessionAppId = 'different-app'
     const wallet = createWallet()
-    await expect(wallet.connect({
-      identityKey: 'auth0|broker-user', broker: { identityTicket: 'ticket' },
-    })).rejects.toThrow('does not match')
+    await expect(wallet.connect(browserIdentity())).rejects.toThrow('does not match')
     expect(sessionTokens.token).toBeNull()
     expect(wallet.state.status).toBe('disconnected')
+  })
+
+  it('never creates a replacement key when the canonical wallet is on another device', async () => {
+    const backend = browserBackend()
+    backend.address = encodeBase58(ed25519.getPublicKey(new Uint8Array(32).fill(7)))
+    await expect(createWallet().connect(browserIdentity())).rejects.toMatchObject({
+      code: 'RECOVERY_REQUIRED',
+    })
+    expect(store.records.size).toBe(0)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('isolates the same provider identity and user across applications', async () => {
+    const backend = browserBackend()
+    const first = await createWallet().connect(browserIdentity('ticket-1'))
+    backend.appId = 'other-app'
+    backend.sessionAppId = 'other-app'
+    backend.address = null
+    const second = await createWallet().connect(browserIdentity('ticket-2', 'other-app'))
+    expect(second.address).not.toBe(first.address)
+    expect(store.records.size).toBe(2)
+  })
+
+  it('rejects unavailable proof versions before looking up or creating a wallet', async () => {
+    const backend = browserBackend()
+    backend.version = 2
+    await expect(createWallet().connect(browserIdentity())).rejects.toMatchObject({
+      code: 'CONFIGURATION',
+    })
+    expect(store.records.size).toBe(0)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    (message: string) => message.replace('Binding v1', 'Binding v2'),
+    (message: string) => message.replace('IdentityKey: auth0|broker-user', 'IdentityKey: attacker'),
+    (message: string) => message.replace('RefreshFamilyId: browser', 'RefreshFamilyId: native'),
+    (message: string) => message.replace('ChallengeId: challenge-id', 'ChallengeId: attacker'),
+    (message: string) => message.replace('IdentityTicket: ', 'IdentityTicket: wrong'),
+    (message: string) => `${message}\n`,
+  ])('rejects a mismatched proof message before local key generation %#', async (mutate) => {
+    const backend = browserBackend()
+    backend.mutateMessage = mutate
+    await expect(createWallet().connect(browserIdentity())).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+    })
+    expect(store.records.size).toBe(0)
+  })
+
+  it('requires recovery after a canonical conflict and never resubmits the consumed ticket', async () => {
+    const backend = browserBackend()
+    backend.sessionStatus = 409
+    const implementation = fetchMock.getMockImplementation() as (
+      url: string,
+      request: RequestInit,
+    ) => Promise<Response>
+    fetchMock.mockImplementation(async (url: string, request: RequestInit) => {
+      if (url.endsWith('/api/browser-wallet/session')) {
+        backend.address = encodeBase58(ed25519.getPublicKey(new Uint8Array(32).fill(8)))
+      }
+      return await implementation(url, request)
+    })
+    await expect(createWallet().connect(browserIdentity())).rejects.toMatchObject({
+      code: 'RECOVERY_REQUIRED',
+    })
+    expect(store.records.size).toBe(1)
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/browser-wallet/session')),
+    ).toHaveLength(1)
+    expect(sessionTokens.token).toBeNull()
+  })
+
+  it('restores a broker session by application and canonical user, not the legacy user index', async () => {
+    browserBackend()
+    const wallet = createWallet()
+    const first = await wallet.connect(browserIdentity())
+    const restored = await createWallet().restoreSession()
+    expect(restored.address).toBe(first.address)
+    store.records.clear()
+    await expect(createWallet().restoreSession()).rejects.toMatchObject({
+      code: 'RECOVERY_REQUIRED',
+    })
+    expect(store.records.size).toBe(0)
+  })
+
+  it('does not generate a key for an authoritative lookup completing after sign-out', async () => {
+    browserBackend()
+    const lookup = deferred<Response>()
+    const implementation = fetchMock.getMockImplementation() as (
+      url: string,
+      request: RequestInit,
+    ) => Promise<Response>
+    fetchMock.mockImplementation((url: string, request: RequestInit) =>
+      url.endsWith('/wallet') ? lookup.promise : implementation(url, request),
+    )
+    const wallet = createWallet()
+    const connecting = wallet.connect(browserIdentity())
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+    await wallet.signOut()
+    lookup.resolve(jsonResponse({}))
+    expect(await connecting).toMatchObject({ status: 'disconnected' })
+    expect(store.records.size).toBe(0)
+    expect(sessionTokens.token).toBeNull()
+  })
+
+  it('keeps same-address conflicts explicit and blocks reuse of submitted tickets', async () => {
+    const backend = browserBackend()
+    backend.sessionStatus = 409
+    const implementation = fetchMock.getMockImplementation() as (
+      url: string,
+      request: RequestInit,
+    ) => Promise<Response>
+    fetchMock.mockImplementation((url: string, request: RequestInit) => {
+      if (url.endsWith('/api/browser-wallet/session')) {
+        const body = JSON.parse(typeof request.body === 'string' ? request.body : '') as {
+          WalletAddress: string
+        }
+        backend.address = body.WalletAddress
+      }
+      return implementation(url, request)
+    })
+    const wallet = createWallet()
+    await expect(wallet.connect(browserIdentity())).rejects.toMatchObject({
+      code: 'WALLET_CONFLICT',
+    })
+    const count = fetchMock.mock.calls.length
+    await expect(wallet.connect(browserIdentity())).rejects.toThrow('already submitted')
+    expect(fetchMock).toHaveBeenCalledTimes(count)
+    expect(sessionTokens.token).toBeNull()
+  })
+
+  it('blocks legacy scope migration before generating a wallet', async () => {
+    browserBackend()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ AppId: '-17.42', WalletAccessVersion: 1 }))
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ Error: 'wallet_scope_migration_required' }), { status: 409 }),
+    )
+    await expect(createWallet().connect(browserIdentity())).rejects.toMatchObject({
+      code: 'WALLET_SCOPE_MIGRATION_REQUIRED',
+    })
+    expect(store.records.size).toBe(0)
+  })
+
+  it('reuses interrupted setup after a rejected proof with fresh authentication, without another key', async () => {
+    const backend = browserBackend()
+    backend.sessionStatus = 400
+    backend.sessionError = 'invalid_proof'
+    const wallet = createWallet()
+    await expect(wallet.connect(browserIdentity('ticket-1'))).rejects.toThrow('Restart sign-in')
+    const address = [...store.records.values()][0]?.publicKey
+    expect(sessionTokens.token).toBeNull()
+    backend.sessionStatus = 200
+    const state = await wallet.connect(browserIdentity('ticket-2'))
+    expect(state.address).toBe(address)
+    expect(store.records.size).toBe(1)
+  })
+
+  it('unlocks protected local keys before signing the broker proof and cancels late passkey completion', async () => {
+    vi.stubGlobal('location', {
+      hostname: 'consumer.example.test',
+      origin: 'https://consumer.example.test',
+    })
+    browserBackend()
+    const key = () => new Uint8Array(32).fill(9)
+    const deriveKey = vi.fn().mockImplementation(() => Promise.resolve(key()))
+    const passkeys: PasskeyAdapter = {
+      register: () => Promise.resolve({ credentialId: new Uint8Array([1, 2, 3]), kek: key() }),
+      deriveKey,
+    }
+    const first = createWallet([], passkeys)
+    const initial = await first.connect(browserIdentity('ticket-1'))
+    await first.protectWithPasskey()
+    const second = createWallet([], passkeys)
+    expect((await second.connect(browserIdentity('ticket-2'))).address).toBe(initial.address)
+    expect(deriveKey).toHaveBeenCalledOnce()
+
+    const pendingKey = deferred<Uint8Array>()
+    deriveKey.mockImplementationOnce(() => pendingKey.promise)
+    const third = createWallet([], passkeys)
+    const connecting = third.connect(browserIdentity('ticket-3'))
+    await vi.waitFor(() => {
+      expect(deriveKey).toHaveBeenCalledTimes(2)
+    })
+    await third.signOut()
+    pendingKey.resolve(key())
+    expect(await connecting).toMatchObject({ status: 'disconnected' })
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/browser-wallet/session')),
+    ).toHaveLength(2)
+  })
+
+  it('does not let a superseded passkey unlock lock a newer login for the same scoped wallet', async () => {
+    vi.stubGlobal('location', {
+      hostname: 'consumer.example.test',
+      origin: 'https://consumer.example.test',
+    })
+    browserBackend()
+    const key = () => new Uint8Array(32).fill(9)
+    const olderKey = deferred<Uint8Array>()
+    const newerKey = deferred<Uint8Array>()
+    const deriveKey = vi
+      .fn()
+      .mockImplementationOnce(() => olderKey.promise)
+      .mockImplementationOnce(() => newerKey.promise)
+    const passkeys: PasskeyAdapter = {
+      register: () => Promise.resolve({ credentialId: new Uint8Array([1]), kek: key() }),
+      deriveKey,
+    }
+    const wallet = createWallet([], passkeys)
+    await wallet.connect(browserIdentity('ticket-1'))
+    await wallet.protectWithPasskey()
+    const older = wallet.connect(browserIdentity('ticket-2'))
+    await vi.waitFor(() => {
+      expect(deriveKey).toHaveBeenCalledOnce()
+    })
+    const newer = wallet.connect(browserIdentity('ticket-3'))
+    await vi.waitFor(() => {
+      expect(deriveKey).toHaveBeenCalledTimes(2)
+    })
+    olderKey.resolve(key())
+    await older
+    newerKey.resolve(key())
+    expect(await newer).toMatchObject({ status: 'connected', protection: 'passkey' })
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/browser-wallet/session')),
+    ).toHaveLength(2)
+  })
+
+  it('requires recovery for a canonical wallet with corrupt local signing material', async () => {
+    browserBackend()
+    await createWallet().connect(browserIdentity('ticket-1'))
+    const record = [...store.records.values()][0]
+    if (!record) throw new Error('Expected registered local wallet')
+    record.secret = new Uint8Array(32).fill(4)
+    await expect(createWallet().connect(browserIdentity('ticket-2'))).rejects.toMatchObject({
+      code: 'RECOVERY_REQUIRED',
+    })
+    expect(store.records.size).toBe(1)
+  })
+
+  it('does not activate a scoped session that arrives after sign-out', async () => {
+    browserBackend()
+    const pending = deferred<Response>()
+    const implementation = fetchMock.getMockImplementation() as (
+      url: string,
+      request: RequestInit,
+    ) => Promise<Response>
+    let original: Response | undefined
+    fetchMock.mockImplementation(async (url: string, request: RequestInit) => {
+      const response = await implementation(url, request)
+      if (url.endsWith('/api/browser-wallet/session')) {
+        original = response
+        return pending.promise
+      }
+      return response
+    })
+    const wallet = createWallet()
+    const connecting = wallet.connect(browserIdentity())
+    await vi.waitFor(() => {
+      expect(original).toBeDefined()
+    })
+    await wallet.signOut()
+    if (!original) throw new Error('Expected scoped session response')
+    pending.resolve(original)
+    expect(await connecting).toMatchObject({ status: 'disconnected' })
+    expect(sessionTokens.token).toBeNull()
+  })
+
+  it('prevents direct adapters from selecting broker-scoped local records', async () => {
+    browserBackend()
+    await createWallet().connect(browserIdentity())
+    const identityKey = [...store.records.keys()][0]
+    if (!identityKey) throw new Error('Expected scoped identity')
+    await expect(
+      createWallet().connect({ identityKey, accessToken: 'legacy' }),
+    ).rejects.toMatchObject({ code: 'AUTHENTICATION' })
   })
 
   it('routes hosted OTP through the auth provider and exchanges its token with the API', async () => {
@@ -606,12 +991,10 @@ describe('AltudeWallet', () => {
       amount: 500,
     })
     let receivedOptions: SendOptions | undefined
-    gasStation.send.mockImplementation(
-      (options: SendOptions) => {
-        receivedOptions = options
-        return Promise.resolve({ Signature: 'transaction-signature', Status: 'Success' })
-      },
-    )
+    gasStation.send.mockImplementation((options: SendOptions) => {
+      receivedOptions = options
+      return Promise.resolve({ Signature: 'transaction-signature', Status: 'Success' })
+    })
     await wallet.approveTransaction(transactionId)
 
     await expect(result).resolves.toMatchObject({ signature: 'transaction-signature' })

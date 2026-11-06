@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
-import { createHash, generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
 
 const edgeExecutable =
   process.env.EDGE_EXECUTABLE ??
@@ -294,6 +294,7 @@ try {
   let brokerAttempt
   let failNextOtp = true
   let brokerAddress
+  let brokerMessage
   await page.route('https://api.example.test/api/browser-wallet/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api/browser-wallet', '')
@@ -305,7 +306,7 @@ try {
     let response
     let status = 200
     if (path === '/config') {
-      response = { AppId: '-17.42', EmailOtp: true, SmsOtp: true, SocialProviders: ['google-oauth2'] }
+      response = { AppId: '-17.42', WalletAccessVersion: 1, EmailOtp: true, SmsOtp: true, SocialProviders: ['google-oauth2'] }
     } else if (path === '/otp/start' || path === '/authorize') {
       assert.match(body.State, /^[\w-]{43}$/)
       assert.match(body.CodeChallenge, /^[\w-]{43}$/)
@@ -336,14 +337,42 @@ try {
       assert.equal(body.Code, 'browser-handoff')
       assert.equal(createHash('sha256').update(body.CodeVerifier).digest('base64url'), brokerAttempt.CodeChallenge)
       response = { IdentityTicket: 'browser-identity-ticket', IdentityKey: 'auth0|broker-browser-user', ExpiresIn: 120 }
+    } else if (path === '/wallet') {
+      assert.deepEqual(body, { IdentityTicket: 'browser-identity-ticket' })
+      brokerMessage = [
+        'Altude Wallet Access Binding v1', 'Issuer: https://api.example.test',
+        'AppId: -17.42', 'TenantId: -17', 'UserId: broker-browser-user',
+        'IdentityKey: auth0|broker-browser-user', 'RefreshFamilyId: browser',
+        `Origin: ${consumerOrigin}`,
+        `IdentityTicket: ${createHash('sha256').update(body.IdentityTicket).digest('base64url')}`,
+        'ChallengeId: browser-proof-challenge', `WalletAddress: ${brokerAddress ?? ''}`,
+        'Nonce: random-browser-nonce',
+      ].join('\n')
+      response = {
+        AppId: '-17.42', UserId: 'broker-browser-user', IdentityKey: 'auth0|broker-browser-user',
+        WalletAddress: brokerAddress ?? null, ChallengeId: 'browser-proof-challenge',
+        Message: brokerMessage, ExpiresIn: 60,
+      }
     } else if (path === '/session') {
-      assert.deepEqual(Object.keys(body).sort(), ['IdentityTicket', 'WalletAddress'])
+      assert.deepEqual(Object.keys(body).sort(), ['ChallengeId', 'IdentityTicket', 'Signature', 'WalletAddress'])
       assert.equal(body.IdentityTicket, 'browser-identity-ticket')
+      assert.equal(body.ChallengeId, 'browser-proof-challenge')
       assert.match(body.WalletAddress, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
+      let publicKeyNumber = 0n
+      for (const character of body.WalletAddress) {
+        publicKeyNumber = publicKeyNumber * 58n + BigInt('123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'.indexOf(character))
+      }
+      const rawKey = Buffer.from(publicKeyNumber.toString(16).padStart(64, '0'), 'hex')
+      const publicKey = createPublicKey({
+        key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), rawKey]),
+        format: 'der', type: 'spki',
+      })
+      assert.match(body.Signature, /^[A-Za-z0-9+/]{86}==$/)
+      assert.equal(verify(null, Buffer.from(brokerMessage, 'utf8'), publicKey, Buffer.from(body.Signature, 'base64')), true)
       if (brokerAddress) assert.equal(body.WalletAddress, brokerAddress, 'same identity must reuse its signer')
       brokerAddress = body.WalletAddress
       response = {
-        Success: true, SessionToken: 'broker-opaque-session',
+        Success: true, SessionToken: 'broker-opaque-session', AppId: '-17.42', UserId: 'broker-browser-user',
         User: { Id: 'broker-browser-user', Email: 'broker@example.test', WalletAddress: body.WalletAddress },
       }
     } else {

@@ -89,6 +89,9 @@ export class WalletVault {
   async getOrCreateAddress(identityKey: string): Promise<string> {
     this.#assertIdentityKey(identityKey)
     const operation = this.#operation(identityKey)
+    const existing = await this.#store.get(identityKey)
+    this.#assertCurrent(identityKey, operation)
+    if (existing) return existing.publicKey
     const secret = randomBytes(this.#crypto, 32)
     const publicKey = encodeBase58(ed25519.getPublicKey(secret))
     try {
@@ -143,6 +146,13 @@ export class WalletVault {
       )
     }
     const secret = record.secret.slice()
+    if (encodeBase58(ed25519.getPublicKey(secret)) !== record.publicKey) {
+      secret.fill(0)
+      throw new AltudeWalletError(
+        'WALLET_LOCKED',
+        'The local signing key does not match the stored wallet address.',
+      )
+    }
     this.#assertCurrent(identityKey, operation)
     this.#unlocked.set(identityKey, secret)
     return record.protection
@@ -356,6 +366,47 @@ export class WalletVault {
 
   async protection(identityKey: string): Promise<WalletProtection | null> {
     return (await this.#store.get(identityKey))?.protection ?? null
+  }
+
+  async findByIdentityKey(identityKey: string): Promise<WalletStoreRecord | undefined> {
+    this.#assertIdentityKey(identityKey)
+    const operation = this.#operation(identityKey)
+    const record = await this.#store.get(identityKey)
+    this.#assertCurrent(identityKey, operation)
+    return record
+  }
+
+  async resolveAssociatedAddress(
+    identityKey: string,
+    registeredAddress: string | null,
+  ): Promise<string> {
+    const record = await this.findByIdentityKey(identityKey)
+    if (registeredAddress !== null) {
+      if (!record || record.publicKey !== registeredAddress) {
+        throw new AltudeWalletError(
+          'RECOVERY_REQUIRED',
+          'This wallet is already registered, but this browser has no matching local key. Use the original device or a supported recovery method.',
+        )
+      }
+      const missingKey =
+        record.protection === 'device-local'
+          ? !record.secret ||
+            record.secret.length !== 32 ||
+            encodeBase58(ed25519.getPublicKey(record.secret)) !== registeredAddress
+          : record.ciphertext?.length !== 48 ||
+            record.iv?.length !== 12 ||
+            record.prfSalt?.length !== 32 ||
+            !record.credentialId?.length ||
+            !record.rpId
+      if (missingKey) {
+        throw new AltudeWalletError(
+          'RECOVERY_REQUIRED',
+          'The registered wallet signing key is missing from this browser. A replacement wallet will not be created.',
+        )
+      }
+      return record.publicKey
+    }
+    return record?.publicKey ?? this.getOrCreateAddress(identityKey)
   }
 
   isUnlocked(identityKey: string): boolean {

@@ -27,7 +27,101 @@ const testPasskey: PasskeyAdapter = {
 }
 
 describe('WalletVault', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('looks up a local identity without generating a key and reuses an existing address without randomness', async () => {
+    const store = new IndexedDbWalletStore(indexedDB)
+    const vault = new WalletVault({ store })
+    const identityKey = 'broker:lookup-only'
+    expect(await vault.findByIdentityKey(identityKey)).toBeUndefined()
+    const address = await vault.getOrCreateAddress(identityKey)
+    vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(() => {
+      throw new Error('Must not generate another key')
+    })
+    const noRandomness = new WalletVault({ store })
+    expect((await noRandomness.findByIdentityKey(identityKey))?.publicKey).toBe(address)
+    expect(await noRandomness.getOrCreateAddress(identityKey)).toBe(address)
+  })
+
+  it('refuses a local secret that does not match its stored address', async () => {
+    const store = new IndexedDbWalletStore(indexedDB)
+    const vault = new WalletVault({ store })
+    const identityKey = 'broker:corrupt-secret'
+    await vault.getOrCreateAddress(identityKey)
+    vault.lock(identityKey)
+    await store.update(identityKey, (record) => record
+      ? { ...record, secret: new Uint8Array(32).fill(91) }
+      : undefined)
+    await expect(vault.unlock(identityKey)).rejects.toThrow('does not match')
+    expect(vault.isUnlocked(identityKey)).toBe(false)
+  })
+
+  it('requires recovery for an authoritative existing address without creating a replacement', async () => {
+    const store = new IndexedDbWalletStore(indexedDB)
+    const vault = new WalletVault({ store })
+    const registeredAddress = await vault.getOrCreateAddress('broker:original-device')
+    await expect(vault.resolveAssociatedAddress('broker:new-device', registeredAddress))
+      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    expect(await store.get('broker:new-device')).toBeUndefined()
+    const mismatchedAddress = await vault.getOrCreateAddress('broker:other-device')
+    await expect(vault.resolveAssociatedAddress('broker:other-device', registeredAddress))
+      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    expect((await store.get('broker:other-device'))?.publicKey).toBe(mismatchedAddress)
+  })
+
+  it('resumes interrupted first-wallet setup and reuses the matching registered key', async () => {
+    const store = new IndexedDbWalletStore(indexedDB)
+    const vault = new WalletVault({ store })
+    const identityKey = 'broker:interrupted-setup'
+    const address = await vault.resolveAssociatedAddress(identityKey, null)
+    expect(await vault.resolveAssociatedAddress(identityKey, null)).toBe(address)
+    expect(await vault.resolveAssociatedAddress(identityKey, address)).toBe(address)
+    vault.lock(identityKey)
+    await store.update(identityKey, (record) => {
+      if (!record) throw new Error('Expected local wallet')
+      const missingKey = { ...record }
+      delete missingKey.secret
+      return missingKey
+    })
+    await expect(vault.resolveAssociatedAddress(identityKey, address))
+      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+  })
+
+  it('converges simultaneous first-wallet resolution across vault instances', async () => {
+    const first = new WalletVault({ store: new IndexedDbWalletStore(indexedDB) })
+    const second = new WalletVault({ store: new IndexedDbWalletStore(indexedDB) })
+    const identityKey = 'broker:concurrent-first-wallet'
+    const [firstAddress, secondAddress] = await Promise.all([
+      first.resolveAssociatedAddress(identityKey, null),
+      second.resolveAssociatedAddress(identityKey, null),
+    ])
+    expect(secondAddress).toBe(firstAddress)
+    expect(await first.resolveAssociatedAddress(identityKey, firstAddress)).toBe(firstAddress)
+  })
+
+  it('resolves a protected registered wallet without unlocking and requires recovery if protection material is missing', async () => {
+    vi.stubGlobal('location', { hostname: 'localhost' })
+    const store = new IndexedDbWalletStore(indexedDB)
+    const vault = new WalletVault({ store, passkeys: testPasskey })
+    const identityKey = 'broker:protected-wallet'
+    const address = await vault.getOrCreateAddress(identityKey)
+    await vault.protectWithPasskey(identityKey)
+    vault.lock(identityKey)
+    expect(await vault.resolveAssociatedAddress(identityKey, address)).toBe(address)
+    expect(vault.isUnlocked(identityKey)).toBe(false)
+    await store.update(identityKey, (record) => {
+      if (!record) throw new Error('Expected protected wallet')
+      const incomplete = { ...record }
+      delete incomplete.ciphertext
+      return incomplete
+    })
+    await expect(vault.resolveAssociatedAddress(identityKey, address))
+      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    expect(vault.isUnlocked(identityKey)).toBe(false)
+  })
 
   it('persists separate local wallets and signs without exposing key bytes', async () => {
     const store = new IndexedDbWalletStore(indexedDB)

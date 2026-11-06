@@ -5,6 +5,7 @@ import { createBrowserWalletAuth } from './broker.js'
 
 const config = {
   AppId: '-17.42',
+  WalletAccessVersion: 1,
   EmailOtp: true,
   SmsOtp: true,
   SocialProviders: ['google-oauth2', 'apple'],
@@ -74,7 +75,7 @@ describe('createBrowserWalletAuth', () => {
     expect(start?.['CodeChallenge']).toMatch(/^[\w-]{43}$/)
     await expect(broker.auth.verifyOtp?.('email', 'user@example.test', '123456')).resolves.toEqual({
       identityKey: 'email|user',
-      broker: { identityTicket: 'single-use-ticket' },
+      broker: { identityTicket: 'single-use-ticket', appId: '-17.42', walletAccessVersion: 1 },
     })
     const redemption = requests.find(({ path }) => path === '/redeem')?.body
     expect(redemption).toMatchObject({ Code: 'one-time-code' })
@@ -173,6 +174,15 @@ describe('createBrowserWalletAuth', () => {
     expect(attempts[0]?.body['CodeChallenge']).not.toBe(attempts[1]?.body['CodeChallenge'])
   })
 
+  it.each([undefined, 0, 2])(
+    'rejects unsupported wallet access version %s before authentication',
+    async (version) => {
+      fetchMock.mockResolvedValueOnce(json({ ...config, WalletAccessVersion: version }))
+      await expect(create()).rejects.toThrow('wallet access binding v1')
+      expect(fetchMock).toHaveBeenCalledOnce()
+    },
+  )
+
   it('fails closed on unavailable config and on disabled methods', async () => {
     fetchMock.mockResolvedValueOnce(json({}, 403))
     await expect(create()).rejects.toThrow('enroll this exact browser origin')
@@ -223,7 +233,7 @@ describe('createBrowserWalletAuth', () => {
     )
     await expect(pending).resolves.toEqual({
       identityKey: 'email|user',
-      broker: { identityTicket: 'single-use-ticket' },
+      broker: { identityTicket: 'single-use-ticket', appId: '-17.42', walletAccessVersion: 1 },
     })
     expect(close).toHaveBeenCalledTimes(1)
     expect(remove).toHaveBeenCalledWith('message', expect.any(Function))

@@ -56,8 +56,20 @@ does not silently switch to direct Auth0 or simulation.
 Challenges are single-attempt, including incorrect codes; use **Resend code**
 after verification fails. Handoff codes last 60 seconds and the SDK redeems
 them with S256 PKCE for a 120-second, one-time identity ticket. The SDK uses the
-stable identity key to select a local signer, then binds the ticket to its
-public address for an opaque session. Provider tokens remain server-side.
+ticket to look up the authoritative application/user wallet before selecting a
+local signer, then signs the exact server challenge with Ed25519 and binds the
+ticket/address/proof for an opaque session. The backend must advertise
+`WalletAccessVersion:1`; older unsigned session endpoints are not supported.
+Provider tokens remain server-side.
+
+If the registered wallet's key is missing from this browser, setup reports
+recovery-required instead of creating a different wallet. Use the original
+device or a supported recovery method; this demo does not implement
+cross-device recovery. Protected local keys must unlock with their passkey
+before session binding. A conflict or any failed/ambiguous `/session` exchange
+consumes the ticket and requires fresh sign-in (for OTP, explicitly resend).
+An operator-controlled legacy scope migration may be required; no legacy
+address is automatically copied across applications.
 
 ### Optional direct Auth0 setup
 
@@ -90,7 +102,7 @@ For embedded OTP, Auth0.js serializes the authorization query key as
 ## Key integration
 
 The SDK sends `X-API-Key` with browser-broker requests to
-`/api/browser-wallet/config`, `/otp/start`, `/otp/verify`, `/authorize`, `/redeem`,
+`/api/browser-wallet/config`, `/otp/start`, `/otp/verify`, `/authorize`, `/redeem`, `/wallet`,
 and `/session` (all under that namespace). The browser supplies its real Origin;
 no cookies or Auth0 provider tokens are involved. Existing
 `/api/EmbeddedWallet/session` and `/api/EmbeddedWallet/signout` handle opaque

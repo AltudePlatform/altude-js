@@ -20,8 +20,9 @@ system fallbacks and makes no font-network requests. Existing `--altude-*`
 theme tokens are respected, with the demo's light palette as the default.
 The SDK does not accept profile claims as authentication. The broker validates
 the identity server-side and issues a short-lived, single-use identity ticket.
-The SDK creates or reuses the local signer, then exchanges the ticket and public
-wallet address for the existing opaque wallet session. Auth0 provider tokens
+The SDK looks up the authoritative application/user wallet before creating or
+reusing a local signer, then signs a one-time access challenge and exchanges
+the ticket, address, and proof for an opaque wallet session. Auth0 provider tokens
 and client secrets never enter the broker consumer's browser.
 
 ```ts
@@ -68,7 +69,11 @@ write happens at runtime.
 
 The operator configures a dedicated confidential Auth0 Regular Web Application,
 the fixed browser callback, enabled connections, six-digit passwordless OTP,
-message providers, Redis/Data Protection, and exact-origin CORS. Client secrets
+message providers, shared Redis (`NativeWallet:RedisConnection`)/Data Protection,
+and exact-origin CORS. `BrowserWallet:Issuer` is the API HTTPS authority,
+normalized without a trailing slash; paths, query, fragment, and credentials
+are rejected. Browser authentication does not require native RSA or native
+Auth0 client-secret settings. Client secrets
 and provider tokens remain backend-only. Auth0 Actions must be compatible with
 this dedicated client; the browser broker does not put API keys in Auth0 URLs.
 This is separate from changing a SPA's application type to bypass Auth0 restrictions.
@@ -78,12 +83,48 @@ and no automatic redirect following or grant retries:
 
 | Endpoint under `/api/browser-wallet` | Request / response |
 | --- | --- |
-| `GET /config` | `{AppId,SocialProviders,EmailOtp,SmsOtp}` |
+| `GET /config` | `{AppId,SocialProviders,EmailOtp,SmsOtp,WalletAccessVersion:1}` |
 | `POST /otp/start` | `{Method,Identifier,State,CodeChallenge,CodeChallengeMethod:'S256'}` -> `{ChallengeId,ExpiresIn}` |
 | `POST /otp/verify` | `{ChallengeId,Code}` -> `{Code,State}` |
 | `POST /authorize` | `{Provider,State,CodeChallenge,CodeChallengeMethod:'S256'}` -> `{AuthorizationUrl,TransactionId}` |
 | `POST /redeem` | `{Code,CodeVerifier}` -> `{IdentityTicket,IdentityKey,ExpiresIn}` |
-| `POST /session` | `{IdentityTicket,WalletAddress}` -> existing opaque wallet session response |
+| `POST /wallet` | `{IdentityTicket}` -> `{AppId,UserId,IdentityKey,WalletAddress:null|string,ChallengeId,Message,ExpiresIn:60}`; ticket retained |
+| `POST /session` | `{IdentityTicket,WalletAddress,ChallengeId,Signature}` -> opaque session with top-level `AppId`/`UserId` and matching `User.Id` |
+
+**Wallet access binding v1 is required.** Absent or unsupported
+`WalletAccessVersion` fails before authentication/key setup, with no unsigned
+session fallback. Deploy the matching backend before upgrading the browser
+SDK. The SDK validates the returned identity, application, API issuer/origin,
+and challenge bindings, then signs the server's exact UTF-8 `Message` (LF
+delimiters, no trailing LF), not a reconstructed message or transaction.
+`Signature` is a standard padded-base64 64-byte Ed25519 signature. Registered
+passkey-protected keys require a successful local passkey unlock before proof
+and session creation.
+
+Wallet sharing is limited to the **same tenant, AppId/API-key record, and
+canonical wallet user**. Local records are scoped by API deployment, AppId,
+and canonical UserId, not just provider `sub` or email. An existing server
+address with missing, mismatched, or incomplete local key material reports
+`RECOVERY_REQUIRED`; the SDK does not overwrite the association or generate a
+replacement. The original device or an explicitly supported recovery method
+is required; cross-device recovery is not implemented by this package.
+
+The server atomically registers the first address. A competing
+`409 wallet_conflict` supplies the canonical app/user/address. The SDK checks
+only existing local key material: a mismatch requires recovery; a matching key
+reports `WALLET_CONFLICT` and requires fresh sign-in. `/session` consumes both
+ticket and challenge before validation and persistence, **including all
+failures and conflicts**. Never retry an old ticket after a rejected or
+ambiguous exchange. Fresh authentication/redeem is required; an interrupted
+first setup may reuse its persisted local key. `/wallet` does not extend the
+original ticket's 120-second expiry.
+
+Scoped session restoration uses the server's top-level `AppId`/`UserId`
+through `/api/EmbeddedWallet/session` and the matching scoped local record.
+Legacy sessions/associations are not implicitly migrated or backfilled across
+applications. `wallet_scope_migration_required` surfaces as
+`WALLET_SCOPE_MIGRATION_REQUIRED` and blocks setup pending an explicit operator
+migration.
 
 Social authorization navigates a popup to `AuthorizationUrl`. The fixed broker
 callback posts only `{Type:'altude:wallet:authorization',Code,State}` to the exact
@@ -162,7 +203,10 @@ This package is browser-only. The browser broker and its opaque sessions stay
 separate from the native callback broker in
 [AltudePlatform/Altude-Platform-API#338](https://github.com/AltudePlatform/Altude-Platform-API/issues/338).
 Native iOS/Android callback setup, native JWTs, and native refresh/revoke are not
-used by this browser adapter.
+used by this browser adapter. Browser/native wallet associations can converge
+within the same app/user scope, but their credentials and login transports
+remain separate. The optional direct Auth0 exchange is legacy; it neither
+establishes broker interoperability nor selects broker-scoped local keys.
 Applications using another identity provider can continue supplying a custom
 `WalletAuthProvider` adapter.
 

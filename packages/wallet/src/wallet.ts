@@ -5,8 +5,9 @@ import type {
   WalletUiConfiguration,
 } from '@altude/gasstation'
 import { AltudeWalletError } from './errors.js'
-import { assertPublicKey } from './crypto.js'
-import { EmbeddedWalletApi } from './api.js'
+import { assertPublicKey, toArrayBuffer } from './crypto.js'
+import { BrowserWalletConflictError, EmbeddedWalletApi } from './api.js'
+import type { BrowserWalletAccess } from './api.js'
 import { MemorySessionTokenStore } from './storage.js'
 import { WalletVault } from './vault.js'
 import type {
@@ -24,6 +25,10 @@ import type {
   WalletTransactionResult,
   WalletTransferHistory,
 } from './types.js'
+
+function base64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes))
+}
 
 interface EmbeddedActiveWallet {
   mode: 'embedded'
@@ -68,6 +73,8 @@ export class AltudeWallet {
   readonly #listeners = new Set<(event: WalletEvent) => void>()
   readonly #pendingTransactions = new Map<string, PendingTransaction>()
   readonly #pendingExternalConnections = new Set<ExternalWalletProviderId>()
+  readonly #browserKeyGenerations = new Map<string, number>()
+  readonly #usedBrowserTickets = new Set<string>()
   #active: ActiveWallet | null = null
   #lifecycleGeneration = 0
   #sessionTokenQueue: Promise<void> = Promise.resolve()
@@ -156,9 +163,7 @@ export class AltudeWallet {
     return this.#externalWallets.map((provider) => ({
       id: provider.id,
       label: provider.label,
-      ...(provider.isAvailable
-        ? { isAvailable: () => provider.isAvailable?.() ?? false }
-        : {}),
+      ...(provider.isAvailable ? { isAvailable: () => provider.isAvailable?.() ?? false } : {}),
     }))
   }
 
@@ -252,6 +257,7 @@ export class AltudeWallet {
     }
     const generation = ++this.#lifecycleGeneration
     this.#assertIdentity(identity)
+    if (identity.broker) return this.#connectBrowser(identity, generation)
     let address: string
     this.#emit({ type: 'setup:progress', stage: 'securing-device' })
     try {
@@ -267,14 +273,13 @@ export class AltudeWallet {
     let result: Awaited<ReturnType<EmbeddedWalletApi['exchangeAuth0']>>
     this.#emit({ type: 'setup:progress', stage: 'connecting-account' })
     try {
-      result = identity.broker
-        ? await this.#api.exchangeBrowserBroker(identity.broker.identityTicket, address)
-        : await this.#api.exchangeAuth0(identity.accessToken, address)
+      result = await this.#api.exchangeAuth0(identity.accessToken, address)
     } catch (error) {
       if (!this.#isCurrentLifecycle(generation)) {
         this.#lockStaleIdentity(identity.identityKey)
         return this.state
       }
+
       this.#vault.lock(identity.identityKey)
       throw error
     }
@@ -339,6 +344,191 @@ export class AltudeWallet {
     })
     this.#emit({ type: 'state', state: this.state })
     return this.state
+  }
+
+  async #connectBrowser(identity: WalletIdentityToken, generation: number): Promise<WalletState> {
+    const broker = identity.broker
+    if (!broker || broker.walletAccessVersion !== 1 || !broker.appId) {
+      throw new AltudeWalletError('CONFIGURATION', 'Browser wallet access binding v1 is required.')
+    }
+    if (this.#usedBrowserTickets.has(broker.identityTicket)) {
+      throw new AltudeWalletError(
+        'AUTHENTICATION',
+        'This identity ticket was already submitted. Restart sign-in; session binding is never retried.',
+      )
+    }
+    let localIdentity: string | undefined
+    let access: BrowserWalletAccess | undefined
+    const current = () => {
+      if (!this.#isCurrentLifecycle(generation)) {
+        throw new AltudeWalletError('SESSION', 'Wallet sign-in was superseded.')
+      }
+    }
+    try {
+      this.#emit({ type: 'setup:progress', stage: 'connecting-account' })
+      const appId = await this.#api.browserAppId()
+      current()
+      if (appId !== broker.appId) {
+        throw new AltudeWalletError(
+          'AUTHENTICATION',
+          'The browser identity belongs to a different application.',
+        )
+      }
+      access = await this.#api.getBrowserWallet(broker.identityTicket)
+      current()
+      if (access.appId !== appId || access.identityKey !== identity.identityKey) {
+        throw new AltudeWalletError(
+          'INVALID_RESPONSE',
+          'The authoritative wallet identity does not match this sign-in.',
+        )
+      }
+      await this.#validateBrowserMessage(access, broker.identityTicket)
+      current()
+      localIdentity = this.#api.browserIdentityKey(access.appId, access.userId)
+      this.#browserKeyGenerations.set(localIdentity, generation)
+      this.#vault.lock(localIdentity)
+      this.#emit({ type: 'setup:progress', stage: 'securing-device' })
+      const address = await this.#vault.resolveAssociatedAddress(
+        localIdentity,
+        access.walletAddress,
+      )
+      current()
+      const protection = await this.#vault.protection(localIdentity)
+      current()
+      if (protection === 'passkey') await this.#vault.unlockWithPasskey(localIdentity)
+      else await this.#vault.unlock(localIdentity)
+      current()
+      const signer = await this.#vault.getSigner(localIdentity)
+      current()
+      if (signer.address !== address) {
+        throw new AltudeWalletError(
+          'RECOVERY_REQUIRED',
+          'The signing key does not match the registered wallet.',
+        )
+      }
+      if (!signer.signTransactionMessage) {
+        throw new AltudeWalletError(
+          'WALLET_LOCKED',
+          'The local wallet cannot sign the wallet access proof.',
+        )
+      }
+      const signature = await signer.signTransactionMessage(
+        new TextEncoder().encode(access.message),
+      )
+      current()
+      if (signature.length !== 64) {
+        throw new AltudeWalletError(
+          'INVALID_RESPONSE',
+          'The wallet access signature must be a 64-byte Ed25519 signature.',
+        )
+      }
+      if (this.#usedBrowserTickets.has(broker.identityTicket)) {
+        throw new AltudeWalletError(
+          'AUTHENTICATION',
+          'This identity ticket was already submitted. Restart sign-in.',
+        )
+      }
+      this.#usedBrowserTickets.add(broker.identityTicket)
+      const result = await this.#api.exchangeBrowserBroker(
+        broker.identityTicket,
+        address,
+        access.challengeId,
+        base64(signature),
+      )
+      current()
+      if (
+        result.appId !== access.appId ||
+        result.userId !== access.userId ||
+        result.user.walletAddress !== address
+      ) {
+        throw new AltudeWalletError(
+          'SESSION',
+          'The API session scope or wallet does not match the authoritative local wallet.',
+        )
+      }
+      await this.#vault.associateServerUser(localIdentity, result.userId)
+      current()
+      this.#emit({ type: 'setup:progress', stage: 'finishing' })
+      await this.#withSessionTokens(generation, () => this.#sessionTokens.set(result.token))
+      current()
+      this.#replaceActive({
+        mode: 'embedded',
+        identityKey: localIdentity,
+        address,
+        protection,
+        session: { user: result.user, appId: result.appId, userId: result.userId },
+      })
+      this.#emit({ type: 'state', state: this.state })
+      return this.state
+    } catch (error) {
+      if (localIdentity && this.#browserKeyGenerations.get(localIdentity) === generation) {
+        if (this.#isCurrentLifecycle(generation)) this.#vault.lock(localIdentity)
+        else this.#lockStaleIdentity(localIdentity)
+      }
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      if (error instanceof BrowserWalletConflictError && access && localIdentity) {
+        if (error.appId !== access.appId || error.userId !== access.userId) {
+          throw new AltudeWalletError(
+            'INVALID_RESPONSE',
+            'The wallet conflict belongs to a different application or user.',
+          )
+        }
+        // A conflict consumes the ticket. Inspect locally but never repeat the session exchange.
+        try {
+          await this.#vault.resolveAssociatedAddress(localIdentity, error.walletAddress)
+        } catch (recoveryError) {
+          if (!this.#isCurrentLifecycle(generation)) return this.state
+          throw recoveryError
+        }
+        if (!this.#isCurrentLifecycle(generation)) return this.state
+      }
+      throw error
+    } finally {
+      if (localIdentity && this.#browserKeyGenerations.get(localIdentity) === generation) {
+        this.#browserKeyGenerations.delete(localIdentity)
+      }
+    }
+  }
+
+  async #validateBrowserMessage(access: BrowserWalletAccess, ticket: string): Promise<void> {
+    if (!/^[A-Za-z0-9_-]+$/.test(ticket)) {
+      throw new AltudeWalletError(
+        'INVALID_RESPONSE',
+        'The browser identity ticket must be an ASCII base64url value.',
+      )
+    }
+    const digest = await this.#crypto.subtle.digest(
+      'SHA-256',
+      toArrayBuffer(new TextEncoder().encode(ticket)),
+    )
+    const ticketHash = base64(new Uint8Array(digest))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+    const lines = access.message.split('\n')
+    if (
+      lines.length !== 12 ||
+      access.message.includes('\r') ||
+      lines[0] !== 'Altude Wallet Access Binding v1' ||
+      lines[1] !== `Issuer: ${this.#api.browserOrigin}` ||
+      lines[2] !== `AppId: ${access.appId}` ||
+      !/^TenantId: -?\d+$/.test(lines[3] ?? '') ||
+      lines[4] !== `UserId: ${access.userId}` ||
+      lines[5] !== `IdentityKey: ${access.identityKey}` ||
+      lines[6] !== 'RefreshFamilyId: browser' ||
+      !lines[7]?.startsWith('Origin: ') ||
+      (typeof location !== 'undefined' && lines[7] !== `Origin: ${location.origin}`) ||
+      lines[8] !== `IdentityTicket: ${ticketHash}` ||
+      lines[9] !== `ChallengeId: ${access.challengeId}` ||
+      lines[10] !== `WalletAddress: ${access.walletAddress ?? ''}` ||
+      !lines[11]?.startsWith('Nonce: ') ||
+      lines[11].length <= 7
+    ) {
+      throw new AltudeWalletError(
+        'INVALID_RESPONSE',
+        'The browser broker returned an invalid or mismatched wallet access proof message.',
+      )
+    }
   }
 
   async connectExternalWallet(providerId: ExternalWalletProviderId): Promise<WalletState> {
@@ -451,7 +641,34 @@ export class AltudeWallet {
     }
     let record: Awaited<ReturnType<WalletVault['findByServerUserId']>>
     try {
-      record = await this.#vault.findByServerUserId(session.user.id)
+      if (session.appId && session.userId) {
+        const appId = await this.#api.browserAppId()
+        if (!this.#isCurrentLifecycle(generation)) return this.state
+        if (appId !== session.appId || !session.user.walletAddress) {
+          throw new AltudeWalletError(
+            'SESSION',
+            'The restored wallet session belongs to a different application or has no registered address.',
+          )
+        }
+        const identityKey = this.#api.browserIdentityKey(appId, session.userId)
+        await this.#vault.resolveAssociatedAddress(identityKey, session.user.walletAddress)
+        if (!this.#isCurrentLifecycle(generation)) return this.state
+        record = await this.#vault.findByIdentityKey(identityKey)
+      } else {
+        if (this.#auth.browserBroker) {
+          throw new AltudeWalletError(
+            'WALLET_SCOPE_MIGRATION_REQUIRED',
+            'This legacy session cannot restore a broker wallet. Restart sign-in after an explicit wallet-scope migration.',
+          )
+        }
+        record = await this.#vault.findByServerUserId(session.user.id)
+        if (record?.identityKey.startsWith('altude:browser:v1:')) {
+          throw new AltudeWalletError(
+            'WALLET_SCOPE_MIGRATION_REQUIRED',
+            'A legacy session cannot access an application-scoped broker wallet.',
+          )
+        }
+      }
     } catch (error) {
       if (!this.#isCurrentLifecycle(generation)) return this.state
       throw error
@@ -807,6 +1024,12 @@ export class AltudeWallet {
   }
 
   #assertIdentity(identity: WalletIdentityToken): void {
+    if (!identity.broker && identity.identityKey.startsWith('altude:browser:v1:')) {
+      throw new AltudeWalletError(
+        'AUTHENTICATION',
+        'Legacy identity adapters cannot select application-scoped broker keys.',
+      )
+    }
     const credential = identity.broker ? identity.broker.identityTicket : identity.accessToken
     if (!credential.trim())
       throw new AltudeWalletError(
