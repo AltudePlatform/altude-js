@@ -82,6 +82,12 @@ RPC operations require an API key. The SDK always uses the node URL and JWT
 returned by Altude's transaction config API and never falls back to a public
 Solana endpoint.
 
+Approval interfaces can pass `expectedNetwork` to `send` or `createAccount`
+to bind execution to the cluster the user reviewed. The SDK checks the
+authoritative `RpcEnvironment` before signing and again before relay, rejecting
+changes rather than switching networks. Provisioning also checks existing-account
+no-ops. This is a constraint on API configuration, not an RPC endpoint override.
+
 See the [monorepo README](https://github.com/AltudePlatform/altude-js) for the full
 SDK overview.
 

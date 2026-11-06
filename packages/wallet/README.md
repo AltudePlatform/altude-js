@@ -286,6 +286,35 @@ server-validated ceremony. A passkey and its relying-party origin must be
 available to recover the protected key; clearing browser storage without a
 backup can permanently lose access.
 
+For **local-only access without API authentication**, enable the passkey method
+in the managed UI, or use the headless lifecycle:
+
+```ts
+const state = await wallet.createLocalWallet()
+// Retain this public, opaque handle to reopen the same browser's stored wallet.
+const handle = state.localIdentityKey!
+const signature = await wallet.signMessage(new TextEncoder().encode('My application message'))
+await wallet.signOut()
+await wallet.openLocalWallet(handle)
+```
+
+These wallets have `custody: 'local'`, `session: null`, and a passkey-protected
+record before their address/handle is exposed. `signMessage(bytes)` and
+`signTransactionMessage(bytes)` sign a copy locally and return only the
+signature. They do not authenticate, provision, or relay anything. Applications
+must explain the exact message to the user before requesting a signature.
+`getPasskeyAvailability()` refreshes capability discovery; both the default
+browser adapter and injected adapters must explicitly advertise PRF support.
+Actual ceremonies still verify the PRF result and reject unsupported or
+cancelled authenticators. Availability is not proof of recovery, portability,
+or a server-verified passkey login.
+
+The managed UI exposes local creation, returning access by handle, handle
+copying, lock/unlock, balance selection, and independently confirmed provisioning.
+The handle is not a backup: it cannot recreate a deleted IndexedDB record or
+unlock a wallet on another origin/device. A retained API session must be signed
+out before entering local-only or external custody.
+
 Device-local keys are stored unwrapped in the current browser's IndexedDB.
 Same-origin JavaScript (including injected scripts) can access that origin's
 storage, so applications should apply normal XSS protections and use a
@@ -309,6 +338,16 @@ Gas Station SDK builds, locally signs, and submits supported requests. Opaque
 instruction sets and Token-2022 transfers are rejected/not exposed until the
 relay SDK supports them.
 
+Confirmation is **asynchronous**: the SDK first reads fresh authoritative
+`RpcEnvironment` from transaction config. Always wait for the event rather than
+assuming an ID is available immediately after requesting a transfer.
+The confirmation carries an immutable intent with that network. An explicitly
+configured wallet network is a constraint, not permission to override the
+server. Changes are rejected before signing and again before relay; the
+Gas Station execution receives the same `expectedNetwork`. Without an explicit
+constraint, the server selects the network. Missing/unsupported config fails
+closed rather than falling back to a public RPC or guessed cluster.
+
 Approval claims the request immediately; concurrent `approveTransaction(id)`
 calls reject with a `TRANSACTION` error rather than submit another transfer.
 Requests stay cancellable while submitting. Changing identity, signing out, or
@@ -316,8 +355,23 @@ rejecting the request cancels its pending result and prevents a late relay
 response from reporting completion. Cancellation cannot retract a transfer
 already sent to the relay; check its status before requesting another transfer.
 
-`createAccount()`, `getBalance()`, `getHistory()`, and `getTransaction()` use
-Gas Station's supported account/RPC capabilities. Transaction lookup searches
+`createAccount(tokens?, signal?)` now **requests** provisioning; it does not immediately
+submit. Headless consumers must handle `provisioning:confirmation`, display
+its frozen token list and network, then call `approveProvisioning(id)` or
+`rejectProvisioning(id)`. The returned promise settles only after that decision
+and execution. Do not await it inside a UI busy wrapper that disables the
+confirmation controls. Duplicate approvals cannot submit twice; rejection,
+identity change and sign-out cancel pending work. A successful existing-account
+no-op returns `Status: 'Success'`, `Message: 'Account already exists'`, and an
+empty `Signature`, with no new relay submission.
+An optional `AbortSignal` also cancels preparation before a confirmation exists.
+The managed UI aborts that preparation on teardown and rejects unsubmitted
+confirmations, while leaving already submitting operations alone.
+
+`getBalance()` selects SOL; `getBalance(mintAddress)` selects an SPL token.
+The managed balance form accepts an optional token mint. These methods,
+`getHistory()`, and `getTransaction()` use Gas Station's supported account/RPC
+capabilities. Transaction lookup searches
 the most recent 100 history entries; the current Gas Station API does not
 provide a direct lookup endpoint.
 
@@ -326,7 +380,11 @@ provide a direct lookup endpoint.
 act as an allowlist and are intersected with the app's configured auth handlers
 and external-wallet adapters; an enabled method without an adapter is not shown.
 When the API returns no wallet UI settings, use explicit developer configuration
-as a fallback.
+as a fallback (`authMethods` and `legal`, or a supplied `walletUi` object).
+With neither source configured, the UI offers no guessed login methods.
+Unavailable external providers are disabled, and capability checks also apply
+to headless connection attempts. SMS send/resend requires initially unchecked
+consent and configured copy; editing the phone number or channel clears consent.
 
 The managed UI places email/SMS first, configured social and passkey buttons
 next, and an expandable Web3 wallet row last. The row lists only enabled,
@@ -352,3 +410,10 @@ fully reviewed and the package is promoted.
 Run `pnpm --filter @altude/wallet test:browser` to exercise the browser entry
 point with real browser Web Crypto and IndexedDB in Microsoft Edge. Set
 `EDGE_EXECUTABLE` if Edge is installed outside its standard Windows locations.
+The suite covers custom OTP/resend/social popup exchange, consent, configuration
+precedence, unavailable methods, local PRF-protected signing, managed approval,
+persistent-key adoption races, keyboard/legal focus, reduced-motion pseudo
+elements, trust gating, and actual iframe wrong-origin/wrong-source messages.
+Identity/API/PRF/relay services are synthetic; this is not physical-authenticator,
+live Auth0 delivery, backend deployment, SQL Server concurrency, recovery, or
+live-transfer acceptance evidence.

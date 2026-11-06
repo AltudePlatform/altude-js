@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AltudeGasStation, GaslessTransactionSigner, SendOptions } from '@altude/gasstation'
+import type {
+  AltudeGasStation,
+  CreateAccountOptions,
+  GaslessTransactionSigner,
+  SendOptions,
+} from '@altude/gasstation'
 import { createHash } from 'node:crypto'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { decodeBase58, encodeBase58 } from './crypto.js'
@@ -98,7 +103,7 @@ describe('AltudeWallet', () => {
       createAccount: vi
         .fn()
         .mockResolvedValue({ Signature: 'account-signature', Status: 'Success' }),
-      getConfig: vi.fn().mockResolvedValue({ walletUi: null }),
+      getConfig: vi.fn().mockResolvedValue({ walletUi: null, RpcEnvironment: 'devnet' }),
       getBalance: vi.fn().mockResolvedValue({ address: 'wallet', uiAmount: 2 }),
       getHistory: vi
         .fn()
@@ -133,13 +138,322 @@ describe('AltudeWallet', () => {
       branding: { appName: 'Example' },
       authMethods: { emailOtp: false, socialProviders: ['google'] },
     }
-    gasStation.getConfig.mockResolvedValue({ walletUi })
+    gasStation.getConfig.mockResolvedValue({ walletUi, RpcEnvironment: 'devnet' })
     const wallet = createWallet()
 
     expect(wallet.network).toBe('devnet')
     await expect(wallet.getWalletUiConfiguration()).resolves.toEqual(walletUi)
-    gasStation.getConfig.mockResolvedValue({})
+    gasStation.getConfig.mockResolvedValue({ RpcEnvironment: 'devnet' })
     await expect(wallet.getWalletUiConfiguration()).resolves.toBeNull()
+  })
+
+  it('orders a successor broker login behind a cancelled committed creation and preserves the registered key', async () => {
+    browserBackend()
+    const creationCommitted = deferred<boolean>()
+    const completeCreation = deferred<boolean>()
+    const original = store.createIfAbsent.bind(store)
+    vi.spyOn(store, 'createIfAbsent').mockImplementationOnce(async (record) => {
+      const result = await original(record)
+      creationCommitted.resolve(true)
+      await completeCreation.promise
+      return result
+    })
+    const wallet = createWallet()
+    const older = wallet.connect(browserIdentity('older'))
+    await creationCommitted.promise
+    const newer = wallet.connect(browserIdentity('newer'))
+    await vi.waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/wallet'))).toHaveLength(
+        2,
+      )
+    })
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/browser-wallet/session')),
+    ).toHaveLength(0)
+    completeCreation.resolve(true)
+    await older
+    const state = await newer
+    expect(state.status).toBe('connected')
+    expect([...store.records.values()][0]?.publicKey).toBe(state.address)
+    expect((await wallet.signMessage(new Uint8Array([5]))).length).toBe(64)
+    expect((await createWallet().connect(browserIdentity('fresh'))).address).toBe(state.address)
+  })
+
+  it('does not lock a newer legacy connection awaiting a local read when an older exchange finishes', async () => {
+    const olderResponse = deferred<Response>()
+    fetchMock.mockReturnValueOnce(olderResponse.promise)
+    const wallet = createWallet()
+    const older = wallet.connect({ identityKey: 'legacy|race', accessToken: 'older' })
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce()
+    })
+    const readStarted = deferred<boolean>()
+    const finishRead = deferred<boolean>()
+    const original = store.get.bind(store)
+    vi.spyOn(store, 'get').mockImplementationOnce(async (key) => {
+      readStarted.resolve(true)
+      await finishRead.promise
+      return original(key)
+    })
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ Success: true, SessionToken: 'newer', User: { Id: 'owner' } }),
+    )
+    const newer = wallet.connect({ identityKey: 'legacy|race', accessToken: 'newer' })
+    await readStarted.promise
+    olderResponse.resolve(
+      jsonResponse({ Success: true, SessionToken: 'older', User: { Id: 'owner' } }),
+    )
+    await older
+    finishRead.resolve(true)
+    expect(await newer).toMatchObject({ status: 'connected' })
+    expect(sessionTokens.token).toBe('newer')
+  })
+
+  async function connectedWallet() {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({ Success: true, SessionToken: 'session', User: { Id: 'user' } }),
+      ),
+    )
+    const wallet = createWallet()
+    await wallet.connect({ identityKey: 'legacy|operations', accessToken: 'access' })
+    return wallet
+  }
+
+  it('rejects constructor/approved network mismatches before confirmation or submission', async () => {
+    const wallet = await connectedWallet()
+    const events: WalletEvent[] = []
+    wallet.onEvent((event) => events.push(event))
+    gasStation.getConfig.mockResolvedValue({ RpcEnvironment: 'mainnet-beta' })
+    await expect(
+      wallet.requestTransaction({
+        kind: 'sol-transfer',
+        recipient: '11111111111111111111111111111111',
+        amount: 1,
+        network: 'devnet',
+      }),
+    ).rejects.toThrow('authoritative RPC')
+    expect(events).toHaveLength(0)
+    expect(gasStation.send).not.toHaveBeenCalled()
+  })
+
+  it('rejects a network switch between confirmation and signing', async () => {
+    const wallet = await connectedWallet()
+    let id = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') id = event.id
+    })
+    const requested = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: '11111111111111111111111111111111',
+      amount: 1,
+    })
+    const rejected = expect(requested).rejects.toThrow('authoritative RPC')
+    await vi.waitFor(() => {
+      expect(id).not.toBe('')
+    })
+    gasStation.getConfig.mockResolvedValue({ RpcEnvironment: 'mainnet-beta' })
+    await expect(wallet.approveTransaction(id)).rejects.toThrow('authoritative RPC')
+    await rejected
+    expect(gasStation.send).not.toHaveBeenCalled()
+  })
+
+  it('discards signatures when executor preparation changes the approved network', async () => {
+    const wallet = await connectedWallet()
+    let id = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') id = event.id
+    })
+    const relayed = vi.fn()
+    gasStation.send.mockImplementation(async ({ sourceSigner }: SendOptions) => {
+      gasStation.getConfig.mockResolvedValue({ RpcEnvironment: 'mainnet-beta' })
+      await sourceSigner?.signTransactionMessage?.(new Uint8Array([1]))
+      relayed()
+      return { Signature: 'must-not-relay' }
+    })
+    const requested = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: '11111111111111111111111111111111',
+      amount: 1,
+    })
+    const rejected = expect(requested).rejects.toThrow('authoritative RPC')
+    await vi.waitFor(() => {
+      expect(id).not.toBe('')
+    })
+    await expect(wallet.approveTransaction(id)).rejects.toThrow('authoritative RPC')
+    await rejected
+    expect(relayed).not.toHaveBeenCalled()
+  })
+
+  it('requires explicit provisioning approval and snapshots the token selection', async () => {
+    const wallet = await connectedWallet()
+    let id = ''
+    let tokens: readonly string[] | undefined
+    wallet.onEvent((event) => {
+      if (event.type === 'provisioning:confirmation') {
+        id = event.id
+        tokens = event.tokens
+      }
+    })
+    const selection = ['So11111111111111111111111111111111111111112']
+    const requested = wallet.createAccount(selection)
+    selection[0] = '11111111111111111111111111111111'
+    await vi.waitFor(() => {
+      expect(id).not.toBe('')
+    })
+    expect(gasStation.createAccount).not.toHaveBeenCalled()
+    expect(tokens).toEqual(['So11111111111111111111111111111111111111112'])
+    expect(Object.isFrozen(tokens)).toBe(true)
+    const result = await wallet.approveProvisioning(id)
+    expect(await requested).toEqual(result)
+    expect(gasStation.createAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedNetwork: 'devnet', tokens }),
+    )
+  })
+
+  it('cancels provisioning before relay on sign-out and supports SPL balance selection', async () => {
+    const wallet = await connectedWallet()
+    let id = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'provisioning:confirmation') id = event.id
+    })
+
+    const requested = wallet.createAccount()
+    const rejected = expect(requested).rejects.toMatchObject({ code: 'SESSION' })
+    await vi.waitFor(() => {
+      expect(id).not.toBe('')
+    })
+    await wallet.getBalance('So11111111111111111111111111111111111111112')
+    expect(gasStation.getBalance).toHaveBeenCalledWith({
+      address: wallet.address,
+      token: 'So11111111111111111111111111111111111111112',
+    })
+    await wallet.signOut()
+    await rejected
+    await expect(wallet.approveProvisioning(id)).rejects.toMatchObject({ code: 'TRANSACTION' })
+    expect(gasStation.createAccount).not.toHaveBeenCalled()
+  })
+
+  it('uses the authoritative network when the constructor has no network constraint', async () => {
+    const wallet = new AltudeWallet({
+      apiKey: 'key',
+      apiBaseUrl: 'https://api.example.test',
+      auth: {},
+      store,
+      gasStation: gasStation as unknown as AltudeGasStation,
+    })
+    expect(await wallet.getWalletUiConfiguration()).toBeNull()
+    expect(wallet.network).toBe('devnet')
+  })
+
+  it.each([
+    { Status: 'Success', Signature: '', Message: 'Account already exists', succeeds: true },
+    { Status: 'Failed', Signature: '', Message: 'Relay rejected provisioning', succeeds: false },
+  ])('handles provisioning result $Status: $Message', async ({ succeeds, ...response }) => {
+    const wallet = await connectedWallet()
+    let id = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'provisioning:confirmation') id = event.id
+    })
+    gasStation.createAccount.mockResolvedValue(response)
+    const requested = wallet.createAccount()
+    const outcomes = Promise.allSettled([requested])
+    await vi.waitFor(() => {
+      expect(id).not.toBe('')
+    })
+    const approval = wallet.approveProvisioning(id)
+    if (succeeds) {
+      expect(await approval).toEqual(response)
+      expect(await requested).toEqual(response)
+    } else {
+      await expect(approval).rejects.toMatchObject({ code: 'TRANSACTION' })
+      expect(await outcomes).toMatchObject([
+        { status: 'rejected', reason: { code: 'TRANSACTION' } },
+      ])
+    }
+  })
+
+  it('claims provisioning once and prevents signing after cancellation during preparation', async () => {
+    const wallet = await connectedWallet()
+    let id = ''
+    wallet.onEvent((event) => {
+      if (event.type === 'provisioning:confirmation') id = event.id
+    })
+    const prepared = deferred<boolean>()
+    const release = deferred<boolean>()
+    const relayed = vi.fn()
+    gasStation.createAccount.mockImplementation(async (options: CreateAccountOptions) => {
+      prepared.resolve(true)
+      await release.promise
+      await options.signer?.signTransactionMessage?.(new Uint8Array([5]))
+      relayed()
+      return { Status: 'Success', Signature: 'unexpected', Message: '' }
+    })
+    const requested = wallet.createAccount()
+    const requestOutcome = Promise.allSettled([requested])
+    await vi.waitFor(() => {
+      expect(id).not.toBe('')
+    })
+    const approved = wallet.approveProvisioning(id)
+    const approvalOutcome = Promise.allSettled([approved])
+    await prepared.promise
+    await expect(wallet.approveProvisioning(id)).rejects.toMatchObject({ code: 'TRANSACTION' })
+    wallet.rejectProvisioning(id)
+    release.resolve(true)
+    expect(await requestOutcome).toMatchObject([{ status: 'rejected' }])
+    expect(await approvalOutcome).toMatchObject([
+      { status: 'rejected', reason: { code: 'TRANSACTION' } },
+    ])
+    expect(relayed).not.toHaveBeenCalled()
+    expect(gasStation.createAccount).toHaveBeenCalledOnce()
+  })
+  it('aborts provisioning preparation without emitting an orphaned confirmation', async () => {
+    const wallet = await connectedWallet()
+    const config = deferred<{ RpcEnvironment: string }>()
+    const started = deferred<boolean>()
+    gasStation.getConfig.mockImplementationOnce(() => {
+      started.resolve(true)
+      return config.promise
+    })
+    const controller = new AbortController()
+    const confirmation = vi.fn()
+    wallet.onEvent((event) => {
+      if (event.type === 'provisioning:confirmation') confirmation()
+    })
+    const requested = wallet.createAccount([], controller.signal)
+    const rejected = expect(requested).rejects.toMatchObject({ code: 'TRANSACTION' })
+    await started.promise
+    controller.abort()
+    config.resolve({ RpcEnvironment: 'devnet' })
+    await rejected
+    expect(confirmation).not.toHaveBeenCalled()
+    expect(gasStation.createAccount).not.toHaveBeenCalled()
+  })
+
+  it('creates and reopens a local PRF wallet for signing without API authentication or relay', async () => {
+    vi.stubGlobal('location', { hostname: 'consumer.example.test' })
+    const passkeys: PasskeyAdapter = {
+      isAvailable: () => true,
+      register: () =>
+        Promise.resolve({ credentialId: new Uint8Array([1]), kek: new Uint8Array(32).fill(5) }),
+      deriveKey: () => Promise.resolve(new Uint8Array(32).fill(5)),
+    }
+    const wallet = createWallet([], passkeys)
+    const state = await wallet.createLocalWallet()
+    expect(state).toMatchObject({ custody: 'local', session: null, protection: 'passkey' })
+    if (!state.localIdentityKey || !state.address) throw new Error('Expected local handle/address')
+    const bytes = new Uint8Array([1, 2, 3])
+    expect(
+      ed25519.verify(await wallet.signMessage(bytes), bytes, decodeBase58(state.address)),
+    ).toBe(true)
+    wallet.lock()
+    await expect(wallet.signMessage(bytes)).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+    await wallet.signOut()
+    const reopened = await createWallet([], passkeys).openLocalWallet(state.localIdentityKey)
+    expect(reopened).toMatchObject({ address: state.address, custody: 'local', session: null })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(gasStation.send).not.toHaveBeenCalled()
+    expect([...store.records.values()][0]?.secret).toBeUndefined()
   })
 
   function browserIdentity(ticket = 'ticket', appId = '-17.42') {
@@ -995,6 +1309,9 @@ describe('AltudeWallet', () => {
       receivedOptions = options
       return Promise.resolve({ Signature: 'transaction-signature', Status: 'Success' })
     })
+    await vi.waitFor(() => {
+      expect(transactionId).not.toBe('')
+    })
     await wallet.approveTransaction(transactionId)
 
     await expect(result).resolves.toMatchObject({ signature: 'transaction-signature' })
@@ -1090,6 +1407,9 @@ describe('AltudeWallet', () => {
       network: 'devnet',
     }
     const resultPromise = wallet.requestTransaction(intent)
+    await vi.waitFor(() => {
+      expect(confirmationId).not.toBe('')
+    })
     expect(confirmationId).not.toBe('')
     expect(gasStation.send).not.toHaveBeenCalled()
     intent.recipient = 'Vote111111111111111111111111111111111111111'
@@ -1107,6 +1427,9 @@ describe('AltudeWallet', () => {
     expect(confirmationEvent).toBeDefined()
     expect(Reflect.set(confirmationEvent, 'intent', intent)).toBe(false)
 
+    await vi.waitFor(() => {
+      expect(confirmationId).not.toBe('')
+    })
     const result = await wallet.approveTransaction(confirmationId)
     expect(await resultPromise).toEqual(result)
     expect(result.signature).toBe('transaction-signature')
@@ -1183,6 +1506,9 @@ describe('AltudeWallet', () => {
     })
     wallet.lock()
 
+    await vi.waitFor(() => {
+      expect(confirmationId).not.toBe('')
+    })
     await expect(wallet.approveTransaction(confirmationId)).rejects.toMatchObject({
       code: 'WALLET_LOCKED',
     })
@@ -1224,6 +1550,9 @@ describe('AltudeWallet', () => {
         kind: 'sol-transfer',
         recipient: '11111111111111111111111111111111',
         amount: 1_000,
+      })
+      await vi.waitFor(() => {
+        expect(confirmationId).not.toBe('')
       })
       const first = wallet.approveTransaction(confirmationId)
       const outcomes = Promise.allSettled([requested, first])
@@ -1284,6 +1613,9 @@ describe('AltudeWallet', () => {
       recipient: '11111111111111111111111111111111',
       amount: 1_000,
     })
+    await vi.waitFor(() => {
+      expect(confirmationId).not.toBe('')
+    })
     const approval = wallet.approveTransaction(confirmationId)
     const outcomes = Promise.allSettled([requested, approval])
 
@@ -1335,6 +1667,9 @@ describe('AltudeWallet', () => {
       kind: 'sol-transfer',
       recipient: 'Vote111111111111111111111111111111111111111',
       amount: 1_000,
+    })
+    await vi.waitFor(() => {
+      expect(confirmationId).not.toBe('')
     })
     const approval = wallet.approveTransaction(confirmationId)
     const outcomes = Promise.allSettled([requested, approval])
@@ -1393,6 +1728,9 @@ describe('AltudeWallet', () => {
       recipient: 'Vote111111111111111111111111111111111111111',
       amount: 1_000,
     })
+    await vi.waitFor(() => {
+      expect(confirmationId).not.toBe('')
+    })
     const approval = wallet.approveTransaction(confirmationId)
     const outcomes = Promise.allSettled([requested, approval])
     await signStarted.promise
@@ -1437,6 +1775,9 @@ describe('AltudeWallet', () => {
         kind: 'sol-transfer',
         recipient: '11111111111111111111111111111111',
         amount: 1_000,
+      })
+      await vi.waitFor(() => {
+        expect(confirmationId).not.toBe('')
       })
       const approval = wallet.approveTransaction(confirmationId)
       const code = cancellation === 'rejection' ? 'TRANSACTION' : 'SESSION'
@@ -1498,6 +1839,9 @@ describe('AltudeWallet', () => {
     intent.recipient = 'Stake11111111111111111111111111111111111111'
     intent.mint = 'SysvarRent111111111111111111111111111111111'
     intent.amount = 2_000
+    await vi.waitFor(() => {
+      expect(confirmationIntent).toBeDefined()
+    })
     if (!confirmationIntent) throw new Error('Confirmation intent was not emitted.')
     expect(Object.isFrozen(confirmationIntent)).toBe(true)
     expect(Reflect.set(confirmationIntent, 'mint', intent.mint)).toBe(false)

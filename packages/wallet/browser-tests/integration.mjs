@@ -30,6 +30,12 @@ const javascript = bundle.outputFiles[0]?.text
 if (!javascript) throw new Error('The browser SDK bundle was empty.')
 
 const server = createServer((request, response) => {
+  if (request.url?.startsWith('/wrong-origin?')) {
+    const target = new URL(request.url, 'http://localhost').searchParams.get('parent')
+    response.writeHead(200, { 'Content-Type': 'text/html' })
+    response.end(`<script>addEventListener('message', e => parent.postMessage(e.data, ${JSON.stringify(target)}))</script>`)
+    return
+  }
   if (request.url === '/wallet.js') {
     response.writeHead(200, { 'Content-Type': 'text/javascript' })
     response.end(javascript)
@@ -451,10 +457,387 @@ try {
   assert.equal(brokerRequests.filter(({ path }) => path === '/session').length, 2)
   assert.equal(brokerRequests.filter(({ path }) => path === '/otp/start').length, 2, 'failed OTP requires explicit resend')
   assert.equal(apiRequests, 2, 'broker must never use the direct Auth0 exchange')
+  await runCompletenessAcceptance(browser, `http://127.0.0.1:${address.port}`)
   console.log('Wallet real-browser integration passed in Microsoft Edge.')
 } finally {
   await browser?.close()
   await new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()))
   })
+}
+
+async function runCompletenessAcceptance(browser, origin) {
+  const page = await browser.newPage()
+  await page.goto(origin)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.evaluate(() => {
+    const sdk = window.AltudeWalletSDK
+    window.testMount = (wallet, options = {}) => {
+      window.unmountAcceptance?.()
+      document.querySelector('#acceptance')?.remove()
+      const container = document.createElement('div')
+      container.id = 'acceptance'
+      document.body.append(container)
+      window.unmountAcceptance = sdk.mountWalletUI(container, wallet, options)
+    }
+    window.smsStarts = 0
+    window.acceptanceWallet = new sdk.AltudeWallet({
+      apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: {
+        startOtp: () => { window.smsStarts++; return new Promise((resolve) => { window.finishSms = resolve }) },
+        verifyOtp: () => { throw new Error('Verification was not requested') },
+      },
+    })
+    window.testMount(window.acceptanceWallet)
+  })
+  const root = page.locator('#acceptance')
+  await root.getByText('No sign-in methods are configured for this wallet.').waitFor()
+  assert.equal(await root.getByRole('textbox').count(), 0, 'absent configuration must not guess methods')
+  await page.evaluate(() => {
+    window.testMount(window.acceptanceWallet, {
+      authMethods: { emailOtp: true },
+      walletUi: { authMethods: { emailOtp: false, smsOtp: true },
+        legal: { smsConsentText: 'I agree to receive a sign-in code.', termsUrl: 'https://legal.example/terms', privacyUrl: 'https://legal.example/privacy' } },
+    })
+  })
+  assert.equal(await root.getByRole('textbox', { name: 'Email address' }).count(), 0, 'server allowlist overrides developer fallback')
+  const phone = root.getByRole('textbox', { name: 'Phone number including country code' })
+  const checkbox = root.getByRole('checkbox')
+  await phone.fill('+12025550123')
+  assert.equal(await checkbox.isChecked(), false)
+  assert.equal(await root.getByRole('button', { name: 'Send code', exact: true }).isDisabled(), true)
+  await root.locator('form').evaluate((form) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  assert.equal(await page.evaluate(() => window.smsStarts), 0)
+  await checkbox.check()
+  await phone.fill('+12025550124')
+  assert.equal(await checkbox.isChecked(), false, 'editing the number revokes consent')
+  assert.equal(await root.getByRole('button', { name: 'Send code', exact: true }).isDisabled(), true)
+  await checkbox.check()
+
+  const focusEvidence = await page.evaluate(() => {
+    const panel = document.querySelector('#acceptance [role=dialog]')
+    return panel.contains(document.activeElement)
+  })
+  assert.equal(focusEvidence, true, 'modal owns focus, not the host launcher')
+  const privacy = root.getByRole('link', { name: 'Privacy', exact: true })
+  await privacy.focus()
+  await page.keyboard.press('Tab')
+  assert.equal(await phone.evaluate((element) => element === document.activeElement), true, 'legal link participates in modal focus wrap')
+  await page.keyboard.press('Shift+Tab')
+  assert.equal(await privacy.evaluate((element) => element === document.activeElement), true)
+  await root.getByRole('button', { name: 'Send code', exact: true }).click()
+  assert.equal(await page.evaluate(() => window.smsStarts), 1)
+  const reducedMotion = await root.locator('button[type=submit]').evaluate((button) => ({
+    element: getComputedStyle(button).animationName,
+    pseudo: getComputedStyle(button, '::after').animationName,
+  }))
+  assert.equal(reducedMotion.element, 'none')
+  assert.equal(reducedMotion.pseudo, 'none', 'pseudo-element spinners must stop too')
+  await page.evaluate(() => window.finishSms())
+  await root.getByRole('button', { name: 'Resend code', exact: true }).waitFor()
+
+  await page.evaluate(() => {
+    window.testMount(window.acceptanceWallet, { authMethods: { smsOtp: true } })
+  })
+  await root.getByText('SMS sign-in requires configured consent text.').waitFor()
+  await root.getByRole('textbox').fill('+12025550123')
+  assert.equal(await root.getByRole('button', { name: 'Send code', exact: true }).isDisabled(), true)
+  assert.equal(await page.evaluate(() => window.smsStarts), 1, 'missing consent copy cannot send')
+
+  await page.evaluate(() => {
+    const sdk = window.AltudeWalletSDK
+    window.providerConnections = 0
+    window.unavailableWallet = new sdk.AltudeWallet({
+      apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: {},
+      passkeys: { isAvailable: () => false, register: () => { throw new Error('Unavailable') }, deriveKey: () => { throw new Error('Unavailable') } },
+      externalWallets: [{ id: 'phantom', label: 'Phantom', isAvailable: () => false, connect: () => { window.providerConnections++; throw new Error('Unavailable') } }],
+    })
+    window.testMount(window.unavailableWallet, { authMethods: { externalWallets: ['phantom'], passkey: true } })
+  })
+  await root.getByRole('button', { name: /Web3|wallets/i }).click()
+  assert.equal(await root.getByRole('button', { name: 'Connect Phantom', exact: true }).isDisabled(), true)
+  assert.equal(await root.getByRole('button', { name: 'Use a passkey', exact: true }).count(), 0)
+  assert.equal(await page.evaluate(async () => {
+    try { await window.unavailableWallet.connectExternalWallet('phantom'); return 'connected' }
+    catch (error) { return error.code }
+  }), 'CONFIGURATION')
+  assert.equal(await page.evaluate(() => window.providerConnections), 0)
+
+  for (const verified of [false, true]) {
+    await page.evaluate((verified) => {
+      window.testMount(window.unavailableWallet, { walletUi: { authMethods: {}, trust: {
+        ikaRecoveryVerified: verified, soc2Verified: verified,
+      } } })
+    }, verified)
+    assert.equal(await root.getByText('SOC 2', { exact: true }).count(), verified ? 1 : 0)
+    assert.equal(await root.getByText('Secure recovery by Ika', { exact: true }).count(), verified ? 1 : 0)
+  }
+  await page.evaluate(() => {
+    window.unmountAcceptance()
+    const launcher = document.createElement('button')
+    launcher.id = 'launcher'
+    launcher.textContent = 'Open wallet'
+    document.body.append(launcher)
+    launcher.focus()
+    window.testMount(window.unavailableWallet, { onClose: () => window.unmountAcceptance() })
+  })
+  await page.waitForFunction(() => document.querySelector('#acceptance [role=dialog]')?.contains(document.activeElement))
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('#launcher').evaluate((button) => button === document.activeElement), true, 'Escape restores launcher focus')
+
+  await page.evaluate(() => {
+    const sdk = window.AltudeWalletSDK
+    window.relayCalls = 0
+    window.authCalls = 0
+    window.authoritativeNetwork = 'devnet'
+    window.balanceTokens = []
+    window.localPasskeys = {
+      isAvailable: () => true,
+      register: async () => ({ credentialId: new Uint8Array([5]), kek: new Uint8Array(32).fill(7) }),
+      deriveKey: async () => new Uint8Array(32).fill(7),
+    }
+    window.localGas = {
+      getConfig: async () => ({ RpcEnvironment: window.authoritativeNetwork }),
+      getBalance: async (options) => { window.balanceTokens.push(options.token); return { uiAmount: 7 } },
+      createAccount: async () => { window.relayCalls++; return { Status: 'Success', Signature: '', Message: 'Account already exists' } },
+      send: async () => { window.relayCalls++; return { Status: 'Success', Signature: 'synthetic-transfer' } },
+    }
+    window.localWallet = new sdk.AltudeWallet({
+      apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: {}, network: 'devnet', passkeys: window.localPasskeys, gasStation: window.localGas,
+      fetch: async () => { window.authCalls++; throw new Error('Local-only wallet must not authenticate') },
+    })
+    window.testMount(window.localWallet, { authMethods: { passkey: true } })
+  })
+  await root.getByRole('button', { name: 'Create local wallet', exact: true }).click()
+  await root.locator('.local-handle').waitFor()
+  const local = await page.evaluate(async () => {
+    const sdk = window.AltudeWalletSDK
+    const state = window.localWallet.state
+    const record = await new sdk.IndexedDbWalletStore().get(state.localIdentityKey)
+    const signature = await window.localWallet.signMessage(new Uint8Array([1, 2, 3]))
+    return { state, signature: Array.from(signature), recordHasSecret: 'secret' in record, hasCiphertext: record.ciphertext instanceof Uint8Array }
+  })
+  assert.equal(local.state.custody, 'local')
+  assert.equal(local.state.session, null)
+  assert.equal(local.recordHasSecret, false)
+  assert.equal(local.hasCiphertext, true)
+  assert.equal(verifyEd25519(local.state.address, Buffer.from([1, 2, 3]), Buffer.from(local.signature)), true)
+  await root.getByRole('textbox', { name: 'Token mint (optional; leave empty for SOL)', exact: true }).fill('So11111111111111111111111111111111111111112')
+  await root.getByRole('button', { name: 'Check balance', exact: true }).click()
+  await page.waitForFunction(() => window.balanceTokens.length === 1)
+  assert.equal(await page.evaluate(() => window.balanceTokens[0]), 'So11111111111111111111111111111111111111112')
+  await root.getByRole('button', { name: 'Lock wallet', exact: true }).click()
+  await root.getByRole('button', { name: 'Unlock with passkey', exact: true }).click()
+  await root.getByRole('button', { name: 'Create token account', exact: true }).click()
+  await root.getByRole('button', { name: 'Confirm and create', exact: true }).waitFor()
+  assert.equal(await page.evaluate(() => window.relayCalls), 0, 'provisioning needs separate explicit approval')
+  await root.getByRole('button', { name: 'Cancel', exact: true }).click()
+  assert.equal(await page.evaluate(() => window.relayCalls), 0)
+  await root.getByRole('button', { name: 'Create token account', exact: true }).click()
+  await root.getByRole('button', { name: 'Confirm and create', exact: true }).click()
+  await page.waitForFunction(() => window.relayCalls === 1)
+  await root.getByText('Account already exists', { exact: true }).waitFor()
+  await page.evaluate(() => {
+    window.transactionOutcome = window.localWallet.requestTransaction({
+      kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 1,
+    }).then(() => 'submitted', (error) => error.code)
+  })
+  const transaction = root.getByRole('group', { name: /^Transaction confirmation/ })
+  await transaction.waitFor()
+  await transaction.getByText('Network: devnet', { exact: true }).waitFor()
+  await transaction.getByRole('button', { name: 'Cancel', exact: true }).click()
+  assert.equal(await page.evaluate(() => window.transactionOutcome), 'TRANSACTION')
+  await page.evaluate(() => {
+    window.transactionOutcome = window.localWallet.requestTransaction({
+      kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 2,
+    }).then(() => 'submitted', (error) => error.code)
+  })
+  await transaction.getByText('Network: devnet', { exact: true }).waitFor()
+  await page.evaluate(() => { window.authoritativeNetwork = 'mainnet-beta' })
+  await transaction.getByRole('button', { name: 'Confirm and submit', exact: true }).click()
+  assert.equal(await page.evaluate(() => window.transactionOutcome), 'TRANSACTION', 'network changes invalidate reviewed approval')
+  assert.equal(await page.evaluate(async () => {
+    try { await window.localWallet.requestTransaction({ kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 1 }); return 'submitted' }
+    catch (error) { return error.code }
+  }), 'TRANSACTION')
+  assert.equal(await page.evaluate(() => window.relayCalls), 1)
+  await page.evaluate(async () => {
+    window.authoritativeNetwork = 'devnet'
+    await window.localWallet.signOut()
+    const wallet = new window.AltudeWalletSDK.AltudeWallet({
+      apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: {}, passkeys: window.localPasskeys,
+      fetch: async () => { window.authCalls++; throw new Error('No API authentication') },
+    })
+    window.reopenedLocalWallet = wallet
+    window.testMount(wallet, { authMethods: { passkey: true } })
+  })
+  await root.getByRole('textbox', { name: 'Local wallet handle', exact: true }).fill(local.state.localIdentityKey)
+  await root.getByRole('button', { name: 'Open local wallet', exact: true }).click()
+  await root.locator('.local-handle').waitFor()
+  assert.equal(await page.evaluate(() => window.reopenedLocalWallet.state.address), local.state.address)
+  assert.equal(await page.evaluate(() => window.authCalls), 0)
+
+  await testPersistentCreationRace(page)
+  await testIframeSources(page, origin)
+  await testLegacySocialOutcomes(page)
+  await page.close()
+}
+
+async function testLegacySocialOutcomes(page) {
+  let outcome = 'denied'
+  let authorizations = 0
+  await page.context().route('https://spa-acceptance.example.test/**', async (route) => {
+    const url = new URL(route.request().url())
+    assert.equal(url.pathname, '/authorize')
+    assert.equal(url.searchParams.get('connection'), 'google-oauth2')
+    assert.equal(url.searchParams.get('audience'), 'https://api.example.test')
+    assert.equal(url.searchParams.get('customParams'), JSON.stringify({ walletApiKey: 'acceptance' }))
+    authorizations++
+    const state = url.searchParams.get('state')
+    const target = new URL(page.url()).origin
+    const response = { type: 'authorization_response', response: {
+      state, error: 'access_denied', error_description: 'Consent denied for this test.',
+    } }
+    await route.fulfill({ contentType: 'text/html', body: outcome === 'denied'
+      ? `<script>window.opener.postMessage(${JSON.stringify(response)}, ${JSON.stringify(target)});setTimeout(() => window.close(), 50)</script>`
+      : '<script>window.close()</script>' })
+  })
+  await page.evaluate(async () => {
+    const sdk = window.AltudeWalletSDK
+    const adapter = await sdk.createAuth0WalletAuth({
+      domain: 'spa-acceptance.example.test', clientId: 'acceptance-spa', apiKey: 'acceptance',
+      audience: 'https://api.example.test', connections: { 'google-oauth2': 'google-oauth2' },
+      otpConnections: { email: null, sms: null },
+    })
+    window.legacyApiCalls = 0
+    const wallet = new sdk.AltudeWallet({
+      apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: adapter.auth,
+      fetch: async () => { window.legacyApiCalls++; throw new Error('Rejected login cannot exchange a session') },
+    })
+    window.testMount(wallet, { socialProviders: adapter.socialProviders, authMethods: { socialProviders: ['google-oauth2'] } })
+    window.legacyOutcomeWallet = wallet
+  })
+  const root = page.locator('#acceptance')
+  await root.getByRole('button', { name: 'Continue with Google', exact: true }).click()
+  await root.getByRole('alert').waitFor({ timeout: 5_000 }).catch(async (error) => {
+    throw new Error(`Social denial did not surface (${authorizations} authorizations): ${await root.textContent()}`, { cause: error })
+  })
+  assert.match(await root.getByRole('alert').textContent(), /Consent denied/, `Auth0 popup attempts: ${authorizations}`)
+  outcome = 'closed'
+  await root.getByRole('button', { name: 'Try again', exact: true }).click()
+  await root.getByRole('button', { name: 'Continue with Google', exact: true }).click()
+  await root.getByRole('alert').filter({ hasText: /closed|cancel/i }).waitFor()
+  assert.equal(authorizations, 2, 'legacy social retry is an explicit new popup action')
+  assert.equal(await page.evaluate(() => window.legacyApiCalls), 0)
+  assert.equal(await page.evaluate(() => window.legacyOutcomeWallet.state.status), 'disconnected')
+}
+
+async function testPersistentCreationRace(page) {
+  const race = await page.evaluate(async () => {
+    const sdk = window.AltudeWalletSDK
+    const base = new sdk.IndexedDbWalletStore()
+    let committed
+    let release
+    const committedPromise = new Promise((resolve) => { committed = resolve })
+    const releasePromise = new Promise((resolve) => { release = resolve })
+    let delay = true
+    const delayedStore = {
+      get: (key) => base.get(key), getByServerUserId: (id) => base.getByServerUserId(id),
+      put: (record) => base.put(record), delete: (key) => base.delete(key),
+      update: (key, update) => base.update(key, update),
+      async createIfAbsent(record) {
+        const result = await base.createIfAbsent(record)
+        if (delay) { delay = false; committed(); await releasePromise }
+        return result
+      },
+    }
+    let exchanges = 0
+    const makeWallet = (store) => new sdk.AltudeWallet({
+      apiKey: 'race', apiBaseUrl: 'https://api.example.test', auth: {}, store,
+      fetch: async (_url, request) => {
+        exchanges++
+        return new Response(JSON.stringify({ Success: true, SessionToken: 'race-session', User: {
+          Id: 'race-owner', WalletAddress: JSON.parse(request.body).walletAddress,
+        } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      },
+    })
+    const identity = { identityKey: 'real-idb-adopted-key-race', accessToken: 'synthetic' }
+    const first = makeWallet(delayedStore)
+    const cancelled = first.connect(identity)
+    await committedPromise
+    const adopted = await makeWallet(base).connect(identity)
+    const newer = first.connect(identity)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const beforeRelease = exchanges
+    release()
+    await cancelled
+    const winner = await newer
+    const reloaded = await makeWallet(new sdk.IndexedDbWalletStore()).connect(identity)
+    const record = await base.get(identity.identityKey)
+    const signature = await first.signMessage(new Uint8Array([8]))
+    return { beforeRelease, adopted: adopted.address, winner: winner.address, reloaded: reloaded.address, stored: record.publicKey, signature: Array.from(signature) }
+  })
+  assert.equal(race.beforeRelease, 1, 'same-vault successor must wait for the pending committed write')
+  assert.equal(race.adopted, race.winner)
+  assert.equal(race.reloaded, race.winner, 'cancelled creation must not delete an adopted persisted key')
+  assert.equal(race.stored, race.winner)
+  assert.equal(verifyEd25519(race.winner, Buffer.from([8]), Buffer.from(race.signature)), true)
+}
+
+function verifyEd25519(address, message, signature) {
+  let number = 0n
+  for (const character of address) number = number * 58n + BigInt('123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'.indexOf(character))
+  const key = createPublicKey({ key: Buffer.concat([
+    Buffer.from('302a300506032b6570032100', 'hex'),
+    Buffer.from(number.toString(16).padStart(64, '0'), 'hex'),
+  ]), format: 'der', type: 'spki' })
+  return verify(null, message, key, signature)
+}
+
+async function testIframeSources(page, origin) {
+  const events = await page.evaluate(async (origin) => {
+    const sdk = window.AltudeWalletSDK
+    const makeFrame = (url) => new Promise((resolve) => {
+      const frame = document.createElement('iframe')
+      frame.onload = () => resolve(frame)
+      frame.src = url
+      document.body.append(frame)
+    })
+    const trusted = await makeFrame(`${origin}/trusted-frame`)
+    const wrongSource = await makeFrame(`${origin}/wrong-source`)
+    const wrongOrigin = await makeFrame(`${origin.replace('127.0.0.1', 'localhost')}/wrong-origin?parent=${encodeURIComponent(origin)}`)
+    const provider = new sdk.WalletEmbedProvider({ walletUrl: `${origin}/trusted-frame`, iframe: trusted })
+    const received = []
+    let acceptTrusted
+    const trustedReceived = new Promise((resolve) => { acceptTrusted = resolve })
+    provider.on('session.changed', (event) => { received.push(event.state.address); acceptTrusted() })
+    const envelope = { channel: sdk.WALLET_EMBED_CHANNEL, version: sdk.WALLET_EMBED_VERSION, id: 'unsolicited', type: 'session.changed', payload: { status: 'connected', address: 'test-address' } }
+    const sender = `addEventListener('message', e => parent.postMessage(e.data, ${JSON.stringify(origin)}))`
+    for (const frame of [trusted, wrongSource]) frame.contentWindow.eval(sender)
+    let invalidDeliveries = 0
+    let acceptInvalid
+    const invalidReceived = new Promise((resolve, reject) => {
+      acceptInvalid = resolve
+      setTimeout(() => reject(new Error('Both untrusted frames must actually deliver messages')), 5_000)
+    })
+    const observe = (event) => {
+      if (event.data?.type === 'session.changed' &&
+        (event.source === wrongSource.contentWindow || event.source === wrongOrigin.contentWindow)) {
+        if (++invalidDeliveries === 2) acceptInvalid()
+      }
+    }
+    window.addEventListener('message', observe)
+    // Both untrusted messages are delivered by real browser frame windows.
+    wrongOrigin.contentWindow.postMessage(envelope, new URL(wrongOrigin.src).origin)
+    wrongSource.contentWindow.postMessage(envelope, origin)
+    await invalidReceived
+    const afterWrongSources = received.length
+    trusted.contentWindow.postMessage(envelope, origin)
+    await trustedReceived
+    window.removeEventListener('message', observe)
+    provider.destroy()
+    for (const frame of [trusted, wrongSource, wrongOrigin]) frame.remove()
+    return { afterWrongSources, received }
+  }, origin)
+  assert.equal(events.afterWrongSources, 0, 'real same-origin wrong-source and cross-origin frames are ignored')
+  assert.deepEqual(events.received, ['test-address'], 'only the exact configured frame can change wallet state')
 }

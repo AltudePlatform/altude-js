@@ -23,6 +23,92 @@ const TEST_SIGNATURES = [
   '4VZdodJgBy6dxMgm45zusmRzrPvKtiumu5YrK9RLPJADpzeJzgebxHsoQD4B58FCFS6aGUufKZka56xFiBGpB94',
 ] as const
 
+describe('approval network binding', () => {
+  it.each(['transfer', 'provisioning'] as const)(
+    'rejects a mismatched %s before RPC or signing',
+    async (operation) => {
+      const gs = new AltudeGasStation()
+      const rpc = vi.spyOn(gs, 'getRpcClient')
+      const signer = { address: TEST_COUNTERPARTY, signTransactionMessage: vi.fn() }
+      const pending =
+        operation === 'transfer'
+          ? gs.send({
+              sourceSigner: signer,
+              toAddress: TEST_WALLET,
+              amount: 1,
+              expectedNetwork: 'devnet',
+            })
+          : gs.createAccount({ signer, expectedNetwork: 'devnet' })
+      await expect(pending).rejects.toThrow('network')
+      expect(rpc).not.toHaveBeenCalled()
+      expect(signer.signTransactionMessage).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    { changeAt: 2, signatures: 0 },
+    { changeAt: 3, signatures: 1 },
+  ])('stops transfer when config changes at check $changeAt', async ({ changeAt, signatures }) => {
+    const gs = new AltudeGasStation()
+    const config = await gs.getConfig()
+    let checks = 0
+    vi.spyOn(gs, 'getConfig').mockImplementation(() =>
+      Promise.resolve({
+        ...config,
+        RpcEnvironment: ++checks >= changeAt ? 'devnet' : 'mainnet-beta',
+      }),
+    )
+    const relay = vi.spyOn(gs.client, 'sendTransaction')
+    const signer = {
+      address: TEST_COUNTERPARTY,
+      signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(3)),
+    }
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: {
+        getLatestBlockhash: () => ({
+          send: () =>
+            Promise.resolve({
+              value: {
+                blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+                lastValidBlockHeight: 100n,
+              },
+            }),
+        }),
+      },
+      rpcSubscriptions: {},
+    } as never)
+    await expect(
+      gs.send({
+        sourceSigner: signer,
+        toAddress: WRAPPED_SOL_MINT_ADDRESS,
+        amount: 1,
+        expectedNetwork: 'mainnet-beta',
+      }),
+    ).rejects.toThrow('network')
+    expect(signer.signTransactionMessage).toHaveBeenCalledTimes(signatures)
+    expect(relay).not.toHaveBeenCalled()
+  })
+
+  it('does not report provisioning success from existing accounts after a network change', async () => {
+    const gs = new AltudeGasStation()
+    const config = await gs.getConfig()
+    vi.spyOn(gs, 'getConfig')
+      .mockResolvedValueOnce(config)
+      .mockResolvedValue({ ...config, RpcEnvironment: 'devnet' })
+    const relay = vi.spyOn(gs.client, 'createAccount')
+    const signer = { address: TEST_COUNTERPARTY, signTransactionMessage: vi.fn() }
+    vi.spyOn(gs, 'getRpcClient').mockResolvedValue({
+      rpc: { getAccountInfo: () => ({ send: () => Promise.resolve({ value: {} }) }) },
+      rpcSubscriptions: {},
+    } as never)
+    await expect(gs.createAccount({ signer, expectedNetwork: 'mainnet-beta' })).rejects.toThrow(
+      'network',
+    )
+    expect(signer.signTransactionMessage).not.toHaveBeenCalled()
+    expect(relay).not.toHaveBeenCalled()
+  })
+})
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -191,7 +277,9 @@ describe('AltudeHttpClient — mock mode', () => {
 
   it('getAccountInfo returns mock data (accountAddress field)', async () => {
     const client = new AltudeHttpClient()
-    const result = await client.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
+    const result = await client.getAccountInfo({
+      accountAddress: '11111111111111111111111111111111',
+    })
     expect(result.accountAddress).toBe('11111111111111111111111111111111')
   })
 
@@ -309,7 +397,9 @@ describe('AltudeHttpClient — live mode', () => {
           TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }))
+      .mockResolvedValueOnce(
+        jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }),
+      )
 
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
     const result = await client.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
@@ -332,7 +422,9 @@ describe('AltudeHttpClient — live mode', () => {
           TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }))
+      .mockResolvedValueOnce(
+        jsonResponse({ Signature: 'LiveBatchSig', Status: 'Success', Message: '' }),
+      )
 
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
     const result = await client.sendBatch({ signedTransaction: 'base64encodedtx==' })
@@ -475,7 +567,9 @@ describe('AltudeHttpClient — live mode', () => {
           encoding: 'json',
           maxSupportedTransactionVersion: 1,
         })
-        return Promise.resolve(rpcResponse(request.id, transactions[transactionIndex++] ?? transactions[2]))
+        return Promise.resolve(
+          rpcResponse(request.id, transactions[transactionIndex++] ?? transactions[2]),
+        )
       }
       throw new Error(`Unexpected RPC method: ${request.method}`)
     })
@@ -728,13 +822,18 @@ describe('AltudeHttpClient — live mode', () => {
           TokenExpiration: '2099-01-01T00:00:00Z',
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ Signature: 'TxSig123', Status: 'Success', Message: '' }))
+      .mockResolvedValueOnce(
+        jsonResponse({ Signature: 'TxSig123', Status: 'Success', Message: '' }),
+      )
 
     const client = new AltudeHttpClient('test-key', 'https://api.altude.so', 'devnet')
     const result = await client.sendTransaction({ transaction: 'base64tx==' })
 
     expect(result.Signature).toBe('TxSig123')
-    const sentBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string) as Record<string, unknown>
+    const sentBody = JSON.parse(fetchSpy.mock.calls[1]?.[1]?.body as string) as Record<
+      string,
+      unknown
+    >
     expect(sentBody).toEqual({ SignedTransaction: 'base64tx==' })
   })
 
@@ -800,7 +899,11 @@ describe('AltudeHttpClient — live mode', () => {
 
     const result = await client.getBalance({ account: walletAddress, token: mintAddress })
 
-    expect(getTokenAccountsByOwner).toHaveBeenCalledWith(walletAddress, { mint: mintAddress }, { encoding: 'jsonParsed' })
+    expect(getTokenAccountsByOwner).toHaveBeenCalledWith(
+      walletAddress,
+      { mint: mintAddress },
+      { encoding: 'jsonParsed' },
+    )
     expect(result).toEqual({
       address: walletAddress,
       amount: '1750000',
@@ -929,7 +1032,9 @@ describe('AltudeGasStation facade', () => {
 
     const batchResult = await gs.sendBatchTransaction({ signedTransaction: 'base64encodedtx==' })
     const batchAliasResult = await gs.sendBatch({ signedTransaction: 'base64encodedtx==' })
-    const accountInfo = await gs.getAccountInfo({ accountAddress: '11111111111111111111111111111111' })
+    const accountInfo = await gs.getAccountInfo({
+      accountAddress: '11111111111111111111111111111111',
+    })
     const history = await gs.getHistory({
       page: 1,
       pageSize: 10,
@@ -1056,7 +1161,9 @@ describe('AltudeGasStation facade', () => {
     const result = await gs.sendBatch({ signedTransaction: 'serialized-payload' })
 
     expect(result.Signature).toBeTruthy()
-    expect(sendBatchTransactionSpy).toHaveBeenCalledWith({ signedTransaction: 'serialized-payload' })
+    expect(sendBatchTransactionSpy).toHaveBeenCalledWith({
+      signedTransaction: 'serialized-payload',
+    })
   })
 
   it('send partially signs on client side before relaying', async () => {
@@ -1173,7 +1280,11 @@ describe('AltudeGasStation facade', () => {
         Status: 'Failed',
         Message: 'Transaction simulation failed: Blockhash not found',
       })
-      .mockResolvedValueOnce({ Signature: 'RetriedSigFromResponse', Status: 'Success', Message: '' })
+      .mockResolvedValueOnce({
+        Signature: 'RetriedSigFromResponse',
+        Status: 'Success',
+        Message: '',
+      })
     const signer = {
       address: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
       signTransactionMessage: vi.fn().mockResolvedValue(new Uint8Array(64).fill(3)),
@@ -1376,35 +1487,33 @@ describe('AltudeGasStation facade', () => {
       ),
     }
     const expectedSignedTransaction = await transactionToBase64WithSigners(
-      createTransaction(
-        {
-          version: 'legacy',
-          feePayer,
-          latestBlockhash: {
-            blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
-            lastValidBlockHeight: 100n,
-          },
-          instructions: [
-            getSetComputeUnitLimitInstruction({ units: 400_000 }),
-            getCreateAssociatedTokenIdempotentInstruction({
-              payer: createNoopSigner(feePayer),
-              owner: address(signer.address),
-              mint: address(missingMintAddress),
-              ata: missingAta,
-              tokenProgram: TOKEN_PROGRAM_ADDRESS,
-            }),
-            getSetAuthorityInstruction(
-              {
-                owned: missingAta,
-                owner: expectedSigner as never,
-                authorityType: AuthorityType.CloseAccount,
-                newAuthority: feePayer,
-              },
-              { programAddress: TOKEN_PROGRAM_ADDRESS },
-            ),
-          ],
-        } as never,
-      ) as never,
+      createTransaction({
+        version: 'legacy',
+        feePayer,
+        latestBlockhash: {
+          blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+          lastValidBlockHeight: 100n,
+        },
+        instructions: [
+          getSetComputeUnitLimitInstruction({ units: 400_000 }),
+          getCreateAssociatedTokenIdempotentInstruction({
+            payer: createNoopSigner(feePayer),
+            owner: address(signer.address),
+            mint: address(missingMintAddress),
+            ata: missingAta,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+          }),
+          getSetAuthorityInstruction(
+            {
+              owned: missingAta,
+              owner: expectedSigner as never,
+              authorityType: AuthorityType.CloseAccount,
+              newAuthority: feePayer,
+            },
+            { programAddress: TOKEN_PROGRAM_ADDRESS },
+          ),
+        ],
+      } as never) as never,
     )
 
     expect(signer.signTransactionMessage).toHaveBeenCalledOnce()
@@ -1561,7 +1670,11 @@ describe('AltudeGasStation facade', () => {
 
   it('getHistory facade accepts Android-style limit/offset fields', async () => {
     const gs = new AltudeGasStation()
-    const result = await gs.getHistory({ account: '11111111111111111111111111111111', limit: 15, offset: 0 })
+    const result = await gs.getHistory({
+      account: '11111111111111111111111111111111',
+      limit: 15,
+      offset: 0,
+    })
     expect(result.limit).toBe(15)
   })
 })

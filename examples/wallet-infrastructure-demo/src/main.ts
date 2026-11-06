@@ -355,24 +355,10 @@ root.innerHTML = `
             <span><strong>Social login</strong><small>Use broker-discovered providers, or explicit direct Auth0 connections.</small></span>
             <input id="enable-social-login" type="checkbox" role="switch" checked />
           </label>
-          <fieldset class="config-source-controls" aria-labelledby="config-source-title">
-            <legend id="config-source-title">Transaction config methods</legend>
-            <p class="api-key-help">
-              Choose whether the modal follows the API's enabled methods or overrides them with
-              the switches above. Overrides affect this browser preview only.
-            </p>
-            <div class="config-source-buttons" role="group" aria-label="Wallet UI config source">
-              <button type="button" data-config-source="server" aria-pressed="true">
-                Use API config
-              </button>
-              <button type="button" data-config-source="demo" aria-pressed="false">
-                Override API methods
-              </button>
-            </div>
-            <p id="config-source-status" class="api-key-help" role="status" aria-live="polite">
-              Uses API wallet UI methods when returned; otherwise, the demo switches provide the fallback.
-            </p>
-          </fieldset>
+          <p class="api-key-help">
+            API wallet UI settings always take precedence. Only when absent do the demo switches
+            provide explicit fallback methods and SMS consent copy.
+          </p>
           <div id="social-settings" class="social-settings" hidden>
             <label class="api-key-field" for="google-connection">
               <span>Google connection (optional)</span>
@@ -413,6 +399,9 @@ const wallet = new AltudeWallet({
 mountWalletUI(document.body, wallet, {
   presentation: 'modal',
   socialProviders,
+  walletUi: await wallet.getWalletUiConfiguration(),
+  authMethods: { emailOtp: true, smsOtp: true, socialProviders },
+  legal: { smsConsentText: 'I agree to receive a one-time sign-in code by SMS. Message and data rates may apply.' },
 })</code></pre>
       </section>
       <p class="simulation-note">
@@ -447,10 +436,6 @@ const socialLoginInput = root.querySelector<HTMLInputElement>('#enable-social-lo
 const web3WalletsInput = root.querySelector<HTMLInputElement>('#enable-web3-wallets')
 const socialSettings = root.querySelector<HTMLElement>('#social-settings')
 const web3WalletStatus = root.querySelector<HTMLElement>('#web3-wallet-status')
-const configSourceStatus = root.querySelector<HTMLElement>('#config-source-status')
-const configSourceButtons = Array.from(
-  root.querySelectorAll<HTMLButtonElement>('[data-config-source]'),
-)
 if (
   !apiKeyInput ||
   !apiKeyStatus ||
@@ -471,9 +456,7 @@ if (
   !socialLoginInput ||
   !web3WalletsInput ||
   !socialSettings ||
-  !web3WalletStatus ||
-  !configSourceStatus ||
-  configSourceButtons.length !== 2
+  !web3WalletStatus
 ) {
   throw new Error('Could not find the wallet demo configuration controls.')
 }
@@ -481,29 +464,7 @@ if (
 let wallet: AltudeWallet | undefined
 let configuredWalletKey: string | undefined
 let socialProviders: string[] = []
-let walletUiConfiguration: WalletUiConfiguration | null = null
-let serverWalletUiConfiguration: WalletUiConfiguration | null = null
-let overrideTransactionConfig = false
 let unmountWalletUi: (() => void) | undefined
-
-const updateConfigSource = (useOverride: boolean) => {
-  overrideTransactionConfig = useOverride
-  for (const button of configSourceButtons) {
-    button.setAttribute(
-      'aria-pressed',
-      String(button.dataset.configSource === (useOverride ? 'demo' : 'server')),
-    )
-  }
-  configSourceStatus.textContent = useOverride
-    ? 'Local demo settings replace enabled methods for this preview only. The API response is not changed.'
-    : 'Uses API wallet UI methods when returned; otherwise, the demo switches provide the fallback.'
-}
-
-for (const button of configSourceButtons) {
-  button.addEventListener('click', () => {
-    updateConfigSource(button.dataset.configSource === 'demo')
-  })
-}
 
 modeInput.addEventListener('change', () => {
   const simulated = modeInput.value === 'simulated'
@@ -514,9 +475,6 @@ modeInput.addEventListener('change', () => {
   apiKeyStatus.textContent = ''
   wallet = undefined
   configuredWalletKey = undefined
-  walletUiConfiguration = null
-  serverWalletUiConfiguration = null
-  updateConfigSource(false)
   updateAuthSettings()
 })
 const updateAuthSettings = () => {
@@ -627,13 +585,12 @@ openButton.addEventListener('click', () => {
 
       if (!wallet) throw new Error('The wallet could not be configured.')
       const configuredSocialProviders = socialLoginInput.checked ? socialProviders : []
-      serverWalletUiConfiguration = mode === 'live' ? await wallet.getWalletUiConfiguration() : null
-      const serverWalletUi = serverWalletUiConfiguration
+      const serverWalletUi = mode === 'live' ? await wallet.getWalletUiConfiguration() : null
       const fallbackWalletUi = {
         branding: { appName: 'Altude' },
         legal: {
           smsConsentText:
-            'Continue to receive a one-time sign-in code by SMS. Message and data rates may apply.',
+            'I agree to receive a one-time sign-in code by SMS. Message and data rates may apply.',
         },
         authMethods: {
           emailOtp: true,
@@ -643,32 +600,15 @@ openButton.addEventListener('click', () => {
           externalWallets: externalWallets.map(({ id }) => id),
         },
       } satisfies WalletUiConfiguration
-      walletUiConfiguration =
-        overrideTransactionConfig && mode === 'live'
-          ? {
-              ...(serverWalletUi ?? fallbackWalletUi),
-              legal: {
-                ...serverWalletUi?.legal,
-                smsConsentText:
-                  serverWalletUi?.legal?.smsConsentText ?? fallbackWalletUi.legal?.smsConsentText,
-              },
-              authMethods: {
-                ...serverWalletUi?.authMethods,
-                emailOtp: true,
-                smsOtp: true,
-                socialProviders: configuredSocialProviders,
-                passkey: false,
-                externalWallets: externalWallets.map(({ id }) => id),
-              },
-            }
-          : (serverWalletUi ?? fallbackWalletUi)
       apiKeyInput.disabled = true
       modeInput.disabled = true
       unmountWalletUi = mountWalletUI(document.body, wallet, {
         presentation: 'modal',
         title: 'Altude Demo',
         socialProviders: configuredSocialProviders,
-        walletUi: walletUiConfiguration,
+        walletUi: serverWalletUi,
+        authMethods: fallbackWalletUi.authMethods,
+        legal: fallbackWalletUi.legal,
         onClose: closeWalletUi,
       })
     } catch (error) {

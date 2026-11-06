@@ -1,4 +1,4 @@
-import type { WalletEvent, WalletUiOptions } from './types.js'
+import type { WalletEvent, WalletState, WalletUiOptions } from './types.js'
 import type { AltudeWallet } from './wallet.js'
 
 let walletUiInstance = 0
@@ -26,6 +26,17 @@ const styles = `
 .altude-wallet-ui p{margin:0;color:var(--altude-muted,#5d7079)}
 .altude-wallet-ui .headline{display:flex;flex-direction:column;gap:8px}
 .altude-wallet-ui .subtitle{font-size:14px;line-height:1.65}
+.altude-wallet-ui .sms-consent{display:flex;align-items:flex-start;gap:10px;color:var(--altude-muted,#5d7079);font-size:13px}
+.altude-wallet-ui .sms-consent input{width:20px;height:20px;min-height:20px;flex:none;margin:2px 0;accent-color:var(--altude-fuji,#084360)}
+.altude-wallet-ui .local-wallet{display:grid;gap:12px;padding:14px;border:1px solid var(--altude-line,#dce2e5);border-radius:12px}
+.altude-wallet-ui .local-wallet h3{margin:0;color:var(--altude-ink,#071922);font-size:14px}
+.altude-wallet-ui .local-wallet-return{display:grid;gap:8px}
+.altude-wallet-ui .local-wallet label{display:grid;gap:6px;color:var(--altude-ink,#071922);font-size:13px;font-weight:600}
+.altude-wallet-ui .local-wallet input{padding:10px;border:1px solid var(--altude-line,#dce2e5);border-radius:8px;font-weight:400}
+.altude-wallet-ui .local-handle{overflow-wrap:anywhere;user-select:all}
+.altude-wallet-ui .balance-form{display:grid;gap:8px}
+.altude-wallet-ui .balance-form label{display:grid;gap:6px;color:var(--altude-ink,#071922);font-size:13px;font-weight:600}
+.altude-wallet-ui .balance-form input{padding:10px;border:1px solid var(--altude-line,#dce2e5);border-radius:8px;font-weight:400}
 .altude-wallet-ui .magic{display:grid;grid-template-columns:24px minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 6px 6px 12px;background:var(--altude-surface,#fff);border:1px solid var(--altude-line,#dce2e5);border-radius:12px}
 .altude-wallet-ui .field-icon{display:grid;place-items:center;color:var(--altude-muted,#5d7079)}
 .altude-wallet-ui .field-icon svg{width:17px;height:17px}
@@ -141,9 +152,9 @@ const styles = `
 .altude-wallet-ui .legal-links{display:flex;justify-content:center;gap:14px;margin-top:8px}
 .altude-wallet-ui .legal-links a{color:var(--altude-muted,#5d7079);font-size:11px;text-decoration:underline;text-underline-offset:2px}
 .altude-wallet-ui .legal-links a:hover{color:var(--altude-sky-700,#084360)}
-.altude-wallet-ui button:focus-visible,.altude-wallet-ui input:focus-visible{outline:2px solid var(--altude-sky-600,#087da9);outline-offset:2px}
+.altude-wallet-ui button:focus-visible,.altude-wallet-ui input:focus-visible,.altude-wallet-ui a:focus-visible{outline:2px solid var(--altude-sky-600,#087da9);outline-offset:2px}
 @container(max-width:300px){.altude-wallet-ui .magic{grid-template-columns:24px minmax(0,1fr)}.altude-wallet-ui .magic-cta{grid-column:1/-1;width:100%}.altude-wallet-ui .wallet-provider-list{grid-template-columns:repeat(2,minmax(0,1fr))}.altude-wallet-ui .account-actions{grid-template-columns:1fr}}
-@media(prefers-reduced-motion:reduce){.altude-wallet-ui *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+@media(prefers-reduced-motion:reduce){.altude-wallet-ui *,.altude-wallet-ui *::before,.altude-wallet-ui *::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 `
 
 export function mountWalletUI(
@@ -167,6 +178,7 @@ export function mountWalletUI(
     })
   }
   const panel = document.createElement('section')
+  panel.setAttribute('tabindex', '-1')
   panel.className = presentation === 'inline' ? 'inline' : 'panel'
   panel.setAttribute('role', presentation === 'modal' ? 'dialog' : 'region')
   if (presentation === 'modal') panel.setAttribute('aria-modal', 'true')
@@ -180,15 +192,16 @@ export function mountWalletUI(
         event.preventDefault()
         options.onClose?.()
       } else if (event.key === 'Tab') {
-        const focusable = [
-          ...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)'),
-        ].filter((element) => !element.closest('[hidden]'))
+        const focusable = getFocusableControls(panel)
         const first = focusable[0]
         const last = focusable[focusable.length - 1]
-        if (event.shiftKey && document.activeElement === first) {
+        if (focusable.length === 0) {
+          event.preventDefault()
+          panel.focus()
+        } else if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement as HTMLElement))) {
           event.preventDefault()
           last?.focus()
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement as HTMLElement))) {
           event.preventDefault()
           first?.focus()
         }
@@ -204,6 +217,9 @@ export function mountWalletUI(
   let otpIdentifier = ''
   let otpDigits = Array<string>(6).fill('')
   let otpStarted = false
+  let smsConsent = false
+  let localHandle = ''
+  let tokenMint = ''
   let externalWalletsExpanded = false
   let busy = false
   let message = ''
@@ -221,7 +237,19 @@ export function mountWalletUI(
     { event: ConfirmationEvent; userId: string | null; address: string | null }
   >()
   const submitting = new Set<string>()
+  type ProvisioningEvent = Extract<WalletEvent, { type: 'provisioning:confirmation' }>
+  const provisioning = new Map<string, { event: ProvisioningEvent; owner: string }>()
+  const provisioningSubmitting = new Set<string>()
+  let provisioningRequested = false
+  let provisioningController: AbortController | null = null
+  let mounted = true
+  const ownerOf = (state: WalletState) =>
+    JSON.stringify([state.custody, state.session?.user.id, state.localIdentityKey, state.address])
+  const legalConfiguration = () => options.walletUi != null ? options.walletUi.legal : options.legal
+  const smsConsentText = () => legalConfiguration()?.smsConsentText?.trim()
+  const hasSmsConsent = () => Boolean(smsConsentText()) && smsConsent
   const events = wallet.onEvent((event) => {
+    if (!mounted) return
     if (event.type === 'setup:progress') {
       loginProgressStage = event.stage
     }
@@ -240,9 +268,21 @@ export function mountWalletUI(
       pending.delete(event.id)
       errorMessage = event.error.message
     }
+    if (event.type === 'provisioning:confirmation') {
+      provisioning.set(event.id, { event, owner: ownerOf(wallet.state) })
+    }
+    if (event.type === 'provisioning:complete' && provisioning.delete(event.id)) {
+      message = event.result.Message || (event.result.Signature
+        ? `Account created: ${event.result.Signature}`
+        : 'Account is ready.')
+    }
+    if (event.type === 'provisioning:error' && provisioning.delete(event.id)) {
+      errorMessage = event.error.message
+    }
     if (event.type === 'state') {
       if (event.state.status === 'disconnected') {
         pending.clear()
+        provisioning.clear()
       } else if (event.state.status === 'connected') {
         for (const [id, request] of pending) {
           if (
@@ -253,11 +293,16 @@ export function mountWalletUI(
           }
         }
       }
+      for (const [id, request] of provisioning) {
+        if (request.owner !== ownerOf(event.state)) provisioning.delete(id)
+      }
     }
     render()
   })
 
   const render = (focusFirst = false) => {
+    if (!mounted) return
+    const hadFocus = panel.contains(document.activeElement)
     panel.replaceChildren()
     const header = document.createElement('header')
     header.className = 'header'
@@ -314,6 +359,7 @@ export function mountWalletUI(
       title.textContent = 'Something went wrong'
       const details = document.createElement('p')
       details.className = 'login-state-copy'
+      details.setAttribute('role', 'alert')
       details.textContent = loginErrorMessage
       const retry = button('Try again', () => {
         loginErrorMessage = ''
@@ -380,35 +426,37 @@ export function mountWalletUI(
       content.append(progress)
     } else if (state.status === 'disconnected') {
       const walletUi = options.walletUi
-      const methodConfiguration = walletUi?.authMethods
-      const hasWalletUiConfiguration = walletUi !== undefined && walletUi !== null
+      const methodConfiguration = walletUi != null ? walletUi.authMethods : options.authMethods
       const isEnabled = (method: 'emailOtp' | 'smsOtp' | 'passkey') =>
-        !hasWalletUiConfiguration || methodConfiguration?.[method] === true
+        methodConfiguration?.[method] === true
       const canSignInWithOtp = (channel: 'email' | 'sms') =>
         typeof wallet.canSignInWithOtp === 'function'
           ? wallet.canSignInWithOtp(channel)
           : wallet.canStartOtp
       const emailOtpEnabled = canSignInWithOtp('email') && isEnabled('emailOtp')
       const smsOtpEnabled = canSignInWithOtp('sms') && isEnabled('smsOtp')
+      const previousChannel = otpChannel
       if (otpChannel === 'email' && !emailOtpEnabled && smsOtpEnabled) otpChannel = 'sms'
       if (otpChannel === 'sms' && !smsOtpEnabled && emailOtpEnabled) otpChannel = 'email'
+      if (previousChannel !== otpChannel) {
+        smsConsent = false
+        otpIdentifier = ''
+      }
       const canStartOtp = emailOtpEnabled || smsOtpEnabled
       const canSignInWithPasskey = wallet.canSignInWithPasskey && isEnabled('passkey')
+      const canUseLocalPasskey = wallet.canUseLocalPasskey && isEnabled('passkey')
       const configuredSocialProviders = options.socialProviders ?? []
       const socialProviders =
-        wallet.canSignInWithSocial && hasWalletUiConfiguration
+        wallet.canSignInWithSocial
           ? configuredSocialProviders.filter((provider) =>
               (methodConfiguration?.socialProviders ?? []).some(
                 (enabledProvider) =>
                   normalizeProviderId(enabledProvider) === normalizeProviderId(provider),
               ),
             )
-          : wallet.canSignInWithSocial
-            ? configuredSocialProviders
-            : []
+          : []
       const externalWalletProviders = wallet.externalWalletProviders.filter(
         (provider) =>
-          !hasWalletUiConfiguration ||
           (methodConfiguration?.externalWallets ?? []).includes(provider.id),
       )
       const displayName = walletUi?.branding?.appName?.trim() || options.title || 'Altude'
@@ -440,6 +488,8 @@ export function mountWalletUI(
         intro.textContent = walletUi?.branding?.tagline?.trim() ||
           (signInOptions.length > 0
             ? `Continue with ${joinWithOr(signInOptions)}.`
+            : canUseLocalPasskey
+              ? 'Create or open a local-only wallet below.'
             : 'No sign-in methods are configured for this wallet.')
       }
       headline.append(title, intro)
@@ -458,6 +508,7 @@ export function mountWalletUI(
           event.preventDefault()
           const identity = form.querySelector<HTMLInputElement>('input')
           if (!identity) return
+          if (busy || !isIdentityValid() || (otpChannel === 'sms' && !hasSmsConsent())) return
           otpIdentifier = identity.value
           if (wallet.usesHostedOtp) {
             void run(() => wallet.signInWithOtp(otpChannel, otpIdentifier), {
@@ -496,24 +547,28 @@ export function mountWalletUI(
           otpChannel === 'email'
             ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity.value.trim())
             : /^\+?[\d\s().-]{7,}$/.test(identity.value.trim())
-        submit.disabled = busy || !isIdentityValid()
+        const updateSubmit = () => {
+          submit.disabled = busy || !isIdentityValid() || (otpChannel === 'sms' && !hasSmsConsent())
+        }
+        updateSubmit()
         identity.addEventListener('input', () => {
+          if (otpIdentifier !== identity.value) {
+            smsConsent = false
+            const checkbox = content.querySelector<HTMLInputElement>('.sms-consent input')
+            if (checkbox) checkbox.checked = false
+          }
           otpIdentifier = identity.value
-          submit.disabled = !isIdentityValid()
+          updateSubmit()
         })
         form.append(fieldIcon, identity, submit)
         content.append(form)
-        if (otpChannel === 'sms' && walletUi?.legal?.smsConsentText) {
-          const consent = document.createElement('p')
-          consent.className = 'subtitle'
-          consent.textContent = walletUi.legal.smsConsentText
-          content.append(consent)
-        }
+        if (otpChannel === 'sms') content.append(createSmsConsent(updateSubmit))
         const channelSwitch = button(
           otpChannel === 'email' ? 'Use a text message instead' : 'Use email instead',
           () => {
             otpChannel = otpChannel === 'email' ? 'sms' : 'email'
             otpIdentifier = ''
+            smsConsent = false
             errorMessage = ''
             message = ''
             render()
@@ -591,6 +646,7 @@ export function mountWalletUI(
           const phone = button('Continue with phone', () => {
             otpChannel = 'sms'
             otpIdentifier = ''
+            smsConsent = false
             errorMessage = ''
             message = ''
             render()
@@ -608,6 +664,54 @@ export function mountWalletUI(
           methods.append(phone)
         }
         content.append(methods)
+      }
+      if (!otpStarted && canUseLocalPasskey) {
+        const local = document.createElement('section')
+        local.className = 'local-wallet'
+        local.setAttribute('aria-label', 'Local-only wallet')
+        const heading = document.createElement('h3')
+        heading.textContent = 'Local-only wallet'
+        const description = document.createElement('p')
+        description.textContent = 'Stored in this browser and protected by a passkey. This does not sign you in to an Altude API session.'
+        const create = button('Create local wallet', () => {
+          if (!wallet.canUseLocalPasskey) return
+          return run(async () => {
+            await wallet.createLocalWallet()
+            localHandle = ''
+          })
+        }, true)
+        const form = document.createElement('form')
+        form.className = 'local-wallet-return'
+        const label = document.createElement('label')
+        label.textContent = 'Local wallet handle'
+        const input = document.createElement('input')
+        input.type = 'text'
+        input.autocomplete = 'off'
+        input.spellcheck = false
+        input.value = localHandle
+        input.placeholder = 'Paste your saved local wallet handle'
+        const open = document.createElement('button')
+        open.type = 'submit'
+        open.className = 'secondary'
+        open.textContent = 'Open local wallet'
+        open.disabled = busy || !localHandle.trim()
+        input.addEventListener('input', () => {
+          localHandle = input.value
+          open.disabled = busy || !localHandle.trim()
+        })
+        form.addEventListener('submit', (event) => {
+          event.preventDefault()
+          const handle = input.value.trim()
+          if (busy || !handle || !wallet.canUseLocalPasskey) return
+          void run(async () => {
+            await wallet.openLocalWallet(handle)
+            localHandle = ''
+          })
+        })
+        label.append(input)
+        form.append(label, open)
+        local.append(heading, description, create, form)
+        content.append(local)
       }
       if (!otpStarted && externalWalletProviders.length > 0) {
         if (canStartOtp || hasIdentityAlternatives) {
@@ -678,6 +782,7 @@ export function mountWalletUI(
           const providerStatus = document.createElement('span')
           providerStatus.className = 'wallet-provider-status'
           const available = provider.isAvailable?.()
+          providerButton.disabled = available === false
           providerStatus.textContent =
             provider.id === 'walletconnect'
               ? 'QR & mobile'
@@ -787,14 +892,20 @@ export function mountWalletUI(
         const resend = document.createElement('div')
         resend.className = 'otp-resend'
         const resendButton = button('Resend code', () => run(async () => {
+          if (otpChannel === 'sms' && !hasSmsConsent()) return
           await wallet.startOtp(otpChannel, otpIdentifier)
           otpDigits = Array<string>(6).fill('')
           message = `We sent a fresh code to your ${otpChannel === 'email' ? 'inbox' : 'phone'}.`
-        }), false, busy)
+        }), false, busy || (otpChannel === 'sms' && !hasSmsConsent()))
+        if (otpChannel === 'sms') {
+          content.append(createSmsConsent(() => {
+            resendButton.disabled = busy || !hasSmsConsent()
+          }))
+        }
         resend.append("Didn't get it?", resendButton)
         content.append(resend)
       }
-    } else if (state.status === 'connected' && state.custody === 'embedded') {
+    } else if (state.status === 'connected' && (state.custody === 'embedded' || state.custody === 'local')) {
       const address = state.address
       const identity = document.createElement('div')
       identity.className = 'account-identity'
@@ -802,7 +913,8 @@ export function mountWalletUI(
       avatar.className = 'account-avatar'
       avatar.setAttribute('aria-hidden', 'true')
       const contact =
-        state.session?.user.email || state.session?.user.phoneNumber || 'Wallet account'
+        state.session?.user.email || state.session?.user.phoneNumber ||
+        (state.custody === 'local' ? 'Local wallet' : 'Wallet account')
       avatar.textContent = contact.slice(0, 1).toUpperCase()
       const accountContact = document.createElement('div')
       accountContact.className = 'account-contact'
@@ -819,6 +931,12 @@ export function mountWalletUI(
       accountContact.append(contactText, protection)
       identity.append(avatar, accountContact)
       content.append(identity)
+      if (state.custody === 'local') {
+        const notice = document.createElement('p')
+        notice.className = 'note'
+        notice.textContent = 'Local-only wallet: no Altude API session is authenticated. Save the handle to reopen this wallet in this browser; it is not a recovery backup.'
+        content.append(notice)
+      }
 
       const accountCard = document.createElement('div')
       accountCard.className = 'account-card'
@@ -879,6 +997,23 @@ export function mountWalletUI(
         }),
       )
       content.append(accountCard)
+      if (state.custody === 'local' && state.localIdentityKey) {
+        const handle = state.localIdentityKey
+        const handleCard = document.createElement('div')
+        handleCard.className = 'status-card'
+        const label = document.createElement('p')
+        label.className = 'status-label'
+        label.textContent = 'Local wallet handle'
+        const value = document.createElement('p')
+        value.className = 'status local-handle'
+        value.textContent = handle
+        const copy = button('Copy local wallet handle', () => run(async () => {
+          await navigator.clipboard.writeText(handle)
+          message = 'Local wallet handle copied.'
+        }), true)
+        handleCard.append(label, value, copy)
+        content.append(handleCard)
+      }
 
       const recoveryHelpId = `altude-recovery-help-${String(walletUiInstance)}`
       const accountActions = document.createElement('div')
@@ -890,6 +1025,17 @@ export function mountWalletUI(
       signOut.prepend(createIcon('signout'))
       accountActions.append(manageRecovery, signOut)
       content.append(accountActions)
+      const walletActions = document.createElement('div')
+      walletActions.className = 'actions'
+      walletActions.append(createBalanceForm())
+      if (state.protection === 'device-local' && wallet.canUseLocalPasskey) {
+        walletActions.append(button('Protect with passkey', () => run(() => wallet.protectWithPasskey()), true))
+      }
+      walletActions.append(
+        button('Lock wallet', () => { wallet.lock(); }, true),
+        button('Create token account', requestProvisioning, true, provisioningRequested || provisioning.size > 0),
+      )
+      content.append(walletActions)
       const recoveryHelp = document.createElement('p')
       recoveryHelp.id = recoveryHelpId
       recoveryHelp.className = 'account-help'
@@ -928,39 +1074,7 @@ export function mountWalletUI(
         const actions = document.createElement('div')
         actions.className = 'actions'
         if (state.custody !== 'external' || state.externalChain === 'solana') {
-          actions.append(
-            button(
-              'Check balance',
-              () =>
-                run(async () => {
-                  const balance = await wallet.getBalance()
-                  message = `Balance: ${String(balance.uiAmount ?? 'unavailable')} SOL`
-                }),
-              true,
-            ),
-          )
-        }
-        if (state.custody === 'embedded') {
-          if (state.protection === 'device-local') {
-            actions.append(
-              button('Protect with passkey', () => run(() => wallet.protectWithPasskey()), true),
-            )
-          }
-          actions.append(
-            button(
-              'Create token account',
-              () =>
-                run(async () => {
-                  const result = await wallet.createAccount()
-                  message =
-                    result.Message ||
-                    (result.Signature
-                      ? `Account created: ${result.Signature}`
-                      : 'Account is ready.')
-                }),
-              true,
-            ),
-          )
+          actions.append(createBalanceForm())
         }
         if (state.custody === 'external' && state.externalChain === 'evm') {
           const unavailable = document.createElement('p')
@@ -980,6 +1094,25 @@ export function mountWalletUI(
     }
 
     if (state.status === 'connected') {
+      for (const { event: request } of provisioning.values()) {
+        const confirmation = document.createElement('div')
+        confirmation.className = 'confirm'
+        confirmation.setAttribute('role', 'group')
+        confirmation.setAttribute('aria-label', `Token account confirmation ${request.id}`)
+        const summary = document.createElement('p')
+        summary.textContent = `Create token accounts on ${request.network === 'mainnet-beta' ? 'mainnet' : request.network} for ${request.tokens.length > 0 ? request.tokens.join(', ') : 'the configured tokens'}?`
+        confirmation.append(
+          summary,
+          button('Confirm and create', () => submitProvisioning(request.id), false, provisioningSubmitting.has(request.id)),
+          button('Cancel', () => {
+            if (!provisioning.has(request.id) || provisioningSubmitting.has(request.id)) return
+            provisioning.delete(request.id)
+            wallet.rejectProvisioning(request.id)
+            render()
+          }, true, provisioningSubmitting.has(request.id)),
+        )
+        content.append(confirmation)
+      }
       for (const { event: transaction } of pending.values()) {
         const confirmation = document.createElement('div')
         confirmation.className = 'confirm'
@@ -991,8 +1124,11 @@ export function mountWalletUI(
           transaction.intent.kind === 'sol-transfer'
             ? `Confirm transfer of ${amount} lamports to ${transaction.intent.recipient}?`
             : `Confirm transfer of ${amount} base units of ${transaction.intent.mint} to ${transaction.intent.recipient}?`
+        const network = document.createElement('p')
+        network.textContent = `Network: ${transaction.intent.network ?? 'unavailable'}`
         confirmation.append(
           summary,
+          network,
           button(
             'Confirm and submit',
             () => submitTransaction(transaction.id),
@@ -1057,8 +1193,8 @@ export function mountWalletUI(
     footer.append(createIcon('shield'), footerText)
     panel.append(footer)
     const legalUrls = [
-      ['Terms', options.walletUi?.legal?.termsUrl],
-      ['Privacy', options.walletUi?.legal?.privacyUrl],
+      ['Terms', legalConfiguration()?.termsUrl],
+      ['Privacy', legalConfiguration()?.privacyUrl],
     ] as const
     const legalLinks = legalUrls
       .map(([label, value]) => {
@@ -1086,14 +1222,112 @@ export function mountWalletUI(
         control.disabled = true
       }
     }
-    if (focusFirst) {
+    if (focusFirst || (presentation === 'modal' && hadFocus)) {
       const firstDigit = panel.querySelector<HTMLInputElement>('.otp-fields input:not(:disabled)')
       if (firstDigit) {
         firstDigit.focus()
         return
       }
-      const firstButton = panel.querySelector<HTMLButtonElement>('button')
-      if (firstButton) firstButton.focus()
+      ;(getFocusableControls(panel)[0] ?? panel).focus()
+    }
+  }
+
+  function createSmsConsent(onChange: () => void): HTMLElement {
+    const text = smsConsentText()
+    if (!text) {
+      const notice = document.createElement('p')
+      notice.className = 'note'
+      notice.textContent = 'SMS sign-in requires configured consent text.'
+      return notice
+    }
+    const label = document.createElement('label')
+    label.className = 'sms-consent'
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.checked = smsConsent
+    checkbox.disabled = busy
+    checkbox.addEventListener('change', () => {
+      smsConsent = checkbox.checked
+      onChange()
+    })
+    const copy = document.createElement('span')
+    copy.textContent = text
+    label.append(checkbox, copy)
+    return label
+  }
+
+  function createBalanceForm(): HTMLFormElement {
+    const form = document.createElement('form')
+    form.className = 'balance-form'
+    const label = document.createElement('label')
+    label.textContent = 'Token mint (optional; leave empty for SOL)'
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.autocomplete = 'off'
+    input.spellcheck = false
+    input.value = tokenMint
+    input.addEventListener('input', () => { tokenMint = input.value })
+    const check = document.createElement('button')
+    check.type = 'submit'
+    check.className = 'secondary'
+    check.textContent = 'Check balance'
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const mint = input.value.trim()
+      const owner = ownerOf(wallet.state)
+      void run(async () => {
+        const balance = await wallet.getBalance(mint || undefined)
+        if (owner !== ownerOf(wallet.state)) return
+        message = mint
+          ? `Balance: ${String(balance.uiAmount ?? 'unavailable')} tokens (mint: ${mint})`
+          : `Balance: ${String(balance.uiAmount ?? 'unavailable')} SOL`
+      })
+    })
+    label.append(input)
+    form.append(label, check)
+    return form
+  }
+
+  async function requestProvisioning(): Promise<void> {
+    if (busy || provisioningRequested || provisioning.size > 0) return
+    const owner = ownerOf(wallet.state)
+    const controller = new AbortController()
+    provisioningController = controller
+    provisioningRequested = true
+    errorMessage = ''
+    message = ''
+    render()
+    try {
+      await wallet.createAccount([], controller.signal)
+    } catch (error) {
+      if (mounted && ownerOf(wallet.state) === owner) {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+    } finally {
+      provisioningRequested = false
+      if (provisioningController === controller) provisioningController = null
+      render()
+    }
+  }
+
+  async function submitProvisioning(id: string): Promise<void> {
+    const request = provisioning.get(id)
+    if (!request || request.owner !== ownerOf(wallet.state) ||
+      wallet.state.status !== 'connected' || provisioningSubmitting.has(id)) return
+    provisioningSubmitting.add(id)
+    errorMessage = ''
+    message = ''
+    render()
+    try {
+      await wallet.approveProvisioning(id)
+      provisioning.delete(id)
+    } catch (error) {
+      if (provisioning.delete(id)) {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+    } finally {
+      provisioningSubmitting.delete(id)
+      render()
     }
   }
 
@@ -1144,8 +1378,16 @@ export function mountWalletUI(
     }
   }
 
-  render()
-  let mounted = true
+  render(presentation === 'modal')
+  if (typeof wallet.getPasskeyAvailability === 'function') {
+    void wallet.getPasskeyAvailability().then(() => {
+      render()
+    }).catch((error: unknown) => {
+      if (!mounted) return
+      errorMessage = error instanceof Error ? error.message : String(error)
+      render()
+    })
+  }
   void wallet.restoreSession().catch((error: unknown) => {
     if (!mounted) return
     errorMessage = error instanceof Error ? error.message : String(error)
@@ -1157,10 +1399,30 @@ export function mountWalletUI(
       if (!submitting.has(id)) wallet.rejectTransaction(id)
     }
     pending.clear()
+    if (provisioningSubmitting.size === 0) provisioningController?.abort()
+    for (const id of provisioning.keys()) {
+      if (!provisioningSubmitting.has(id)) wallet.rejectProvisioning(id)
+    }
+    provisioning.clear()
     events()
     root.remove()
     if (previousFocus instanceof HTMLElement) previousFocus.focus()
   }
+}
+
+function getFocusableControls(panel: HTMLElement): HTMLElement[] {
+  return [...panel.querySelectorAll<HTMLElement>(
+    'a[href],button,input,select,textarea,[tabindex],[contenteditable="true"]',
+  )].filter((element) => {
+    if ((element.hasAttribute('tabindex') && element.tabIndex < 0) || element.matches(':disabled,input[type="hidden"]') ||
+      element.closest('[hidden],[inert],[aria-hidden="true"]')) return false
+    for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor)
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false
+      if (ancestor === panel) break
+    }
+    return true
+  })
 }
 
 function joinWithOr(values: readonly string[]): string {

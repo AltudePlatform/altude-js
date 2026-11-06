@@ -39,15 +39,6 @@ function sameProtection(left: WalletStoreRecord, right: WalletStoreRecord): bool
   )
 }
 
-function sameRecord(left: WalletStoreRecord, right: WalletStoreRecord): boolean {
-  return (
-    left.identityKey === right.identityKey &&
-    left.publicKey === right.publicKey &&
-    left.serverUserId === right.serverUserId &&
-    sameProtection(left, right)
-  )
-}
-
 function withProtection(
   current: WalletStoreRecord,
   protection: WalletStoreRecord,
@@ -89,6 +80,7 @@ export class WalletVault {
   async getOrCreateAddress(identityKey: string): Promise<string> {
     this.#assertIdentityKey(identityKey)
     const operation = this.#operation(identityKey)
+    await this.#writeQueue
     const existing = await this.#store.get(identityKey)
     this.#assertCurrent(identityKey, operation)
     if (existing) return existing.publicKey
@@ -105,14 +97,7 @@ export class WalletVault {
             protection: 'device-local',
             secret: secret.slice(),
           }),
-        (result) =>
-          result.created
-            ? this.#store
-                .update(identityKey, (current) =>
-                  current && sameRecord(current, result.record) ? undefined : current,
-                )
-                .then(() => undefined)
-            : Promise.resolve(),
+        // Persist creation even after cancellation: another tab may already have adopted it.
       )
       this.#assertCurrent(identityKey, operation)
       if (created) this.#unlocked.set(identityKey, secret)
@@ -365,12 +350,14 @@ export class WalletVault {
   }
 
   async protection(identityKey: string): Promise<WalletProtection | null> {
+    await this.#writeQueue
     return (await this.#store.get(identityKey))?.protection ?? null
   }
 
   async findByIdentityKey(identityKey: string): Promise<WalletStoreRecord | undefined> {
     this.#assertIdentityKey(identityKey)
     const operation = this.#operation(identityKey)
+    await this.#writeQueue
     const record = await this.#store.get(identityKey)
     this.#assertCurrent(identityKey, operation)
     return record
@@ -414,6 +401,7 @@ export class WalletVault {
   }
 
   async findByServerUserId(userId: string): Promise<WalletStoreRecord | undefined> {
+    await this.#writeQueue
     return this.#store.getByServerUserId(userId)
   }
 
@@ -421,7 +409,7 @@ export class WalletVault {
     this.#assertIdentityKey(identityKey)
     const operation = this.#operation(identityKey)
     let changed = false
-    let previousServerUserId: string | undefined
+    const revision = this.#crypto.randomUUID()
     await this.#write(
       identityKey,
       operation,
@@ -439,20 +427,23 @@ export class WalletVault {
               'This local wallet is already associated with a different server account.',
             )
           }
-          previousServerUserId = record.serverUserId
-          changed = previousServerUserId !== userId
-          return { ...record, serverUserId: userId }
+          changed = record.serverUserId === undefined
+          return { ...record, serverUserId: userId, associationRevision: revision }
         }),
       () =>
         changed
           ? this.#store
               .update(identityKey, (record) => {
-                if (!record || record.serverUserId !== userId) return record
-                if (previousServerUserId !== undefined) {
-                  return { ...record, serverUserId: previousServerUserId }
-                }
+                if (
+                  !record ||
+                  record.serverUserId !== userId ||
+                  record.associationRevision !== revision
+                )
+                  return record
                 return Object.fromEntries(
-                  Object.entries(record).filter(([key]) => key !== 'serverUserId'),
+                  Object.entries(record).filter(
+                    ([key]) => key !== 'serverUserId' && key !== 'associationRevision',
+                  ),
                 ) as WalletStoreRecord
               })
               .then(() => undefined)
@@ -483,6 +474,7 @@ export class WalletVault {
 
   async #requireRecord(identityKey: string): Promise<WalletStoreRecord> {
     this.#assertIdentityKey(identityKey)
+    await this.#writeQueue
     const record = await this.#store.get(identityKey)
     if (!record)
       throw new AltudeWalletError('WALLET_NOT_FOUND', 'No local wallet exists for this identity.')

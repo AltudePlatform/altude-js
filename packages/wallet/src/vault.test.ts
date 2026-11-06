@@ -52,9 +52,9 @@ describe('WalletVault', () => {
     const identityKey = 'broker:corrupt-secret'
     await vault.getOrCreateAddress(identityKey)
     vault.lock(identityKey)
-    await store.update(identityKey, (record) => record
-      ? { ...record, secret: new Uint8Array(32).fill(91) }
-      : undefined)
+    await store.update(identityKey, (record) =>
+      record ? { ...record, secret: new Uint8Array(32).fill(91) } : undefined,
+    )
     await expect(vault.unlock(identityKey)).rejects.toThrow('does not match')
     expect(vault.isUnlocked(identityKey)).toBe(false)
   })
@@ -63,12 +63,14 @@ describe('WalletVault', () => {
     const store = new IndexedDbWalletStore(indexedDB)
     const vault = new WalletVault({ store })
     const registeredAddress = await vault.getOrCreateAddress('broker:original-device')
-    await expect(vault.resolveAssociatedAddress('broker:new-device', registeredAddress))
-      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    await expect(
+      vault.resolveAssociatedAddress('broker:new-device', registeredAddress),
+    ).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
     expect(await store.get('broker:new-device')).toBeUndefined()
     const mismatchedAddress = await vault.getOrCreateAddress('broker:other-device')
-    await expect(vault.resolveAssociatedAddress('broker:other-device', registeredAddress))
-      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    await expect(
+      vault.resolveAssociatedAddress('broker:other-device', registeredAddress),
+    ).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
     expect((await store.get('broker:other-device'))?.publicKey).toBe(mismatchedAddress)
   })
 
@@ -86,8 +88,9 @@ describe('WalletVault', () => {
       delete missingKey.secret
       return missingKey
     })
-    await expect(vault.resolveAssociatedAddress(identityKey, address))
-      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    await expect(vault.resolveAssociatedAddress(identityKey, address)).rejects.toMatchObject({
+      code: 'RECOVERY_REQUIRED',
+    })
   })
 
   it('converges simultaneous first-wallet resolution across vault instances', async () => {
@@ -118,8 +121,9 @@ describe('WalletVault', () => {
       delete incomplete.ciphertext
       return incomplete
     })
-    await expect(vault.resolveAssociatedAddress(identityKey, address))
-      .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
+    await expect(vault.resolveAssociatedAddress(identityKey, address)).rejects.toMatchObject({
+      code: 'RECOVERY_REQUIRED',
+    })
     expect(vault.isUnlocked(identityKey)).toBe(false)
   })
 
@@ -291,6 +295,7 @@ describe('WalletVault', () => {
       crypto: globalThis.crypto,
       passkeys: testPasskey,
     })
+
     const second = new WalletVault({
       store: secondStore,
       crypto: globalThis.crypto,
@@ -298,15 +303,12 @@ describe('WalletVault', () => {
     })
     const identityKey = 'issuer|claim-race'
     await first.getOrCreateAddress(identityKey)
-
     const results = await Promise.allSettled([
       first.associateServerUser(identityKey, 'server-user-a'),
       second.associateServerUser(identityKey, 'server-user-b'),
     ])
-
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    const rejected = results.find((result) => result.status === 'rejected')
-    expect(rejected).toMatchObject({
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
       status: 'rejected',
       reason: { code: 'SESSION' },
     })
@@ -315,6 +317,88 @@ describe('WalletVault', () => {
     )
   })
 
+  it('preserves a same-owner association reasserted by another instance before cancellation rollback', async () => {
+    const store = new IndexedDbWalletStore(indexedDB)
+    const committed = deferred<boolean>()
+    const finish = deferred<boolean>()
+    let pause = true
+    const delayed: WalletStore = {
+      get: (key) => store.get(key),
+      getByServerUserId: (id) => store.getByServerUserId(id),
+      createIfAbsent: (record) => store.createIfAbsent(record),
+      put: (record) => store.put(record),
+      delete: (key) => store.delete(key),
+      async update(key, update) {
+        const result = await store.update(key, update)
+        if (pause) {
+          pause = false
+          committed.resolve(true)
+          await finish.promise
+        }
+        return result
+      },
+    }
+    const first = new WalletVault({ store: delayed })
+    const second = new WalletVault({ store })
+    const key = 'issuer|same-owner-reassertion'
+    await first.getOrCreateAddress(key)
+    const association = first.associateServerUser(key, 'owner-U')
+    const rejected = expect(association).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+    await committed.promise
+    await second.associateServerUser(key, 'owner-U')
+    first.lock(key)
+    finish.resolve(true)
+    await rejected
+    expect((await store.get(key))?.serverUserId).toBe('owner-U')
+    await expect(second.associateServerUser(key, 'owner-V')).rejects.toMatchObject({
+      code: 'SESSION',
+    })
+  })
+
+  it('orders reuse behind cancelled creation completion and retains an adopted key across instances', async () => {
+    const store = new IndexedDbWalletStore(indexedDB)
+    const committed = deferred<boolean>()
+    const finish = deferred<boolean>()
+    const delayed: WalletStore = {
+      get: (key) => store.get(key),
+      getByServerUserId: (id) => store.getByServerUserId(id),
+      put: (record) => store.put(record),
+      delete: (key) => store.delete(key),
+      update: (key, update) => store.update(key, update),
+      async createIfAbsent(record) {
+        const result = await store.createIfAbsent(record)
+        committed.resolve(true)
+        await finish.promise
+        return result
+      },
+    }
+    const first = new WalletVault({ store: delayed })
+    const second = new WalletVault({ store })
+    const key = 'issuer|adopted-creation'
+    const creation = first.getOrCreateAddress(key)
+    const cancelled = expect(creation).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+    await committed.promise
+    first.lock(key)
+    const adopted = await second.getOrCreateAddress(key)
+    await second.associateServerUser(key, 'registered-owner')
+    let reused = false
+    const reuse = first.getOrCreateAddress(key).then((value) => {
+      reused = true
+      return value
+    })
+    await Promise.resolve()
+    expect(reused).toBe(false)
+    finish.resolve(true)
+    await cancelled
+    expect(await reuse).toBe(adopted)
+    expect((await store.get(key))?.publicKey).toBe(adopted)
+    await first.unlock(key)
+    const signer = await first.getSigner(key)
+    const bytes = new Uint8Array([9])
+    const signature = await signer.signTransactionMessage?.(bytes)
+    if (!signature) throw new Error('Expected signature')
+    expect(ed25519.verify(signature, bytes, decodeBase58(adopted))).toBe(true)
+  })
   it('preserves the winning passkey when two vault instances protect concurrently', async () => {
     vi.stubGlobal('location', { hostname: 'localhost' })
     const firstStore = new IndexedDbWalletStore(indexedDB)

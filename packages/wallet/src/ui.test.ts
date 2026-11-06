@@ -40,6 +40,7 @@ describe('mountWalletUI', () => {
     const unmount = mountWalletUI(container, wallet, {
       presentation: 'modal',
       title: 'Embedded wallet',
+      authMethods: { emailOtp: true },
       onClose: vi.fn(),
     })
 
@@ -125,7 +126,10 @@ describe('mountWalletUI', () => {
     const container = document.createElement('div')
     document.body.append(container)
     const unmount = mountWalletUI(container, wallet, {
-      walletUi: { authMethods: { emailOtp: channel === 'email', smsOtp: channel === 'sms' } },
+      walletUi: {
+        authMethods: { emailOtp: channel === 'email', smsOtp: channel === 'sms' },
+        legal: { smsConsentText: 'I agree to receive a sign-in code by SMS.' },
+      },
     })
     const identifier = channel === 'email' ? 'wallet@example.test' : '+12025550123'
     const identity = container.querySelector<HTMLInputElement>('.magic input')
@@ -133,6 +137,11 @@ describe('mountWalletUI', () => {
     if (!identity || !form) throw new Error('Expected an identifier form.')
     identity.value = identifier
     identity.dispatchEvent(new Event('input', { bubbles: true }))
+    const consent = container.querySelector<HTMLInputElement>('.sms-consent input')
+    if (consent) {
+      consent.checked = true
+      consent.dispatchEvent(new Event('change', { bubbles: true }))
+    }
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => {
       expect(container.querySelectorAll('.otp-fields input')).toHaveLength(6)
@@ -182,7 +191,10 @@ describe('mountWalletUI', () => {
     } as unknown as AltudeWallet
     const container = document.createElement('div')
     document.body.append(container)
-    const unmount = mountWalletUI(container, wallet)
+    const unmount = mountWalletUI(container, wallet, {
+      authMethods: { emailOtp: true, smsOtp: true },
+      legal: { smsConsentText: 'I agree to receive a sign-in code by SMS.' },
+    })
     const phone = container.querySelector<HTMLButtonElement>('[aria-label="Continue with phone"]')
     if (!phone) throw new Error('Expected the phone sign-in action.')
     expect(phone.querySelector('svg')).not.toBeNull()
@@ -192,6 +204,10 @@ describe('mountWalletUI', () => {
     if (!identity || !form) throw new Error('Expected the phone identifier form.')
     identity.value = '+12025550123'
     identity.dispatchEvent(new Event('input', { bubbles: true }))
+    const consent = container.querySelector<HTMLInputElement>('.sms-consent input')
+    if (!consent) throw new Error('Expected SMS consent.')
+    consent.checked = true
+    consent.dispatchEvent(new Event('change', { bubbles: true }))
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => {
       expect(container.querySelector('h2')?.textContent).toBe('Check your messages')
@@ -309,6 +325,7 @@ describe('mountWalletUI', () => {
     const unmount = mountWalletUI(container, wallet, {
       presentation: 'inline',
       socialProviders: ['Google'],
+      authMethods: { socialProviders: ['Google'] },
     })
 
     const socialSignIn = [...container.querySelectorAll('button')].find((control) =>
@@ -808,7 +825,10 @@ describe('mountWalletUI', () => {
     } as unknown as AltudeWallet
     const container = document.createElement('div')
     document.body.append(container)
-    const unmount = mountWalletUI(container, wallet, { presentation: 'inline' })
+    const unmount = mountWalletUI(container, wallet, {
+      presentation: 'inline',
+      authMethods: { externalWallets: ['metamask'] },
+    })
 
     const walletToggle = [...container.querySelectorAll('button')].find((button) =>
       button.textContent.includes('Connect a Web3 wallet'),
@@ -874,6 +894,7 @@ describe('mountWalletUI', () => {
     document.body.append(container)
     const unmount = mountWalletUI(container, wallet, {
       socialProviders: ['Google'],
+      authMethods: { socialProviders: ['Google'], passkey: true, externalWallets: ['phantom'] },
     })
 
     expect(container.textContent).toContain('Continue with Google')
@@ -1001,7 +1022,532 @@ describe('mountWalletUI', () => {
     expect(container.textContent).not.toContain('Secure recovery by Ika')
     unmount()
   })
+
+  it('requires explicit SMS consent, rejects bypassed submits, and resets consent on number/channel changes', () => {
+    const { wallet, mocks, container } = createUiHarness()
+    const unmount = mountWalletUI(container, wallet, {
+      authMethods: { emailOtp: true, smsOtp: true },
+      legal: { smsConsentText: 'I agree to receive a sign-in code by SMS.' },
+    })
+    clickControl(container, 'Continue with phone')
+    const phone = requireInput(container, '.magic input')
+    const form = requireElement(container, '.magic')
+    const send = findControl(form, 'Send code')
+    const consent = requireInput(container, '.sms-consent input')
+    expect(consent.type).toBe('checkbox')
+    expect(consent.checked).toBe(false)
+    phone.value = '+12025550123'
+    phone.dispatchEvent(new Event('input'))
+    expect(send.disabled).toBe(true)
+    form.dispatchEvent(new Event('submit', { cancelable: true }))
+    expect(mocks.startOtp).not.toHaveBeenCalled()
+    consent.checked = true
+    consent.dispatchEvent(new Event('change'))
+    expect(send.disabled).toBe(false)
+    phone.value = '+12025550124'
+    phone.dispatchEvent(new Event('input'))
+    expect(consent.checked).toBe(false)
+    expect(send.disabled).toBe(true)
+    consent.checked = true
+    consent.dispatchEvent(new Event('change'))
+    clickControl(container, 'Use email instead')
+    clickControl(container, 'Continue with phone')
+    expect(container.querySelector<HTMLInputElement>('.sms-consent input')?.checked).toBe(false)
+    expect(container.querySelector<HTMLButtonElement>('.magic button')?.disabled).toBe(true)
+    unmount()
+  })
+
+  it('gates SMS resend on the same explicit consent and allows consent to be withdrawn', async () => {
+    const { wallet, mocks, container } = createUiHarness()
+    const unmount = mountWalletUI(container, wallet, {
+      authMethods: { smsOtp: true },
+      legal: { smsConsentText: 'I agree to receive a sign-in code by SMS.' },
+    })
+    const phone = requireInput(container, '.magic input')
+    phone.value = '+12025550123'
+    phone.dispatchEvent(new Event('input'))
+    const consent = requireInput(container, '.sms-consent input')
+    consent.checked = true
+    consent.dispatchEvent(new Event('change'))
+    requireElement(container, '.magic').dispatchEvent(new Event('submit', { cancelable: true }))
+    await vi.waitFor(() => { expect(container.querySelector('.otp-fields')).not.toBeNull(); })
+    const otpConsent = requireInput(container, '.sms-consent input')
+    expect(otpConsent.checked).toBe(true)
+    otpConsent.checked = false
+    otpConsent.dispatchEvent(new Event('change'))
+    const resend = findControl(container, 'Resend code')
+    expect(resend.disabled).toBe(true)
+    resend.click()
+    expect(mocks.startOtp).toHaveBeenCalledTimes(1)
+    otpConsent.checked = true
+    otpConsent.dispatchEvent(new Event('change'))
+    expect(resend.disabled).toBe(false)
+    resend.click()
+    await vi.waitFor(() => { expect(mocks.startOtp).toHaveBeenCalledTimes(2); })
+    expect(mocks.startOtp).toHaveBeenLastCalledWith('sms', '+12025550123')
+    unmount()
+  })
+
+  it.each([undefined, '', '   '])('blocks SMS delivery without configured consent text (%s)', (smsConsentText) => {
+    const { wallet, mocks, container } = createUiHarness()
+    const unmount = mountWalletUI(container, wallet, {
+      authMethods: { smsOtp: true },
+      legal: smsConsentText === undefined ? {} : { smsConsentText },
+    })
+    const phone = requireInput(container, '.magic input')
+    phone.value = '+12025550123'
+    phone.dispatchEvent(new Event('input'))
+    expect(container.querySelector('.sms-consent')).toBeNull()
+    expect(container.querySelector<HTMLButtonElement>('.magic button')?.disabled).toBe(true)
+    requireElement(container, '.magic').dispatchEvent(new Event('submit', { cancelable: true }))
+    expect(mocks.startOtp).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('offers no guessed methods even when every adapter is available', () => {
+    const { wallet, mocks, container } = createUiHarness()
+    mocks.canSignInWithSocial = true
+    mocks.canSignInWithPasskey = true
+    mocks.externalWalletProviders = [{ id: 'phantom', label: 'Phantom', isAvailable: () => true }]
+    const unmount = mountWalletUI(container, wallet, { socialProviders: ['Google'] })
+    expect(container.querySelector('.content')?.textContent).toContain('No sign-in methods are configured')
+    expect(container.querySelector('.magic,.method-list,.wallet-group')).toBeNull()
+    unmount()
+  })
+
+  it('gives incomplete server settings full precedence over explicit method and legal fallbacks', () => {
+    const { wallet, container } = createUiHarness()
+    const fallback = {
+      authMethods: { emailOtp: true, smsOtp: true },
+      legal: { smsConsentText: 'Fallback consent', termsUrl: 'https://example.test/terms' },
+    }
+    let unmount = mountWalletUI(container, wallet, { ...fallback, walletUi: {} })
+    expect(container.querySelector('.magic')).toBeNull()
+    expect(container.querySelector('.legal-links')).toBeNull()
+    unmount()
+    unmount = mountWalletUI(container, wallet, {
+      ...fallback,
+      walletUi: { authMethods: { smsOtp: true } },
+    })
+    expect(container.querySelector('.magic input[type="tel"]')).not.toBeNull()
+    expect(container.querySelector('.sms-consent')).toBeNull()
+    expect(container.querySelector<HTMLButtonElement>('.magic button')?.disabled).toBe(true)
+    expect(container.querySelector('.legal-links')).toBeNull()
+    unmount()
+  })
+
+  it('disables unavailable external wallets without attempting to connect', () => {
+    const { wallet, mocks, container } = createUiHarness()
+    mocks.externalWalletProviders = [{ id: 'phantom', label: 'Phantom', isAvailable: () => false }]
+    const unmount = mountWalletUI(container, wallet, {
+      authMethods: { externalWallets: ['phantom'] },
+    })
+    clickControl(container, 'Connect a Web3 wallet', true)
+    const connect = container.querySelector<HTMLButtonElement>('[aria-label="Connect Phantom"]')
+    if (!connect) throw new Error('Expected the Phantom connection control.')
+    expect(connect.disabled).toBe(true)
+    expect(connect.textContent).toContain('Not detected')
+    connect.click()
+    expect(mocks.connectExternalWallet).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('focuses the modal on mount, loops legal anchors and enabled controls, and restores exit focus', () => {
+    const { wallet, container } = createUiHarness()
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+    const onClose = vi.fn()
+    const unmount = mountWalletUI(container, wallet, {
+      onClose, authMethods: { emailOtp: true },
+      legal: { termsUrl: 'https://example.test/terms', privacyUrl: 'https://example.test/privacy' },
+    })
+    const dialog = requireElement(container, '[role="dialog"]')
+    const close = requireElement(dialog, '[aria-label="Close wallet"]')
+    const last = requireElement(dialog, '.legal-links a:last-child')
+    expect(document.activeElement).toBe(close)
+    const excluded = document.createElement('a')
+    excluded.href = 'https://example.test/hidden'
+    excluded.setAttribute('tabindex', '-1')
+    dialog.append(excluded)
+    close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(last)
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(close)
+    close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(onClose).toHaveBeenCalledOnce()
+    unmount()
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('focuses an otherwise empty dialog and contains Tab when there are no eligible controls', () => {
+    const { wallet, container } = createUiHarness()
+    const unmount = mountWalletUI(container, wallet)
+    const dialog = requireElement(container, '[role="dialog"]')
+    expect(document.activeElement).toBe(dialog)
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    dialog.dispatchEvent(tab)
+    expect(tab.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(dialog)
+    const css = requireElement(container, 'style').textContent
+    expect(css).toContain('@media(prefers-reduced-motion:reduce){.altude-wallet-ui *,.altude-wallet-ui *::before,.altude-wallet-ui *::after')
+    unmount()
+  })
+
+  it.each(['embedded', 'local'] as const)('exposes managed actions for %s custody without implying a local API session', async (custody) => {
+    const { wallet, mocks, container, setState } = createUiHarness(connectedUiState(custody))
+    mocks.canUseLocalPasskey = true
+    const unmount = mountWalletUI(container, wallet)
+    if (custody === 'local') {
+      expect(wallet.state.session).toBeNull()
+      expect(container.querySelector('.account-contact')?.textContent).toContain('Local wallet')
+    }
+    expect(findControl(container, 'Create token account').disabled).toBe(false)
+    clickControl(container, 'Check balance')
+    await vi.waitFor(() => { expect(container.querySelector('[role="status"]')?.textContent).toBe('Balance: 1 SOL'); })
+    clickControl(container, 'Protect with passkey')
+    await vi.waitFor(() => { expect(mocks.protectWithPasskey).toHaveBeenCalledOnce(); })
+    await vi.waitFor(() => { expect(findControl(container, 'Lock wallet').disabled).toBe(false); })
+    clickControl(container, 'Lock wallet')
+    expect(mocks.lock).toHaveBeenCalledOnce()
+    setState({ ...wallet.state, status: 'locked', protection: 'passkey' })
+    clickControl(container, 'Unlock with passkey')
+    await vi.waitFor(() => { expect(mocks.unlockWithPasskey).toHaveBeenCalledOnce(); })
+    await vi.waitFor(() => { expect(findControl(container, 'Sign out').disabled).toBe(false); })
+    clickControl(container, 'Sign out')
+    await vi.waitFor(() => { expect(mocks.signOut).toHaveBeenCalledOnce(); })
+    unmount()
+  })
+
+  it('refreshes passkey capability before showing protection and ignores a late refresh after unmount', async () => {
+    const { wallet, mocks, container } = createUiHarness(connectedUiState())
+    let resolve!: (available: boolean) => void
+    const getPasskeyAvailability = vi.fn(() => new Promise<boolean>((done) => { resolve = done }))
+    Object.assign(mocks, { getPasskeyAvailability })
+    const unmount = mountWalletUI(container, wallet)
+    expect(getPasskeyAvailability).toHaveBeenCalledOnce()
+    expect(container.querySelector('.actions')?.textContent).not.toContain('Protect with passkey')
+    mocks.canUseLocalPasskey = true
+    resolve(true)
+    await vi.waitFor(() => { expect(findControl(container, 'Protect with passkey')).toBeDefined(); })
+    unmount()
+    const unmountAgain = mountWalletUI(container, wallet)
+    unmountAgain()
+    resolve(false)
+    await Promise.resolve()
+    expect(container.childElementCount).toBe(0)
+  })
+
+  it('reports passkey capability refresh failures without enabling unsupported actions', async () => {
+    const { wallet, mocks, container } = createUiHarness(connectedUiState())
+    Object.assign(mocks, { getPasskeyAvailability: vi.fn(() => Promise.reject(new Error('Passkey detection failed.'))) })
+    const unmount = mountWalletUI(container, wallet)
+    await vi.waitFor(() => { expect(container.querySelector('[role="alert"]')?.textContent).toBe('Passkey detection failed.'); })
+    expect(container.querySelector('.actions')?.textContent).not.toContain('Protect with passkey')
+    unmount()
+  })
+
+  it('creates a local-only passkey wallet and exposes a copyable public handle', async () => {
+    const { wallet, mocks, container, setState } = createUiHarness()
+    mocks.canUseLocalPasskey = true
+    const localState = { ...connectedUiState('local'), protection: 'passkey' as const }
+    mocks.createLocalWallet.mockImplementation(() => {
+      setState(localState)
+      return Promise.resolve(localState)
+    })
+    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+    const unmount = mountWalletUI(container, wallet, { authMethods: { passkey: true } })
+    expect(container.querySelector('.local-wallet')?.textContent).toContain('does not sign you in')
+    expect(container.querySelector('.passkey-action')).toBeNull()
+    clickControl(container, 'Create local wallet')
+    await vi.waitFor(() => { expect(container.querySelector('.local-handle')?.textContent).toBe('local:identity'); })
+    expect(mocks.createLocalWallet).toHaveBeenCalledOnce()
+    expect(wallet.state.session).toBeNull()
+    expect(container.querySelector('.note')?.textContent).toContain('no Altude API session')
+    await vi.waitFor(() => { expect(findControl(container, 'Copy local wallet handle').disabled).toBe(false); })
+    clickControl(container, 'Copy local wallet handle')
+    await vi.waitFor(() => { expect(copy).toHaveBeenCalledWith('local:identity'); })
+    copy.mockRestore()
+    unmount()
+  })
+
+  it('reopens a local wallet by its explicitly entered handle without authenticated passkey login', async () => {
+    const { wallet, mocks, container, setState } = createUiHarness()
+    mocks.canUseLocalPasskey = true
+    const localState = { ...connectedUiState('local'), protection: 'passkey' as const }
+    mocks.openLocalWallet.mockImplementation((_handle) => {
+      setState(localState)
+      return Promise.resolve(localState)
+    })
+    const unmount = mountWalletUI(container, wallet, { authMethods: { passkey: true } })
+    const input = requireInput(container, '.local-wallet-return input')
+    expect(input.closest('label')?.textContent).toContain('Local wallet handle')
+    expect(findControl(container, 'Open local wallet').disabled).toBe(true)
+    requireElement(container, '.local-wallet-return').dispatchEvent(new Event('submit', { cancelable: true }))
+    expect(mocks.openLocalWallet).not.toHaveBeenCalled()
+    input.value = '  altude:local:v1:my-public-handle  '
+    input.dispatchEvent(new Event('input'))
+    clickControl(container, 'Open local wallet')
+    await vi.waitFor(() => { expect(mocks.openLocalWallet).toHaveBeenCalledWith('altude:local:v1:my-public-handle'); })
+    expect(wallet.state.session).toBeNull()
+    expect(container.querySelector('.local-handle')?.textContent).toBe('local:identity')
+    unmount()
+  })
+
+  it('requires both explicit passkey configuration and local passkey capability', async () => {
+    const { wallet, mocks, container } = createUiHarness()
+    let resolve!: (available: boolean) => void
+    Object.assign(mocks, { getPasskeyAvailability: vi.fn(() => new Promise<boolean>((done) => { resolve = done })) })
+    let unmount = mountWalletUI(container, wallet, { authMethods: { passkey: true } })
+    expect(container.querySelector('.local-wallet')).toBeNull()
+    resolve(false)
+    await Promise.resolve()
+    expect(container.querySelector('.local-wallet')).toBeNull()
+    unmount()
+    mocks.canUseLocalPasskey = true
+    unmount = mountWalletUI(container, wallet, { authMethods: { passkey: true }, walletUi: {} })
+    expect(container.querySelector('.local-wallet')).toBeNull()
+    expect(mocks.createLocalWallet).not.toHaveBeenCalled()
+    expect(mocks.openLocalWallet).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('keeps API-authenticated passkey login separate from local wallet actions', () => {
+    const { wallet, mocks, container } = createUiHarness()
+    mocks.canSignInWithPasskey = true
+    mocks.canUseLocalPasskey = true
+    const unmount = mountWalletUI(container, wallet, { authMethods: { passkey: true } })
+    expect(container.querySelector('.passkey-action')?.getAttribute('aria-label')).toBe('Use a passkey')
+    expect(findControl(container, 'Create local wallet')).toBeDefined()
+    expect(findControl(container, 'Open local wallet')).toBeDefined()
+    unmount()
+  })
+
+  it('keeps the entered handle available after a failed local wallet open', async () => {
+    const { wallet, mocks, container } = createUiHarness()
+    mocks.canUseLocalPasskey = true
+    mocks.openLocalWallet.mockRejectedValue(new Error('Local wallet not found.'))
+    const unmount = mountWalletUI(container, wallet, { authMethods: { passkey: true } })
+    const input = requireInput(container, '.local-wallet-return input')
+    input.value = 'altude:local:v1:missing'
+    input.dispatchEvent(new Event('input'))
+    clickControl(container, 'Open local wallet')
+    await vi.waitFor(() => { expect(container.querySelector('[role="alert"]')?.textContent).toBe('Local wallet not found.'); })
+    expect(requireInput(container, '.local-wallet-return input').value).toBe('altude:local:v1:missing')
+    unmount()
+  })
+
+  it.each(['embedded', 'local', 'external'] as const)('checks SOL or a selected SPL token balance for %s wallets', async (custody) => {
+    const state: WalletState = custody === 'external'
+      ? { ...connectedUiState(), custody: 'external', session: null, externalChain: 'solana', externalProviderId: 'phantom' }
+      : connectedUiState(custody)
+    const { wallet, mocks, container } = createUiHarness(state)
+    const unmount = mountWalletUI(container, wallet)
+    const mint = requireInput(container, '.balance-form input')
+    expect(mint.closest('label')?.textContent).toContain('Token mint')
+    clickControl(container, 'Check balance')
+    await vi.waitFor(() => { expect(container.querySelector('[role="status"]')?.textContent).toBe('Balance: 1 SOL'); })
+    expect(mocks.getBalance).toHaveBeenLastCalledWith(undefined)
+    const nextMint = requireInput(container, '.balance-form input')
+    nextMint.value = '  token-mint-123  '
+    nextMint.dispatchEvent(new Event('input'))
+    clickControl(container, 'Check balance')
+    await vi.waitFor(() => { expect(container.querySelector('[role="status"]')?.textContent).toBe('Balance: 1 tokens (mint: token-mint-123)'); })
+    expect(mocks.getBalance).toHaveBeenLastCalledWith('token-mint-123')
+    unmount()
+  })
+
+  it('aborts its provisioning request on teardown before confirmation arrives', async () => {
+    const { wallet, mocks, container } = createUiHarness(connectedUiState())
+    let captured: AbortSignal | undefined
+    mocks.createAccount.mockImplementation((_tokens, signal) => {
+      captured = signal
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => { reject(new Error('Cancelled.')) }, { once: true })
+      })
+    })
+    const unmount = mountWalletUI(container, wallet)
+    clickControl(container, 'Create token account')
+    expect(captured?.aborted).toBe(false)
+    unmount()
+    expect(captured?.aborted).toBe(true)
+    await Promise.resolve()
+    expect(container.childElementCount).toBe(0)
+    expect(mocks.approveProvisioning).not.toHaveBeenCalled()
+  })
+
+  it('keeps provisioning confirmation actionable while createAccount awaits explicit approval', async () => {
+    const { wallet, mocks, container, emit } = createUiHarness(connectedUiState())
+    let finish!: (result: typeof accountResult) => void
+    mocks.createAccount.mockImplementation(() => {
+      emit({ type: 'provisioning:confirmation', id: 'create-1', tokens: ['mint-1', 'mint-2'], network: 'devnet' })
+      return new Promise((resolve) => { finish = resolve })
+    })
+    mocks.approveProvisioning.mockImplementation(() => {
+      emit({ type: 'provisioning:complete', id: 'create-1', result: accountResult })
+      finish(accountResult)
+      return Promise.resolve(accountResult)
+    })
+    const unmount = mountWalletUI(container, wallet)
+    clickControl(container, 'Create token account')
+    const confirmation = requireElement(container, '[aria-label="Token account confirmation create-1"]')
+    expect(confirmation.textContent).toContain('devnet')
+    expect(confirmation.textContent).toContain('mint-1, mint-2')
+    expect(findControl(confirmation, 'Confirm and create').disabled).toBe(false)
+    expect(findControl(confirmation, 'Cancel').disabled).toBe(false)
+    expect(mocks.approveProvisioning).not.toHaveBeenCalled()
+    clickControl(confirmation, 'Confirm and create')
+    await vi.waitFor(() => { expect(container.querySelector('[role="status"]')?.textContent).toBe(accountResult.Message); })
+    expect(mocks.approveProvisioning).toHaveBeenCalledTimes(1)
+    expect(mocks.approveProvisioning).toHaveBeenCalledWith('create-1')
+    await vi.waitFor(() => { expect(findControl(container, 'Create token account').disabled).toBe(false); })
+    expect(container.querySelector('.confirm')).toBeNull()
+    unmount()
+  })
+
+  it('handles provisioning rejection and failure without leaving controls busy', async () => {
+    const { wallet, mocks, container, emit } = createUiHarness(connectedUiState())
+    let reject!: (error: Error) => void
+    mocks.createAccount.mockImplementation(() => {
+      emit({ type: 'provisioning:confirmation', id: 'create-1', tokens: ['mint'], network: 'testnet' })
+      return new Promise((_resolve, fail) => { reject = fail })
+    })
+    mocks.rejectProvisioning.mockImplementation(() => { reject(new Error('Cancelled.')); })
+    const unmount = mountWalletUI(container, wallet)
+    clickControl(container, 'Create token account')
+    clickControl(requireElement(container, '.confirm'), 'Cancel')
+    await vi.waitFor(() => { expect(findControl(container, 'Create token account').disabled).toBe(false); })
+    expect(mocks.rejectProvisioning).toHaveBeenCalledWith('create-1')
+    expect(mocks.approveProvisioning).not.toHaveBeenCalled()
+    clickControl(container, 'Create token account')
+    mocks.approveProvisioning.mockImplementation(() => {
+      const error = new Error('Provisioning failed.')
+      emit({ type: 'provisioning:error', id: 'create-1', error })
+      reject(error)
+      return Promise.reject(error)
+    })
+    clickControl(requireElement(container, '.confirm'), 'Confirm and create')
+    await vi.waitFor(() => { expect(container.querySelector('[role="alert"]')?.textContent).toBe('Provisioning failed.'); })
+    expect(findControl(container, 'Create token account').disabled).toBe(false)
+    expect(container.querySelector('.confirm')).toBeNull()
+    unmount()
+  })
+
+  it('cancels only unsubmitted provisioning on unmount and discards results from a previous identity', async () => {
+    const { wallet, mocks, container, emit, setState } = createUiHarness(connectedUiState('local'))
+    let finish!: (result: typeof accountResult) => void
+    mocks.approveProvisioning.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const unmount = mountWalletUI(container, wallet)
+    for (const id of ['unsubmitted', 'submitting']) {
+      emit({ type: 'provisioning:confirmation', id, tokens: ['mint'], network: 'devnet' })
+    }
+    clickControl(requireElement(container, '[aria-label="Token account confirmation submitting"]'), 'Confirm and create')
+    setState({ ...wallet.state, localIdentityKey: 'local:new-identity' })
+    expect(container.querySelector('.confirm')).toBeNull()
+    emit({ type: 'provisioning:complete', id: 'submitting', result: accountResult })
+    expect(container.querySelector('[role="status"]')).toBeNull()
+    emit({ type: 'provisioning:confirmation', id: 'current', tokens: ['mint'], network: 'devnet' })
+    unmount()
+    expect(mocks.rejectProvisioning).toHaveBeenCalledTimes(1)
+    expect(mocks.rejectProvisioning).toHaveBeenCalledWith('current')
+    finish(accountResult)
+    await Promise.resolve()
+    expect(container.childElementCount).toBe(0)
+  })
+
+  it('rejects unsubmitted provisioning on unmount but leaves an already submitting request alone', async () => {
+    const { wallet, mocks, container, emit } = createUiHarness(connectedUiState())
+    let finish!: (result: typeof accountResult) => void
+    mocks.approveProvisioning.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const unmount = mountWalletUI(container, wallet)
+    for (const id of ['unsubmitted', 'submitting']) {
+      emit({ type: 'provisioning:confirmation', id, tokens: ['mint'], network: 'devnet' })
+    }
+    clickControl(requireElement(container, '[aria-label="Token account confirmation submitting"]'), 'Confirm and create')
+    unmount()
+    expect(mocks.rejectProvisioning).toHaveBeenCalledTimes(1)
+    expect(mocks.rejectProvisioning).toHaveBeenCalledWith('unsubmitted')
+    finish(accountResult)
+    await Promise.resolve()
+  })
 })
+
+const accountResult = { Signature: 'account-signature', Status: 'Success', Message: 'Token accounts created.' }
+
+function connectedUiState(custody: 'embedded' | 'local' = 'embedded'): WalletState {
+  return {
+    status: 'connected', address: '11111111111111111111111111111111',
+    session: custody === 'embedded' ? { user: { id: 'user-1' } } : null,
+    protection: 'device-local', custody, externalProviderId: null, externalChain: null,
+    ...(custody === 'local' ? { localIdentityKey: 'local:identity' } : {}),
+  }
+}
+
+function createUiHarness(initial?: WalletState) {
+  let state: WalletState = initial ?? {
+    status: 'disconnected', session: null, address: null, protection: null,
+    custody: null, externalProviderId: null, externalChain: null,
+  }
+  let listener: ((event: WalletEvent) => void) | undefined
+  const mocks = {
+    get state() { return state },
+    network: 'devnet',
+    canStartOtp: true, canSignInWithSocial: false, canSignInWithPasskey: false,
+    canUseLocalPasskey: false,
+    externalWalletProviders: [] as { id: string; label: string; isAvailable: () => boolean }[],
+    onEvent(handler: (event: WalletEvent) => void) {
+      listener = handler
+      return () => { listener = undefined }
+    },
+    restoreSession: vi.fn(() => Promise.resolve(state)),
+    startOtp: vi.fn(() => Promise.resolve()),
+    verifyOtp: vi.fn(() => Promise.resolve(state)),
+    connectExternalWallet: vi.fn(() => Promise.resolve(state)),
+    getBalance: vi.fn((_token?: string) => Promise.resolve({ uiAmount: 1 })),
+    createLocalWallet: vi.fn(() => Promise.resolve(state)),
+    openLocalWallet: vi.fn((_handle: string) => Promise.resolve(state)),
+    protectWithPasskey: vi.fn(() => Promise.resolve(state)),
+    lock: vi.fn(),
+    unlockWithPasskey: vi.fn(() => Promise.resolve(state)),
+    signOut: vi.fn(() => Promise.resolve()),
+    createAccount: vi.fn((_tokens?: string[], _signal?: AbortSignal) => Promise.resolve(accountResult)),
+    approveProvisioning: vi.fn(() => Promise.resolve(accountResult)),
+    rejectProvisioning: vi.fn((_id: string) => {}),
+  }
+  const container = document.createElement('div')
+  document.body.append(container)
+  return {
+    wallet: mocks as unknown as AltudeWallet, mocks, container,
+    emit: (event: WalletEvent) => listener?.(event),
+    setState: (next: WalletState) => {
+      state = next
+      listener?.({ type: 'state', state })
+    },
+  }
+}
+
+function findControl(container: ParentNode, text: string, partial = false): HTMLButtonElement {
+  const control = [...container.querySelectorAll('button')].find((button) =>
+    partial ? button.textContent.includes(text) : button.textContent === text)
+  if (!control) throw new Error(`Expected action: ${text}`)
+  return control
+}
+
+function requireElement(container: ParentNode, selector: string): HTMLElement {
+  const element = container.querySelector<HTMLElement>(selector)
+  if (!element) throw new Error(`Expected element: ${selector}`)
+  return element
+}
+
+function requireInput(container: ParentNode, selector: string): HTMLInputElement {
+  const element = requireElement(container, selector)
+  if (!(element instanceof HTMLInputElement)) throw new Error(`Expected input: ${selector}`)
+  return element
+}
+
+function clickControl(container: ParentNode, text: string, partial = false): void {
+  findControl(container, text, partial).click()
+}
 
 function getSelectors(rules: CSSRuleList): string[] {
   return [...rules].flatMap((rule) => {

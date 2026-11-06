@@ -1,4 +1,8 @@
-import type { GetHistoryOptions, GetHistoryResponse } from '@altude/gasstation'
+import type {
+  GetHistoryOptions,
+  GetHistoryResponse,
+  CreateAccountResponse,
+} from '@altude/gasstation'
 import type {
   AltudeGasStation,
   GaslessTransactionSigner,
@@ -104,7 +108,9 @@ export interface WalletState {
   session: WalletSession | null
   address: string | null
   protection: WalletProtection | null
-  custody: 'embedded' | 'external' | null
+  custody: 'embedded' | 'local' | 'external' | null
+  /** Opaque handle for local-only passkey access; never an API identity. */
+  localIdentityKey?: string | null
   externalProviderId: ExternalWalletProviderId | null
   externalChain: ExternalWalletConnection['chain'] | null
 }
@@ -118,11 +124,21 @@ export type WalletEvent =
   | { type: 'transaction:confirmation'; id: string; intent: WalletTransactionIntentSnapshot }
   | { type: 'transaction:complete'; id: string; result: WalletTransactionResult }
   | { type: 'transaction:error'; id: string; error: Error }
+  | {
+      type: 'provisioning:confirmation'
+      id: string
+      tokens: readonly string[]
+      network: NonNullable<AltudeWalletConfig['network']>
+    }
+  | { type: 'provisioning:complete'; id: string; result: CreateAccountResponse }
+  | { type: 'provisioning:error'; id: string; error: Error }
 
 export interface WalletStoreRecord {
   identityKey: string
   publicKey: string
   serverUserId?: string
+  /** Mutation ownership for conditional rollback across vault instances. */
+  associationRevision?: string
   protection: WalletProtection
   secret?: Uint8Array
   ciphertext?: Uint8Array
@@ -164,6 +180,8 @@ export interface WalletVaultOptions {
 }
 
 export interface PasskeyAdapter {
+  /** Explicit PRF capability for injected adapters. */
+  isAvailable?(): boolean | Promise<boolean>
   register(input: {
     challenge: Uint8Array
     userId: Uint8Array
@@ -197,6 +215,9 @@ export interface AltudeWalletConfig {
 }
 
 export interface WalletUiOptions {
+  /** Explicit developer fallback; server walletUi takes precedence. */
+  authMethods?: WalletUiConfiguration['authMethods']
+  legal?: WalletUiConfiguration['legal']
   presentation?: 'modal' | 'inline' | 'fullscreen'
   title?: string
   /** Developer-configured providers used when the API has no walletUi settings. */

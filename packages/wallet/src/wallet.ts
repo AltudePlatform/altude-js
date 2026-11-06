@@ -10,6 +10,7 @@ import { BrowserWalletConflictError, EmbeddedWalletApi } from './api.js'
 import type { BrowserWalletAccess } from './api.js'
 import { MemorySessionTokenStore } from './storage.js'
 import { WalletVault } from './vault.js'
+import { BrowserPasskeyAdapter } from './passkeys.js'
 import type {
   AltudeWalletConfig,
   OtpChannel,
@@ -33,7 +34,8 @@ function base64(bytes: Uint8Array): string {
 interface EmbeddedActiveWallet {
   mode: 'embedded'
   identityKey: string
-  session: WalletSession
+  session: WalletSession | null
+  localOnly?: boolean
   address: string
   protection: WalletState['protection']
 }
@@ -61,15 +63,30 @@ interface PendingTransaction {
   reject: (error: Error) => void
 }
 
+interface PendingProvisioning {
+  identityKey: string
+  address: string
+  tokens: readonly string[]
+  network: NonNullable<AltudeWalletConfig['network']>
+  submitting: boolean
+  cancelled?: Error
+  resolve: (result: Awaited<ReturnType<AltudeGasStation['createAccount']>>) => void
+  reject: (error: Error) => void
+}
+
 export class AltudeWallet {
   readonly #auth: WalletAuthProvider
   readonly #api: EmbeddedWalletApi
   readonly #sessionTokens: NonNullable<AltudeWalletConfig['sessionTokenStore']>
   readonly #vault: WalletVault
   readonly #gasStation: AltudeGasStation
-  readonly #network: NonNullable<AltudeWalletConfig['network']>
+  #network: NonNullable<AltudeWalletConfig['network']>
+  readonly #configuredNetwork: AltudeWalletConfig['network']
   readonly #externalWallets: readonly ExternalWalletProvider[]
   readonly #crypto: Crypto
+  readonly #passkeys: NonNullable<AltudeWalletConfig['passkeys']>
+  #passkeyAvailable = false
+  readonly #pendingProvisioning = new Map<string, PendingProvisioning>()
   readonly #listeners = new Set<(event: WalletEvent) => void>()
   readonly #pendingTransactions = new Map<string, PendingTransaction>()
   readonly #pendingExternalConnections = new Set<ExternalWalletProviderId>()
@@ -81,16 +98,18 @@ export class AltudeWallet {
 
   constructor(config: AltudeWalletConfig) {
     this.#auth = config.auth
+    this.#passkeys = config.passkeys ?? new BrowserPasskeyAdapter()
     this.#crypto = config.crypto ?? globalThis.crypto
     this.#api = new EmbeddedWalletApi(config.apiKey, config.apiBaseUrl, config.fetch)
     this.#sessionTokens = config.sessionTokenStore ?? new MemorySessionTokenStore()
     this.#vault = new WalletVault({
       ...(config.store ? { store: config.store } : {}),
-      ...(config.passkeys ? { passkeys: config.passkeys } : {}),
+      passkeys: this.#passkeys,
       ...(config.indexedDB ? { indexedDB: config.indexedDB } : {}),
       ...(config.crypto ? { crypto: config.crypto } : {}),
     })
     this.#network = config.network ?? 'mainnet-beta'
+    this.#configuredNetwork = config.network
     this.#externalWallets = config.externalWallets ?? []
     this.#gasStation =
       config.gasStation ??
@@ -107,7 +126,14 @@ export class AltudeWallet {
       session: this.#active?.mode === 'embedded' ? this.#active.session : null,
       address: this.#active?.address ?? null,
       protection: this.#active?.mode === 'embedded' ? this.#active.protection : null,
-      custody: this.#active?.mode ?? null,
+      custody:
+        this.#active?.mode === 'embedded' && this.#active.localOnly
+          ? 'local'
+          : (this.#active?.mode ?? null),
+      localIdentityKey:
+        this.#active?.mode === 'embedded' && this.#active.localOnly
+          ? this.#active.identityKey
+          : null,
       externalProviderId: this.#active?.mode === 'external' ? this.#active.providerId : null,
       externalChain: this.#active?.mode === 'external' ? this.#active.chain : null,
     }
@@ -120,6 +146,7 @@ export class AltudeWallet {
   /** Read the optional wallet UI settings returned by transaction config. */
   async getWalletUiConfiguration(): Promise<WalletUiConfiguration | null> {
     const config = await this.#gasStation.getConfig()
+    this.#networkFromConfig(config.RpcEnvironment)
     return config.walletUi ?? null
   }
 
@@ -153,7 +180,139 @@ export class AltudeWallet {
   }
 
   get canSignInWithPasskey(): boolean {
-    return typeof this.#auth.signInWithPasskey === 'function'
+    return this.canUseLocalPasskey && typeof this.#auth.signInWithPasskey === 'function'
+  }
+
+  get canUseLocalPasskey(): boolean {
+    return this.#passkeyAvailable
+  }
+
+  async getPasskeyAvailability(): Promise<boolean> {
+    this.#passkeyAvailable = (await this.#passkeys.isAvailable?.()) ?? false
+    return this.#passkeyAvailable
+  }
+
+  /** Create a passkey-protected local wallet without authenticating an API session. */
+  async createLocalWallet(): Promise<WalletState> {
+    if (this.#active)
+      throw new AltudeWalletError(
+        'SESSION',
+        'Disconnect the active wallet before creating a local wallet.',
+      )
+    const generation = ++this.#lifecycleGeneration
+    const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
+    if (!this.#isCurrentLifecycle(generation)) return this.state
+    if (token)
+      throw new AltudeWalletError(
+        'SESSION',
+        'Sign out of the existing API session before creating a local wallet.',
+      )
+    if (!(await this.getPasskeyAvailability()))
+      throw new AltudeWalletError(
+        'PASSKEY_UNAVAILABLE',
+        'A PRF-capable passkey authenticator is required.',
+      )
+    if (!this.#isCurrentLifecycle(generation)) return this.state
+    const identityKey = `altude:local:v1:${this.#newId()}`
+    let completed = false
+    try {
+      const address = await this.#vault.getOrCreateAddress(identityKey)
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      await this.#vault.protectWithPasskey(identityKey)
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      this.#replaceActive({
+        mode: 'embedded',
+        identityKey,
+        address,
+        protection: 'passkey',
+        session: null,
+        localOnly: true,
+      })
+      completed = true
+      this.#emit({ type: 'state', state: this.state })
+      return this.state
+    } finally {
+      if (!completed) {
+        this.#vault.lock(identityKey)
+        // This random local-only handle was never exposed or registered on the server.
+        await this.#vault.delete(identityKey)
+      }
+    }
+  }
+
+  async openLocalWallet(identityKey: string): Promise<WalletState> {
+    if (!identityKey.startsWith('altude:local:v1:'))
+      throw new AltudeWalletError('INVALID_INPUT', 'A local-only wallet handle is required.')
+    if (this.#active)
+      throw new AltudeWalletError(
+        'SESSION',
+        'Disconnect the active wallet before opening a local wallet.',
+      )
+    const generation = ++this.#lifecycleGeneration
+    this.#browserKeyGenerations.set(identityKey, generation)
+    try {
+      const token = await this.#withSessionTokens(generation, () => this.#sessionTokens.get())
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      if (token)
+        throw new AltudeWalletError(
+          'SESSION',
+          'Sign out of the existing API session before opening a local wallet.',
+        )
+      const record = await this.#vault.findByIdentityKey(identityKey)
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      if (!record || record.protection !== 'passkey')
+        throw new AltudeWalletError(
+          'RECOVERY_REQUIRED',
+          'The protected local wallet is not available in this browser.',
+        )
+      await this.#vault.unlockWithPasskey(identityKey)
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      this.#replaceActive({
+        mode: 'embedded',
+        identityKey,
+        address: record.publicKey,
+        protection: 'passkey',
+        session: null,
+        localOnly: true,
+      })
+      this.#emit({ type: 'state', state: this.state })
+      return this.state
+    } finally {
+      if (!this.#isCurrentLifecycle(generation)) this.#lockStaleIdentity(identityKey)
+      if (this.#browserKeyGenerations.get(identityKey) === generation)
+        this.#browserKeyGenerations.delete(identityKey)
+    }
+  }
+
+  /** Sign a copy locally. This neither authenticates a session nor relays a transaction. */
+  async signMessage(message: Uint8Array): Promise<Uint8Array> {
+    const active = this.#requireEmbeddedActive()
+    const generation = this.#lifecycleGeneration
+    const bytes = message.slice()
+    const signer = await this.#vault.getSigner(active.identityKey)
+    if (
+      generation !== this.#lifecycleGeneration ||
+      active !== this.#active ||
+      !signer.signTransactionMessage
+    ) {
+      throw new AltudeWalletError('SESSION', 'The active wallet changed before signing.')
+    }
+    const signature = await signer.signTransactionMessage(bytes)
+    if (
+      generation !== this.#lifecycleGeneration ||
+      active !== this.#active ||
+      !this.#vault.isUnlocked(active.identityKey)
+    ) {
+      throw new AltudeWalletError(
+        'WALLET_LOCKED',
+        'The wallet changed before the signature was returned.',
+      )
+    }
+    return signature
+  }
+
+  async signTransactionMessage(message: Uint8Array): Promise<Uint8Array> {
+    return this.signMessage(message)
   }
 
   get externalWalletProviders(): readonly Pick<
@@ -258,6 +417,20 @@ export class AltudeWallet {
     const generation = ++this.#lifecycleGeneration
     this.#assertIdentity(identity)
     if (identity.broker) return this.#connectBrowser(identity, generation)
+    this.#browserKeyGenerations.set(identity.identityKey, generation)
+    try {
+      return await this.#connectLegacy(identity, generation)
+    } finally {
+      if (this.#browserKeyGenerations.get(identity.identityKey) === generation) {
+        this.#browserKeyGenerations.delete(identity.identityKey)
+      }
+    }
+  }
+
+  async #connectLegacy(
+    identity: WalletIdentityToken & { accessToken: string },
+    generation: number,
+  ): Promise<WalletState> {
     let address: string
     this.#emit({ type: 'setup:progress', stage: 'securing-device' })
     try {
@@ -539,6 +712,12 @@ export class AltudeWallet {
         `External wallet provider "${providerId}" is not configured.`,
       )
     }
+    if (provider.isAvailable?.() === false) {
+      throw new AltudeWalletError(
+        'CONFIGURATION',
+        `External wallet provider "${providerId}" is unavailable in this browser.`,
+      )
+    }
     if (this.#active) {
       throw new AltudeWalletError(
         'SESSION',
@@ -736,6 +915,7 @@ export class AltudeWallet {
     const generation = ++this.#lifecycleGeneration
     const active = this.#active
     const identityKey = active?.mode === 'embedded' ? active.identityKey : undefined
+    this.#vault.lock()
     if (identityKey) this.#vault.lock(identityKey)
     this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
     let failed = false
@@ -773,11 +953,27 @@ export class AltudeWallet {
     assertSupportedIntentKind(intent)
     const snapshot = snapshotIntent(intent)
     this.#validateIntent(snapshot)
+    return this.#requestValidatedTransaction(snapshot)
+  }
+
+  async #requestValidatedTransaction(
+    snapshot: WalletTransactionIntentSnapshot,
+  ): Promise<WalletTransactionResult> {
     const active = this.#requireActive()
+    const generation = this.#lifecycleGeneration
+    const network = await this.#approvedNetwork()
+    if (generation !== this.#lifecycleGeneration || active !== this.#active)
+      throw new AltudeWalletError('SESSION', 'The wallet changed before transaction confirmation.')
+    if (snapshot.network && snapshot.network !== network)
+      throw new AltudeWalletError(
+        'INVALID_INPUT',
+        'The approved network does not match the authoritative RPC environment.',
+      )
+    const approvedSnapshot = Object.freeze({ ...snapshot, network })
     const id = this.#newId()
     const result = new Promise<WalletTransactionResult>((resolve, reject) => {
       this.#pendingTransactions.set(id, {
-        intent: snapshot,
+        intent: approvedSnapshot,
         walletMode: active.mode,
         ...(active.mode === 'embedded' ? { identityKey: active.identityKey } : {}),
         ...(active.mode === 'external' ? { providerId: active.providerId } : {}),
@@ -787,7 +983,7 @@ export class AltudeWallet {
         reject,
       })
     })
-    this.#emit(Object.freeze({ type: 'transaction:confirmation', id, intent: snapshot }))
+    this.#emit(Object.freeze({ type: 'transaction:confirmation', id, intent: approvedSnapshot }))
     return result
   }
 
@@ -800,6 +996,7 @@ export class AltudeWallet {
     pending.submitting = true
     try {
       const active = this.#requireActive()
+      await this.#approvedNetwork(pending.intent.network)
       if (
         active.mode !== pending.walletMode ||
         active.address !== pending.address ||
@@ -828,7 +1025,11 @@ export class AltudeWallet {
           ? {
               signTransactionMessage: async (txBytes: Uint8Array) => {
                 this.#assertNotCancelled(pending)
+                await this.#approvedNetwork(pending.intent.network)
+                this.#assertNotCancelled(pending)
                 const signature = await signTransactionMessage.call(signer, txBytes)
+                this.#assertNotCancelled(pending)
+                await this.#approvedNetwork(pending.intent.network)
                 this.#assertNotCancelled(pending)
                 return signature
               },
@@ -838,7 +1039,11 @@ export class AltudeWallet {
           ? {
               sign: async (txBytes: Uint8Array) => {
                 this.#assertNotCancelled(pending)
+                await this.#approvedNetwork(pending.intent.network)
+                this.#assertNotCancelled(pending)
                 const signature = await sign.call(signer, txBytes)
+                this.#assertNotCancelled(pending)
+                await this.#approvedNetwork(pending.intent.network)
                 this.#assertNotCancelled(pending)
                 return signature
               },
@@ -846,6 +1051,7 @@ export class AltudeWallet {
           : {}),
       }
       const response = await this.#gasStation.send({
+        ...(pending.intent.network ? { expectedNetwork: pending.intent.network } : {}),
         sourceSigner: cancellableSigner,
         account: active.address,
         toAddress: pending.intent.recipient,
@@ -888,17 +1094,126 @@ export class AltudeWallet {
     pending.reject(pending.cancelled)
   }
 
-  async createAccount(tokens?: string[]) {
+  async createAccount(tokens: string[] = [], signal?: AbortSignal) {
     const active = this.#requireEmbeddedActive()
-    const signer = await this.#vault.getSigner(active.identityKey)
-    return this.#gasStation.createAccount({
-      account: active.address,
-      signer,
-      ...(tokens ? { tokens } : {}),
-    })
+    const generation = this.#lifecycleGeneration
+    const assertNotAborted = () => {
+      if (signal?.aborted)
+        throw new AltudeWalletError('TRANSACTION', 'Account provisioning was cancelled.')
+    }
+    assertNotAborted()
+    const snapshot = Object.freeze([...tokens])
+    for (const token of snapshot) assertSolanaAddress(token, 'Token mint')
+    await this.#vault.getSigner(active.identityKey)
+    const network = await this.#approvedNetwork()
+    assertNotAborted()
+    if (generation !== this.#lifecycleGeneration || active !== this.#active)
+      throw new AltudeWalletError('SESSION', 'The wallet changed before provisioning confirmation.')
+    const id = this.#newId()
+    const result = new Promise<Awaited<ReturnType<AltudeGasStation['createAccount']>>>(
+      (resolve, reject) => {
+        this.#pendingProvisioning.set(id, {
+          identityKey: active.identityKey,
+          address: active.address,
+          tokens: snapshot,
+          network,
+          submitting: false,
+          resolve,
+          reject,
+        })
+      },
+    )
+    const abort = () => {
+      this.rejectProvisioning(id)
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      this.#emit(
+        Object.freeze({ type: 'provisioning:confirmation', id, tokens: snapshot, network }),
+      )
+      return await result
+    } finally {
+      signal?.removeEventListener('abort', abort)
+    }
   }
 
-  async getBalance() {
+  async approveProvisioning(id: string) {
+    const pending = this.#pendingProvisioning.get(id)
+    if (!pending || pending.submitting)
+      throw new AltudeWalletError(
+        'TRANSACTION',
+        'This provisioning request is unavailable or already submitting.',
+      )
+    pending.submitting = true
+    const check = () => {
+      if (pending.cancelled) throw pending.cancelled
+      const active = this.#requireEmbeddedActive()
+      if (active.identityKey !== pending.identityKey || active.address !== pending.address)
+        throw new AltudeWalletError('SESSION', 'The active wallet changed before provisioning.')
+      if (!this.#vault.isUnlocked(active.identityKey))
+        throw new AltudeWalletError('WALLET_LOCKED', 'Unlock the wallet before provisioning.')
+    }
+    try {
+      check()
+      await this.#approvedNetwork(pending.network)
+      const signer = await this.#vault.getSigner(pending.identityKey)
+      const sign = signer.signTransactionMessage
+      if (!sign)
+        throw new AltudeWalletError('WALLET_LOCKED', 'The wallet cannot sign provisioning.')
+      check()
+      const result = await this.#gasStation.createAccount({
+        account: pending.address,
+        tokens: [...pending.tokens],
+        expectedNetwork: pending.network,
+        signer: {
+          address: signer.address,
+          signTransactionMessage: async (bytes) => {
+            check()
+            await this.#approvedNetwork(pending.network)
+            check()
+            const signature = await sign(bytes)
+            check()
+            await this.#approvedNetwork(pending.network)
+            check()
+            return signature
+          },
+        },
+      })
+      check()
+      if (
+        result.Status?.toLowerCase() !== 'success' ||
+        (!result.Signature && result.Message !== 'Account already exists')
+      ) {
+        throw new AltudeWalletError(
+          'TRANSACTION',
+          result.Message || 'Account provisioning did not succeed.',
+        )
+      }
+      pending.resolve(result)
+      this.#emit({ type: 'provisioning:complete', id, result })
+      return result
+    } catch (error) {
+      const normalized = pending.cancelled ?? asError(error)
+      pending.reject(normalized)
+      if (!pending.cancelled) this.#emit({ type: 'provisioning:error', id, error: normalized })
+      throw normalized
+    } finally {
+      this.#pendingProvisioning.delete(id)
+    }
+  }
+
+  rejectProvisioning(id: string): void {
+    const pending = this.#pendingProvisioning.get(id)
+    if (!pending) return
+    pending.cancelled = new AltudeWalletError(
+      'TRANSACTION',
+      'The wallet user rejected account provisioning.',
+    )
+    pending.reject(pending.cancelled)
+    this.#pendingProvisioning.delete(id)
+  }
+
+  async getBalance(token?: string) {
     const active = this.#requireActive()
     if (active.mode === 'external' && active.chain !== 'solana') {
       throw new AltudeWalletError(
@@ -908,7 +1223,8 @@ export class AltudeWallet {
     }
     if (active.mode === 'external')
       assertSolanaAddress(active.address, 'External Solana wallet address')
-    return this.#gasStation.getBalance({ address: active.address })
+    if (token) assertSolanaAddress(token, 'Token mint')
+    return this.#gasStation.getBalance({ address: active.address, ...(token ? { token } : {}) })
   }
 
   async getAccountInfo() {
@@ -990,6 +1306,11 @@ export class AltudeWallet {
   }
 
   #cancelPendingTransactions(message: string): void {
+    for (const [id, pending] of this.#pendingProvisioning) {
+      pending.cancelled = new AltudeWalletError('SESSION', message)
+      pending.reject(pending.cancelled)
+      this.#pendingProvisioning.delete(id)
+    }
     for (const [id, pending] of this.#pendingTransactions) {
       pending.cancelled = new AltudeWalletError('SESSION', message)
       pending.reject(pending.cancelled)
@@ -1001,11 +1322,42 @@ export class AltudeWallet {
     if (pending.cancelled) throw pending.cancelled
   }
 
+  #networkFromConfig(environment: string): NonNullable<AltudeWalletConfig['network']> {
+    const value = typeof environment === 'string' ? environment.toLowerCase() : ''
+    const network = value === 'mainnet' ? 'mainnet-beta' : value
+    if (network !== 'mainnet-beta' && network !== 'devnet' && network !== 'testnet')
+      throw new AltudeWalletError(
+        'INVALID_RESPONSE',
+        'Transaction config did not return a supported RpcEnvironment.',
+      )
+    if (this.#configuredNetwork && network !== this.#configuredNetwork)
+      throw new AltudeWalletError(
+        'TRANSACTION',
+        'The authoritative RPC environment does not match the configured wallet network.',
+      )
+    this.#network = network
+    return network
+  }
+
+  async #approvedNetwork(
+    expected?: AltudeWalletConfig['network'],
+  ): Promise<NonNullable<AltudeWalletConfig['network']>> {
+    const config = await this.#gasStation.getConfig(true)
+    const network = this.#networkFromConfig(config.RpcEnvironment)
+    if (expected && network !== expected)
+      throw new AltudeWalletError(
+        'TRANSACTION',
+        'The authoritative RPC environment changed after approval. Review the network again.',
+      )
+    return network
+  }
+
   #isCurrentLifecycle(generation: number): boolean {
     return generation === this.#lifecycleGeneration
   }
 
   #lockStaleIdentity(identityKey: string): void {
+    if (this.#browserKeyGenerations.get(identityKey) === this.#lifecycleGeneration) return
     if (this.#active?.mode !== 'embedded' || this.#active.identityKey !== identityKey) {
       this.#vault.lock(identityKey)
     }
@@ -1079,7 +1431,7 @@ export class AltudeWallet {
         'Transfers to the connected wallet are not supported.',
       )
     }
-    if (intent.network && intent.network !== this.#network) {
+    if (intent.network && this.#configuredNetwork && intent.network !== this.#configuredNetwork) {
       throw new AltudeWalletError(
         'INVALID_INPUT',
         'The transaction network does not match the configured Gas Station network.',

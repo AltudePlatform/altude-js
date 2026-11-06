@@ -36,14 +36,17 @@ describe('BrowserPasskeyAdapter ceremony errors', () => {
   it.each([
     ['creation', () => adapter.register(registerInput)],
     ['retrieval', () => adapter.deriveKey(deriveInput)],
-  ])('returns a typed unavailable error when credentials are absent for %s', async (_, ceremony) => {
-    vi.stubGlobal('navigator', {})
+  ])(
+    'returns a typed unavailable error when credentials are absent for %s',
+    async (_, ceremony) => {
+      vi.stubGlobal('navigator', {})
 
-    await expect(ceremony()).rejects.toMatchObject({
-      name: 'AltudeWalletError',
-      code: 'PASSKEY_UNAVAILABLE',
-    })
-  })
+      await expect(ceremony()).rejects.toMatchObject({
+        name: 'AltudeWalletError',
+        code: 'PASSKEY_UNAVAILABLE',
+      })
+    },
+  )
 
   it.each(['NotAllowedError', 'AbortError'])(
     'maps %s from credential creation to a typed cancellation',
@@ -73,6 +76,32 @@ describe('BrowserPasskeyAdapter ceremony errors', () => {
     },
   )
 
+  it.each([
+    { capabilities: {}, expected: false },
+    { capabilities: { 'extension:prf': false }, expected: false },
+    { capabilities: { 'extension:prf': 'true' }, expected: false },
+    { capabilities: { 'extension:prf': true }, expected: true },
+  ])('requires explicit PRF capability: $capabilities', async ({ capabilities, expected }) => {
+    vi.stubGlobal('PublicKeyCredential', {
+      getClientCapabilities: () => Promise.resolve(capabilities),
+    })
+    expect(await adapter.isAvailable()).toBe(expected)
+    expect(create).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('does not advertise passkeys without capability discovery or secure credentials APIs', async () => {
+    expect(await adapter.isAvailable()).toBe(false)
+    vi.stubGlobal('PublicKeyCredential', {
+      getClientCapabilities: () => Promise.resolve({ 'extension:prf': true }),
+    })
+    vi.stubGlobal('navigator', {})
+    expect(await adapter.isAvailable()).toBe(false)
+    vi.stubGlobal('navigator', { credentials: { create, get } })
+    vi.stubGlobal('isSecureContext', false)
+    expect(await adapter.isAvailable()).toBe(false)
+  })
+
   it('preserves unrelated credential creation failures', async () => {
     const failure = new Error('Authenticator unavailable.')
     create.mockRejectedValue(failure)
@@ -86,5 +115,4 @@ describe('BrowserPasskeyAdapter ceremony errors', () => {
 
     await expect(adapter.deriveKey(deriveInput)).rejects.toBe(failure)
   })
-
 })

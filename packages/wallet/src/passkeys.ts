@@ -6,7 +6,10 @@ interface PrfExtensionResults {
   prf?: { results?: { first?: ArrayBuffer | Uint8Array } }
 }
 
-function getCancellationError(error: unknown, ceremony: 'creation' | 'unlock'): AltudeWalletError | undefined {
+function getCancellationError(
+  error: unknown,
+  ceremony: 'creation' | 'unlock',
+): AltudeWalletError | undefined {
   if (
     !error ||
     typeof error !== 'object' ||
@@ -24,6 +27,25 @@ function getCancellationError(error: unknown, ceremony: 'creation' | 'unlock'): 
 }
 
 export class BrowserPasskeyAdapter implements PasskeyAdapter {
+  async isAvailable(): Promise<boolean> {
+    const credentials =
+      typeof navigator === 'undefined'
+        ? undefined
+        : (Reflect.get(navigator, 'credentials') as CredentialsContainer | undefined)
+    if (
+      !globalThis.isSecureContext ||
+      typeof PublicKeyCredential === 'undefined' ||
+      !credentials ||
+      typeof credentials.create !== 'function' ||
+      typeof credentials.get !== 'function'
+    )
+      return false
+    const capabilities = Reflect.get(PublicKeyCredential, 'getClientCapabilities') as
+      | (() => Promise<Record<string, boolean>>)
+      | undefined
+    if (!capabilities) return false
+    return (await capabilities.call(PublicKeyCredential))['extension:prf'] === true
+  }
   async register(input: Parameters<PasskeyAdapter['register']>[0]) {
     this.#assertAvailable(input.rpId, 'create')
     let result: PublicKeyCredential | null

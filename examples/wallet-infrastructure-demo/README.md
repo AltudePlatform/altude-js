@@ -22,8 +22,8 @@ providers are offered.
 
 The **Web3 wallets** switch enables Phantom and MetaMask options in either mode.
 Phantom connects as a Solana external wallet; MetaMask connects as an EVM
-external wallet. The options remain visible even if an extension is missing;
-selecting one without its browser extension reports how to install it. These
+external wallet. The options remain visible but disabled if an extension is missing;
+install the extension before opening the wallet to connect. These
 connections are external custody: they do not create an Altude API session, and
 the demo does not provide their transaction-signing adapters or sponsored
 transfers.
@@ -34,12 +34,12 @@ broker-discovered providers (or explicit direct Auth0 connections) are a fallbac
 return wallet UI settings; a server setting cannot show a method without its
 corresponding local adapter/provider.
 
-In live mode, choose **Use API config** to preview the server's `authMethods`
-unchanged, or **Override API methods** to preview the methods selected by the
-demo's Social login and Web3 switches. The override is applied in memory to the
-wallet UI settings passed to `mountWalletUI`; it does not modify or save the
-transaction config on the server. Branding, legal links, and trust badges
-continue to come from the API response.
+The demo passes explicit `authMethods` and `legal.smsConsentText` fallbacks to
+`mountWalletUI`; the SDK never guesses enabled methods or consent copy. Any
+server `walletUi` takes precedence in full, even when incomplete. It cannot be
+overridden by the demo switches. SMS requires an initially unchecked consent
+checkbox before sending or resending a code. Changing the number or channel
+resets consent; missing consent copy disables SMS delivery.
 
 ### Default browser broker setup
 
@@ -132,9 +132,26 @@ const unmount = mountWalletUI(document.body, wallet, {
   presentation: 'modal',
   title: 'Embedded wallet',
   socialProviders: broker.socialProviders,
+  walletUi: await wallet.getWalletUiConfiguration(),
+  authMethods: {
+    emailOtp: true,
+    smsOtp: true,
+    socialProviders: broker.socialProviders,
+  },
+  legal: {
+    smsConsentText:
+      'I agree to receive a one-time sign-in code by SMS. Message and data rates may apply.',
+  },
   onClose: () => unmount(),
 })
 ```
+
+Connected embedded and local-only wallets expose balance, passkey protection
+(when supported), lock/unlock, and sign-out controls. **Create token account**
+opens a separate confirmation showing tokens and network; no provisioning
+request is submitted until **Confirm and create**. Closing the UI cancels
+unsubmitted confirmations, not operations already submitted. Local-only wallet
+access is not an authenticated Altude session.
 
 **Simulated mode** uses a local demo OTP, `demoApiFetch`, and `DemoGasStation`;
 it does not send OTP messages, call the Altude API, or submit blockchain
