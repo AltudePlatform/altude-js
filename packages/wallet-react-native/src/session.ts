@@ -4,6 +4,7 @@ import type { NativeWalletClient } from './client.js'
 import { NativeWalletError } from './errors.js'
 
 export interface NativeWalletAccess {
+  apiBaseUrl: string
   appId: string
   walletUserId: string
   identityKey: string
@@ -59,7 +60,16 @@ export class NativeWalletSessionAdapter {
         'The wallet lookup returned invalid scope or challenge.',
       )
     }
+    validateProofMessage(message, {
+      issuer: config.issuer,
+      appId: config.appId,
+      walletUserId: userId,
+      identityKey,
+      challengeId,
+      walletAddress,
+    })
     return {
+      apiBaseUrl: config.authorizationUrl.slice(0, -'/api/native-wallet/authorize'.length),
       appId: config.appId,
       walletUserId: userId,
       identityKey,
@@ -215,6 +225,69 @@ export class NativeWalletSessionAdapter {
         'The wallet-access API returned an invalid response.',
       )
     return value
+  }
+}
+
+function validateProofMessage(
+  message: string,
+  expected: {
+    issuer: string
+    appId: string
+    walletUserId: string
+    identityKey: string
+    challengeId: string
+    walletAddress: string | null
+  },
+): void {
+  const lines = message.split('\n')
+  const prefixes = [
+    'Issuer',
+    'AppId',
+    'TenantId',
+    'UserId',
+    'IdentityKey',
+    'RefreshFamilyId',
+    'Origin',
+    'IdentityTicket',
+    'ChallengeId',
+    'WalletAddress',
+    'Nonce',
+  ]
+  const fields = new Map<string, string>()
+  if (lines.length !== prefixes.length + 1 || lines[0] !== 'Altude Wallet Access Binding v1') {
+    throw new NativeWalletError(
+      'INVALID_RESPONSE',
+      'The wallet proof message has an invalid domain or format.',
+    )
+  }
+  for (const [index, prefix] of prefixes.entries()) {
+    const line = lines[index + 1]
+    if (!line?.startsWith(`${prefix}: `) || line.includes('\r')) {
+      throw new NativeWalletError(
+        'INVALID_RESPONSE',
+        'The wallet proof message has invalid binding fields.',
+      )
+    }
+    fields.set(prefix, line.slice(prefix.length + 2))
+  }
+  if (
+    fields.get('Issuer') !== expected.issuer ||
+    fields.get('AppId') !== expected.appId ||
+    fields.get('TenantId') !== expected.appId.split('.')[0] ||
+    fields.get('UserId') !== expected.walletUserId ||
+    fields.get('IdentityKey') !== expected.identityKey ||
+    fields.get('ChallengeId') !== expected.challengeId ||
+    fields.get('WalletAddress') !== (expected.walletAddress ?? '') ||
+    fields.get('Origin') !== '' ||
+    fields.get('IdentityTicket') !== '' ||
+    !fields.get('RefreshFamilyId') ||
+    fields.get('RefreshFamilyId') === 'browser' ||
+    !fields.get('Nonce')
+  ) {
+    throw new NativeWalletError(
+      'INVALID_RESPONSE',
+      'The wallet proof message does not match the native wallet scope.',
+    )
   }
 }
 

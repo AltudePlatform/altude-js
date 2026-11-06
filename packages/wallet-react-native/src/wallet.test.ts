@@ -10,13 +10,28 @@ import type { RefreshTokenStore } from './platform.js'
 
 const appId = '-17.42'
 const userId = 'wallet-user-1'
-const serverMessage = 'Altude wallet proof: café 🔐'
-const scope = { appId, walletUserId: userId }
+function serverMessage(address: string | null): string {
+  return [
+    'Altude Wallet Access Binding v1',
+    'Issuer: https://api.altude.so/',
+    `AppId: ${appId}`,
+    'TenantId: -17',
+    `UserId: ${userId}`,
+    'IdentityKey: server-identity',
+    'RefreshFamilyId: native-family',
+    'Origin: ',
+    'IdentityTicket: ',
+    'ChallengeId: challenge',
+    `WalletAddress: ${address ?? ''}`,
+    'Nonce: café 🔐',
+  ].join('\n')
+}
+const scope = { apiBaseUrl: 'https://api.altude.so', appId, walletUserId: userId }
 const clients: AltudeNativeWallet[] = []
 
 function memoryKeys(): NativeWalletKeyStore & { keys: Map<string, Uint8Array> } {
   const key = (value: NativeWalletScope, address: string) =>
-    `${value.appId}/${value.walletUserId}/${address}`
+    `${value.apiBaseUrl}/${value.appId}/${value.walletUserId}/${address}`
   return {
     keys: new Map(),
     read(value, address) {
@@ -36,6 +51,8 @@ function makeServer() {
   let refreshFails = false
   let revokeFails = false
   let sessionTtl = 120
+  let latestMessage = ''
+  let messageOverride: ((message: string) => string) | undefined
   const fetcher = vi.fn<typeof fetch>((input, options) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const reply = (body: unknown, status = 200) =>
@@ -69,13 +86,14 @@ function makeServer() {
       expect(headers['Authorization']).toBe('Bearer native-access')
       expect(headers['X-API-Key']).toBe('client-key')
       if (!migrated) return reply({ Error: 'wallet_scope_migration_required' }, 409)
+      latestMessage = messageOverride?.(serverMessage(address)) ?? serverMessage(address)
       return reply({
         AppId: appId,
         UserId: userId,
         IdentityKey: 'server-identity',
         WalletAddress: address,
         ChallengeId: 'challenge',
-        Message: serverMessage,
+        Message: latestMessage,
         ExpiresIn: 60,
       })
     }
@@ -87,7 +105,7 @@ function makeServer() {
       expect(
         ed25519.verify(
           base64.decode(body['Signature'] ?? ''),
-          new TextEncoder().encode(serverMessage),
+          new TextEncoder().encode(latestMessage),
           base58.decode(requested),
         ),
       ).toBe(true)
@@ -137,6 +155,9 @@ function makeServer() {
     },
     set sessionTtl(value: number) {
       sessionTtl = value
+    },
+    set messageOverride(value: (message: string) => string) {
+      messageOverride = value
     },
   }
 }
@@ -265,6 +286,48 @@ describe('AltudeNativeWallet', () => {
     expect(keys.keys.size).toBe(0)
   })
 
+  it.each([
+    ['arbitrary message', () => 'Sign this transaction'],
+    [
+      'wrong issuer',
+      (message: string) => message.replace('https://api.altude.so/', 'https://other.example/'),
+    ],
+    ['wrong tenant', (message: string) => message.replace('TenantId: -17', 'TenantId: 99')],
+    ['wrong app', (message: string) => message.replace(`AppId: ${appId}`, 'AppId: 99.42')],
+    ['wrong user', (message: string) => message.replace(`UserId: ${userId}`, 'UserId: other')],
+    [
+      'wrong identity',
+      (message: string) => message.replace('IdentityKey: server-identity', 'IdentityKey: other'),
+    ],
+    [
+      'browser proof',
+      (message: string) =>
+        message.replace('RefreshFamilyId: native-family', 'RefreshFamilyId: browser'),
+    ],
+    [
+      'nonempty origin',
+      (message: string) => message.replace('Origin: \n', 'Origin: https://site.example\n'),
+    ],
+    [
+      'wrong challenge',
+      (message: string) => message.replace('ChallengeId: challenge', 'ChallengeId: other'),
+    ],
+    [
+      'wrong address',
+      (message: string) => message.replace('WalletAddress: \n', 'WalletAddress: other\n'),
+    ],
+    ['trailing line', (message: string) => `${message}\n`],
+  ])('rejects %s before creating or signing with a key', async (_label, change) => {
+    const { wallet, server, keys } = makeWallet()
+    server.messageOverride = change
+    await expect(wallet.connect()).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+    expect(keys.keys.size).toBe(0)
+    expect(
+      server.fetcher.mock.calls.some(
+        ([input]) => typeof input === 'string' && input.endsWith('/native-wallet/wallet/session'),
+      ),
+    ).toBe(false)
+  })
   it('concurrent first login converges to one canonical address in a shared local store', async () => {
     const server = makeServer()
     const keys = memoryKeys()
@@ -527,6 +590,9 @@ describe('NativeWalletVault', () => {
     await expect(vault.unlock({ ...scope, appId: '17.99' }, address)).rejects.toMatchObject({
       code: 'RECOVERY_REQUIRED',
     })
+    await expect(
+      vault.unlock({ ...scope, apiBaseUrl: 'https://staging.altude.so' }, address),
+    ).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' })
   })
 
   it('requires device-only secure storage and persists bytes without Buffer', async () => {
@@ -541,7 +607,7 @@ describe('NativeWalletVault', () => {
     const keys = createKeychainWalletKeyStore(keychain)
     await keys.write(scope, 'address', new Uint8Array(32).fill(4))
     expect(set).toHaveBeenCalledWith('altude-wallet-key', expect.any(String), {
-      service: 'so.altude.wallet.key.-17.42.wallet-user-1.address',
+      service: 'so.altude.wallet.key.https%3A%2F%2Fapi.altude.so.-17.42.wallet-user-1.address',
       accessible: 'device-only',
     })
     expect(await keys.read(scope, 'missing')).toBeNull()

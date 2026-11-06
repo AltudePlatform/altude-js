@@ -126,7 +126,20 @@ const wallet = new nativeWallet.AltudeNativeWallet({
         IdentityKey: 'smoke-identity',
         WalletAddress: nativeAddress,
         ChallengeId: 'smoke-challenge',
-        Message: 'Native wallet proof',
+        Message: [
+          'Altude Wallet Access Binding v1',
+          'Issuer: https://api.altude.so/',
+          'AppId: 17.42',
+          'TenantId: 17',
+          'UserId: smoke-user',
+          'IdentityKey: smoke-identity',
+          'RefreshFamilyId: smoke-family',
+          'Origin: ',
+          'IdentityTicket: ',
+          'ChallengeId: smoke-challenge',
+          `WalletAddress: ${nativeAddress ?? ''}`,
+          'Nonce: smoke-nonce',
+        ].join('\n'),
         ExpiresIn: 60,
       }
     } else if (url.endsWith('/native-wallet/wallet/session')) {

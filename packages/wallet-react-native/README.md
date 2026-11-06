@@ -93,7 +93,7 @@ State distinguishes `authenticating`, `authenticated`, `creating`, `recovering`,
 and completion. `recovering` means attempting to open the registered wallet's
 local key, not that cross-device recovery has succeeded.
 
-Keys are stored separately by AppId, server wallet user, and address, with
+Keys are stored separately by API deployment URL, AppId, server wallet user, and address, with
 device-only Keychain/Keystore protection. A first-wallet candidate is persisted
 before server registration. Concurrent first logins use the server's atomic
 winner; a loser re-looks up that address and never overwrites it. Interrupted
@@ -155,6 +155,19 @@ native token endpoint. Validation uses `GET /api/EmbeddedWallet/session` with
 `X-API-Key` and that opaque bearer, enforcing exact app/user/address/family scope.
 The SDK requires the response's top-level `AppId` and `UserId` to match the
 lookup as well as `User.Id` and `User.WalletAddress`.
+
+Before any key creation or signing, the SDK validates the exact
+`Altude Wallet Access Binding v1` proof format, trusted bootstrap issuer,
+AppId/tenant, wallet user, identity, challenge, canonical address, and native
+family binding. Browser Origin/IdentityTicket fields must be empty; browser
+proofs and arbitrary messages are rejected. The server remains responsible
+for cryptographic identity/family authorization; the SDK does not trust a
+decoded JWT as authority.
+
+The deployment-qualified device key namespace replaces the earlier experimental
+AppId/user-only namespace. The SDK does not automatically copy keys from an
+ambiguous legacy namespace into a deployment; existing installations must
+explicitly provision the original key or report recovery required.
 
 Derived sessions expire no later than their native family's remaining lifetime.
 Family revocation/replay makes them unusable at the server; already issued native
@@ -291,3 +304,11 @@ Do not mark the native wallet experience complete or publish this package until:
   the non-production broker and complete a locally approved sponsored transfer.
   Mocks, local sample snippets and Hermes smoke checks do not prove device,
   provider delivery, custody recovery, API deployment or a live transfer.
+
+Current automated coverage exercises the native wallet lifecycle with synthetic
+API responses and independently verifies its Ed25519 signatures. The Hermes-like
+bundle check executes login, proof binding, restore, and lock without browser
+APIs or Node `Buffer`. These are SDK contract checks, not actual HTTP
+interoperability with the backend. The backend currently has no runnable
+loopback wallet-bridge fixture; SDK/backend HTTP validation, non-production
+deployment, actual device samples and live transfers remain explicitly blocked.

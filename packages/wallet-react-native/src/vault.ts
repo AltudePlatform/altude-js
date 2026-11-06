@@ -5,6 +5,7 @@ import { NativeWalletError } from './errors.js'
 import type { KeychainModule, RandomBytesSource } from './platform.js'
 
 export interface NativeWalletScope {
+  apiBaseUrl: string
   appId: string
   walletUserId: string
 }
@@ -20,7 +21,7 @@ export function createKeychainWalletKeyStore(keychain: KeychainModule): NativeWa
     throw new NativeWalletError('CONFIGURATION', 'Device-only Keychain protection is required.')
   }
   const service = (scope: NativeWalletScope, address: string) =>
-    `so.altude.wallet.key.${encodeURIComponent(scope.appId)}.${encodeURIComponent(scope.walletUserId)}.${address}`
+    `so.altude.wallet.key.${encodeURIComponent(scope.apiBaseUrl)}.${encodeURIComponent(scope.appId)}.${encodeURIComponent(scope.walletUserId)}.${address}`
   return {
     async read(scope, address) {
       try {
