@@ -1,0 +1,228 @@
+import type {
+  GetHistoryOptions,
+  GetHistoryResponse,
+  CreateAccountResponse,
+} from '@altude/gasstation'
+import type {
+  AltudeGasStation,
+  GaslessTransactionSigner,
+  WalletUiConfiguration,
+} from '@altude/gasstation'
+
+export type WalletProtection = 'device-local' | 'passkey'
+export type OtpChannel = 'email' | 'sms'
+
+export type WalletIdentityToken = {
+  /**
+   * Stable opaque identity key from the configured identity SDK. It is used
+   * only to select this browser's local key; it never authenticates a session.
+   */
+  identityKey: string
+} & (
+  | {
+      /** Access token for the API's configured Auth0 audience. The API validates it. */
+      accessToken: string
+      broker?: never
+    }
+  | {
+      /** One-time browser-broker ticket, never an Auth0 provider token. */
+      broker: { identityTicket: string; appId: string; walletAccessVersion: number }
+      accessToken?: never
+    }
+)
+
+export interface WalletUser {
+  id: string
+  email?: string | null
+  phoneNumber?: string | null
+  walletAddress?: string | null
+}
+
+export interface WalletSession {
+  user: WalletUser
+  expiresAt?: string | null
+  appId?: string
+  userId?: string
+}
+
+export interface WalletAuthProvider {
+  /** Discovery scope for the first-party browser broker, including restoration. */
+  browserBroker?: { appId: string; walletAccessVersion: 1 }
+  startOtp?(channel: OtpChannel, identifier: string): Promise<void>
+  verifyOtp?(channel: OtpChannel, identifier: string, code: string): Promise<WalletIdentityToken>
+  /** Custom providers may opt into collecting the code in their own hosted login UI. */
+  signInWithOtp?(channel: OtpChannel, identifier: string): Promise<WalletIdentityToken>
+  supportsOtpChannel?(channel: OtpChannel): boolean
+  signInWithSocial?(provider: string): Promise<WalletIdentityToken>
+  /** Must return credentials from a server-validated auth flow. */
+  signInWithPasskey?(): Promise<WalletIdentityToken>
+}
+
+export type ExternalWalletProviderId = 'metamask' | 'phantom' | 'walletconnect'
+
+export interface ExternalWalletConnection {
+  address: string
+  chain: 'solana' | 'evm'
+  /** Present only when the provider can sign supported Solana transactions. */
+  signer?: GaslessTransactionSigner
+}
+
+export interface ExternalWalletProvider {
+  id: ExternalWalletProviderId
+  label: string
+  isAvailable?(): boolean
+  connect(): Promise<ExternalWalletConnection>
+  disconnect?(): Promise<void>
+}
+
+export type WalletTransactionIntent =
+  | {
+      kind: 'sol-transfer'
+      recipient: string
+      /** Amount in lamports. */
+      amount: number
+      network?: 'mainnet-beta' | 'devnet' | 'testnet'
+    }
+  | {
+      kind: 'spl-transfer'
+      recipient: string
+      mint: string
+      /** Amount in the token's smallest unit. */
+      amount: number
+      network?: 'mainnet-beta' | 'devnet' | 'testnet'
+    }
+
+export type WalletTransactionIntentSnapshot = Readonly<WalletTransactionIntent>
+
+export interface WalletTransactionResult {
+  signature: string
+  status?: string
+  message?: string
+}
+
+export type WalletTransferHistoryOptions = GetHistoryOptions
+export type WalletTransferHistory = GetHistoryResponse
+
+export interface WalletState {
+  status: 'disconnected' | 'connected' | 'locked'
+  session: WalletSession | null
+  address: string | null
+  protection: WalletProtection | null
+  custody: 'embedded' | 'local' | 'external' | null
+  /** Opaque handle for local-only passkey access; never an API identity. */
+  localIdentityKey?: string | null
+  externalProviderId: ExternalWalletProviderId | null
+  externalChain: ExternalWalletConnection['chain'] | null
+}
+
+export type WalletEvent =
+  | { type: 'state'; state: WalletState }
+  | {
+      type: 'setup:progress'
+      stage: 'securing-device' | 'connecting-account' | 'finishing'
+    }
+  | { type: 'transaction:confirmation'; id: string; intent: WalletTransactionIntentSnapshot }
+  | { type: 'transaction:complete'; id: string; result: WalletTransactionResult }
+  | { type: 'transaction:error'; id: string; error: Error }
+  | {
+      type: 'provisioning:confirmation'
+      id: string
+      tokens: readonly string[]
+      network: NonNullable<AltudeWalletConfig['network']>
+    }
+  | { type: 'provisioning:complete'; id: string; result: CreateAccountResponse }
+  | { type: 'provisioning:error'; id: string; error: Error }
+
+export interface WalletStoreRecord {
+  identityKey: string
+  publicKey: string
+  serverUserId?: string
+  /** Mutation ownership for conditional rollback across vault instances. */
+  associationRevision?: string
+  protection: WalletProtection
+  secret?: Uint8Array
+  ciphertext?: Uint8Array
+  iv?: Uint8Array
+  prfSalt?: Uint8Array
+  credentialId?: Uint8Array
+  rpId?: string
+}
+
+export interface WalletStoreCreateResult {
+  record: WalletStoreRecord
+  created: boolean
+}
+
+export interface WalletStore {
+  get(identityKey: string): Promise<WalletStoreRecord | undefined>
+  getByServerUserId(serverUserId: string): Promise<WalletStoreRecord | undefined>
+  createIfAbsent(record: WalletStoreRecord): Promise<WalletStoreCreateResult>
+  /** Atomically reads and replaces or deletes a record; the callback must be synchronous. */
+  update(
+    identityKey: string,
+    update: (record: WalletStoreRecord | undefined) => WalletStoreRecord | undefined,
+  ): Promise<WalletStoreRecord | undefined>
+  put(record: WalletStoreRecord): Promise<void>
+  delete(identityKey: string): Promise<void>
+}
+
+export interface SessionTokenStore {
+  get(): Promise<string | null>
+  set(token: string): Promise<void>
+  clear(): Promise<void>
+}
+
+export interface WalletVaultOptions {
+  store?: WalletStore
+  passkeys?: PasskeyAdapter
+  indexedDB?: IDBFactory
+  crypto?: Crypto
+}
+
+export interface PasskeyAdapter {
+  /** Explicit PRF capability for injected adapters. */
+  isAvailable?(): boolean | Promise<boolean>
+  register(input: {
+    challenge: Uint8Array
+    userId: Uint8Array
+    userName: string
+    rpId: string
+    rpName: string
+    prfSalt: Uint8Array
+  }): Promise<{ credentialId: Uint8Array; kek?: Uint8Array }>
+  deriveKey(input: {
+    challenge: Uint8Array
+    credentialId: Uint8Array
+    rpId: string
+    prfSalt: Uint8Array
+  }): Promise<Uint8Array>
+}
+
+export interface AltudeWalletConfig {
+  apiKey: string
+  /** Base URL of the Altude API deployment, including scheme. */
+  apiBaseUrl: string
+  network?: 'mainnet-beta' | 'devnet' | 'testnet'
+  auth: WalletAuthProvider
+  externalWallets?: readonly ExternalWalletProvider[]
+  store?: WalletStore
+  sessionTokenStore?: SessionTokenStore
+  passkeys?: PasskeyAdapter
+  indexedDB?: IDBFactory
+  crypto?: Crypto
+  fetch?: typeof fetch
+  gasStation?: AltudeGasStation
+}
+
+export interface WalletUiOptions {
+  /** Explicit developer fallback; server walletUi takes precedence. */
+  authMethods?: WalletUiConfiguration['authMethods']
+  legal?: WalletUiConfiguration['legal']
+  presentation?: 'modal' | 'inline' | 'fullscreen'
+  title?: string
+  /** Developer-configured providers used when the API has no walletUi settings. */
+  socialProviders?: readonly string[]
+  /** API walletUi settings; when present, authMethods is an allowlist. */
+  walletUi?: WalletUiConfiguration | null
+  onClose?: () => void
+}

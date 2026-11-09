@@ -6,13 +6,24 @@ Production TypeScript SDK for Altude gasless Solana infrastructure.
 
 ## Production packages
 
-| Package | Description |
-|---|---|
-| [`@altude/core`](./packages/core) | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
-| [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API |
+| Package                                       | Description                                                            |
+| --------------------------------------------- | ---------------------------------------------------------------------- |
+| [`@altude/core`](./packages/core)             | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
+| [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API                           |
 
 Only packages in this table are supported and published. Experimental package
 work does not live on the production branch and carries no release commitment.
+
+The in-development [`@altude/wallet`](./packages/wallet) package contains
+browser wallet primitives, API session integration, and a managed UI. It is
+not published or part of the supported production package set.
+
+The [`wallet-infrastructure-demo`](./examples/wallet-infrastructure-demo)
+example shows how to mount the experimental wallet package's managed modal UI.
+Run it with `pnpm --filter wallet-infrastructure-demo dev`. Its simulated mode
+is the default; live mode defaults to the Altude browser broker included in
+`@altude/wallet`, using a publishable API key and an operator-enrolled exact
+website origin. An explicit direct Auth0 SPA mode remains available.
 
 ## Quick Start
 
@@ -97,6 +108,7 @@ The release workflow builds, lints, typechecks and tests only the packages liste
 ## Architecture
 
 Built on:
+
 - **[Gill](https://gill.web3.builders/)** — ergonomic Solana transaction utilities
 - **[@solana/rpc](https://www.npmjs.com/package/@solana/rpc)** — version-aware Solana JSON-RPC client
 - **[@scure/bip39](https://github.com/paulmillr/scure-bip39)** + **[@scure/bip32](https://github.com/paulmillr/scure-bip32)** — audited BIP-39/BIP-44
