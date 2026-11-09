@@ -14,6 +14,7 @@ export type {
   ConfigResponse,
   WalletUiConfiguration,
   SendTransactionOptions,
+  RelayDispatchConstraints,
   SendTransactionResponse,
   BatchTransactionOptions,
   GetBalanceOptions,

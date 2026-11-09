@@ -1136,18 +1136,14 @@ describe('mountWalletUI', () => {
     unmount()
   })
 
-  it('disables unavailable external wallets without attempting to connect', () => {
+  it('hides unavailable external wallets without attempting to connect', () => {
     const { wallet, mocks, container } = createUiHarness()
     mocks.externalWalletProviders = [{ id: 'phantom', label: 'Phantom', isAvailable: () => false }]
     const unmount = mountWalletUI(container, wallet, {
       authMethods: { externalWallets: ['phantom'] },
     })
-    clickControl(container, 'Connect a Web3 wallet', true)
-    const connect = container.querySelector<HTMLButtonElement>('[aria-label="Connect Phantom"]')
-    if (!connect) throw new Error('Expected the Phantom connection control.')
-    expect(connect.disabled).toBe(true)
-    expect(connect.textContent).toContain('Not detected')
-    connect.click()
+    expect(container.querySelector('[aria-label="Connect Phantom"]')).toBeNull()
+    expect(container.querySelector('.wallet-group-toggle')).toBeNull()
     expect(mocks.connectExternalWallet).not.toHaveBeenCalled()
     unmount()
   })

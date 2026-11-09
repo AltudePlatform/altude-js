@@ -54,6 +54,7 @@ export interface AltudeGasStationConfig {
 }
 
 export interface SendOptions {
+  beforeDispatch?: () => void
   /** Fail closed if authoritative transaction config differs from the approved cluster. */
   expectedNetwork?: SolanaNetwork
   /** Sender wallet address (base58). Mirrors Android SDK `SendOptions.account`. */
@@ -94,6 +95,7 @@ export interface SerializeInstructionPayloadOptions {
 }
 
 export interface CreateAccountOptions {
+  beforeDispatch?: () => void
   expectedNetwork?: SolanaNetwork
   /** Wallet address for token account ownership. Must match the signer when provided. */
   account?: string
@@ -331,6 +333,8 @@ export class AltudeGasStation {
         assertExpectedNetwork(await this.getConfig(true), options.expectedNetwork)
       return this.client.sendTransaction({
         transaction: options.signedTransaction,
+        ...(options.expectedNetwork && { expectedNetwork: options.expectedNetwork }),
+        ...(options.beforeDispatch && { beforeDispatch: options.beforeDispatch }),
         ...(options.commitment !== undefined && { commitment: options.commitment }),
       })
     }
@@ -443,6 +447,8 @@ export class AltudeGasStation {
         assertExpectedNetwork(await this.getConfig(true), options.expectedNetwork)
       return this.client.sendTransaction({
         transaction: signedTransaction,
+        ...(options.expectedNetwork && { expectedNetwork: options.expectedNetwork }),
+        ...(options.beforeDispatch && { beforeDispatch: options.beforeDispatch }),
         ...(options.commitment !== undefined && { commitment: options.commitment }),
       })
     }
@@ -500,6 +506,7 @@ export class AltudeGasStation {
       if (missingTokenAccounts.length === 0) {
         if (options.expectedNetwork)
           assertExpectedNetwork(await this.getConfig(true), options.expectedNetwork)
+        options.beforeDispatch?.()
         return {
           Signature: '',
           Status: 'Success',
@@ -565,7 +572,11 @@ export class AltudeGasStation {
       const signedTransaction = await transactionToBase64WithSigners(transaction)
       if (options.expectedNetwork)
         assertExpectedNetwork(await this.getConfig(true), options.expectedNetwork)
-      return this.client.createAccount({ signedTransaction })
+      return this.client.createAccount({
+        signedTransaction,
+        ...(options.expectedNetwork && { expectedNetwork: options.expectedNetwork }),
+        ...(options.beforeDispatch && { beforeDispatch: options.beforeDispatch }),
+      })
     }
 
     // Avoid duplicate create-account relay submissions from a single user action.

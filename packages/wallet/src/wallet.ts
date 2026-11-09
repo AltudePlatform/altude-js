@@ -818,75 +818,88 @@ export class AltudeWallet {
       this.#emit({ type: 'state', state: this.state })
       return this.state
     }
-    let record: Awaited<ReturnType<WalletVault['findByServerUserId']>>
+    let restoringIdentity: string | undefined
     try {
-      if (session.appId && session.userId) {
-        const appId = await this.#api.browserAppId()
-        if (!this.#isCurrentLifecycle(generation)) return this.state
-        if (appId !== session.appId || !session.user.walletAddress) {
-          throw new AltudeWalletError(
-            'SESSION',
-            'The restored wallet session belongs to a different application or has no registered address.',
-          )
-        }
-        const identityKey = this.#api.browserIdentityKey(appId, session.userId)
-        await this.#vault.resolveAssociatedAddress(identityKey, session.user.walletAddress)
-        if (!this.#isCurrentLifecycle(generation)) return this.state
-        record = await this.#vault.findByIdentityKey(identityKey)
-      } else {
-        if (this.#auth.browserBroker) {
-          throw new AltudeWalletError(
-            'WALLET_SCOPE_MIGRATION_REQUIRED',
-            'This legacy session cannot restore a broker wallet. Restart sign-in after an explicit wallet-scope migration.',
-          )
-        }
-        record = await this.#vault.findByServerUserId(session.user.id)
-        if (record?.identityKey.startsWith('altude:browser:v1:')) {
-          throw new AltudeWalletError(
-            'WALLET_SCOPE_MIGRATION_REQUIRED',
-            'A legacy session cannot access an application-scoped broker wallet.',
-          )
-        }
-      }
-    } catch (error) {
-      if (!this.#isCurrentLifecycle(generation)) return this.state
-      throw error
-    }
-    if (!this.#isCurrentLifecycle(generation)) return this.state
-    if (!record) {
-      throw new AltudeWalletError(
-        'WALLET_NOT_FOUND',
-        'This browser has no local key for the authenticated account. Sign in on the device where the wallet was created.',
-      )
-    }
-    if (session.user.walletAddress && session.user.walletAddress !== record.publicKey) {
-      throw new AltudeWalletError(
-        'SESSION',
-        'The server wallet address does not match the local identity key.',
-      )
-    }
-    if (!this.#isCurrentLifecycle(generation)) return this.state
-    if (record.protection === 'device-local') {
+      let record: Awaited<ReturnType<WalletVault['findByServerUserId']>>
       try {
-        await this.#vault.unlock(record.identityKey)
+        if (session.appId && session.userId) {
+          const appId = await this.#api.browserAppId()
+          if (!this.#isCurrentLifecycle(generation)) return this.state
+          if (appId !== session.appId || !session.user.walletAddress) {
+            throw new AltudeWalletError(
+              'SESSION',
+              'The restored wallet session belongs to a different application or has no registered address.',
+            )
+          }
+          const identityKey = this.#api.browserIdentityKey(appId, session.userId)
+          restoringIdentity = identityKey
+          this.#browserKeyGenerations.set(identityKey, generation)
+          await this.#vault.resolveAssociatedAddress(identityKey, session.user.walletAddress)
+          if (!this.#isCurrentLifecycle(generation)) return this.state
+          record = await this.#vault.findByIdentityKey(identityKey)
+        } else {
+          if (this.#auth.browserBroker) {
+            throw new AltudeWalletError(
+              'WALLET_SCOPE_MIGRATION_REQUIRED',
+              'This legacy session cannot restore a broker wallet. Restart sign-in after an explicit wallet-scope migration.',
+            )
+          }
+          record = await this.#vault.findByServerUserId(session.user.id)
+          if (record?.identityKey.startsWith('altude:browser:v1:')) {
+            throw new AltudeWalletError(
+              'WALLET_SCOPE_MIGRATION_REQUIRED',
+              'A legacy session cannot access an application-scoped broker wallet.',
+            )
+          }
+        }
       } catch (error) {
         if (!this.#isCurrentLifecycle(generation)) return this.state
         throw error
       }
-    }
-    if (!this.#isCurrentLifecycle(generation)) {
-      this.#lockStaleIdentity(record.identityKey)
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      if (!record) {
+        throw new AltudeWalletError(
+          'WALLET_NOT_FOUND',
+          'This browser has no local key for the authenticated account. Sign in on the device where the wallet was created.',
+        )
+      }
+      if (session.user.walletAddress && session.user.walletAddress !== record.publicKey) {
+        throw new AltudeWalletError(
+          'SESSION',
+          'The server wallet address does not match the local identity key.',
+        )
+      }
+      if (!this.#isCurrentLifecycle(generation)) return this.state
+      restoringIdentity = record.identityKey
+      this.#browserKeyGenerations.set(record.identityKey, generation)
+      if (record.protection === 'device-local') {
+        try {
+          await this.#vault.unlock(record.identityKey)
+        } catch (error) {
+          if (!this.#isCurrentLifecycle(generation)) return this.state
+          throw error
+        }
+      }
+      if (!this.#isCurrentLifecycle(generation)) {
+        this.#lockStaleIdentity(record.identityKey)
+        return this.state
+      }
+      this.#replaceActive({
+        mode: 'embedded',
+        identityKey: record.identityKey,
+        session,
+        address: record.publicKey,
+        protection: record.protection,
+      })
+      this.#emit({ type: 'state', state: this.state })
       return this.state
+    } finally {
+      if (restoringIdentity) {
+        if (!this.#isCurrentLifecycle(generation)) this.#lockStaleIdentity(restoringIdentity)
+        if (this.#browserKeyGenerations.get(restoringIdentity) === generation)
+          this.#browserKeyGenerations.delete(restoringIdentity)
+      }
     }
-    this.#replaceActive({
-      mode: 'embedded',
-      identityKey: record.identityKey,
-      session,
-      address: record.publicKey,
-      protection: record.protection,
-    })
-    this.#emit({ type: 'state', state: this.state })
-    return this.state
   }
 
   async unlockWithPasskey(): Promise<WalletState> {
@@ -1051,6 +1064,9 @@ export class AltudeWallet {
           : {}),
       }
       const response = await this.#gasStation.send({
+        beforeDispatch: () => {
+          this.#assertNotCancelled(pending)
+        },
         ...(pending.intent.network ? { expectedNetwork: pending.intent.network } : {}),
         sourceSigner: cancellableSigner,
         account: active.address,
@@ -1162,6 +1178,7 @@ export class AltudeWallet {
         throw new AltudeWalletError('WALLET_LOCKED', 'The wallet cannot sign provisioning.')
       check()
       const result = await this.#gasStation.createAccount({
+        beforeDispatch: check,
         account: pending.address,
         tokens: [...pending.tokens],
         expectedNetwork: pending.network,

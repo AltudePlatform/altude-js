@@ -1,6 +1,7 @@
 import { AltudeGasStation } from '@altude/gasstation'
 import type {
   BalanceResponse,
+  ConfigResponse,
   CreateAccountOptions,
   CreateAccountResponse,
   GaslessTransactionSigner,
@@ -52,20 +53,66 @@ class DemoGasStation extends AltudeGasStation {
     })
   }
 
-  override async send(_options: SendOptions): Promise<SendTransactionResponse> {
+  override async getConfig(_forceRefresh = false): Promise<ConfigResponse> {
     return {
-      Signature: `simulated-${crypto.randomUUID()}`,
+      FeePayer: '11111111111111111111111111111111',
+      RpcUrl: 'https://rpc.demo.invalid',
+      Token: 'simulated-only',
+      TokenExpiration: null,
+      RpcEnvironment: 'devnet',
+    }
+  }
+
+  private async simulate(
+    signer: GaslessTransactionSigner | undefined,
+    details: Record<string, unknown>,
+    expectedNetwork?: string,
+    beforeDispatch?: () => void,
+  ): Promise<string> {
+    if (expectedNetwork && expectedNetwork !== 'devnet') throw new Error('Simulated network is devnet.')
+    const sign = signer?.signTransactionMessage ?? signer?.sign
+    if (!sign || !signer) throw new Error('Simulation requires a transaction signer.')
+    const message = new TextEncoder().encode(JSON.stringify({
+      domain: 'altude-wallet-demo-simulation-v1',
+      network: 'devnet',
+      signer: signer.address,
+      ...details,
+    }))
+    const signature = await sign.call(signer, message)
+    beforeDispatch?.()
+    return btoa(String.fromCharCode(...signature))
+  }
+
+  override async send(options: SendOptions): Promise<SendTransactionResponse> {
+    if (options.signedTransaction) throw new Error('Pre-signed transactions are not supported in simulation.')
+    if (options.account && options.account !== options.sourceSigner?.address)
+      throw new Error('Simulation account must match the signer.')
+    const signature = await this.simulate(options.sourceSigner, {
+      operation: 'transfer',
+      recipient: options.toAddress ?? options.to,
+      amount: options.amount,
+      token: options.token ?? null,
+    }, options.expectedNetwork, options.beforeDispatch)
+    return {
+      Signature: signature,
       Status: 'Success',
       Message: 'Simulated only. No transaction was sent to Solana.',
     }
   }
 
   override async createAccount(
-    _options: CreateAccountOptions = {},
-    _signer?: GaslessTransactionSigner,
+    options: CreateAccountOptions = {},
+    signer?: GaslessTransactionSigner,
   ): Promise<CreateAccountResponse> {
+    const selectedSigner = signer ?? options.signer
+    if (options.account && options.account !== selectedSigner?.address)
+      throw new Error('Simulation account must match the signer.')
+    const signature = await this.simulate(selectedSigner, {
+      operation: 'provision',
+      tokens: options.tokens ?? [],
+    }, options.expectedNetwork, options.beforeDispatch)
     return {
-      Signature: `simulated-${crypto.randomUUID()}`,
+      Signature: signature,
       Status: 'Success',
       Message: 'Simulated token account creation. No transaction was sent to Solana.',
     }
@@ -141,7 +188,7 @@ function jsonResponse(value: unknown): Response {
   })
 }
 
-function createDemoWallet(
+export function createDemoWallet(
   apiKey: string,
   apiBaseUrl: string,
   externalWallets: readonly ExternalWalletProvider[],

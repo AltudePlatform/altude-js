@@ -86,7 +86,12 @@ Approval interfaces can pass `expectedNetwork` to `send` or `createAccount`
 to bind execution to the cluster the user reviewed. The SDK checks the
 authoritative `RpcEnvironment` before signing and again before relay, rejecting
 changes rather than switching networks. Provisioning also checks existing-account
-no-ops. This is a constraint on API configuration, not an RPC endpoint override.
+no-ops. The same constraint is carried into the HTTP client and checked before
+every dispatch, including authentication refresh, network retry and payload
+fallback. This is a constraint on API configuration, not an RPC endpoint override.
+An optional synchronous `beforeDispatch` guard on either method can reject
+cancelled approvals after the final configuration await and before any HTTP
+submission or retry. Its error propagates to the caller without resubmission.
 
 See the [monorepo README](https://github.com/AltudePlatform/altude-js) for the full
 SDK overview.

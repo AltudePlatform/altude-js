@@ -457,7 +457,8 @@ export function mountWalletUI(
           : []
       const externalWalletProviders = wallet.externalWalletProviders.filter(
         (provider) =>
-          (methodConfiguration?.externalWallets ?? []).includes(provider.id),
+          (methodConfiguration?.externalWallets ?? []).includes(provider.id) &&
+          provider.isAvailable?.() !== false,
       )
       const displayName = walletUi?.branding?.appName?.trim() || options.title || 'Altude'
       const headline = document.createElement('div')
@@ -1580,5 +1581,5 @@ function web3icon(
                               '<rect width="128" height="128" rx="28" fill="#AB9FF2"/>' +
                               '<path fill="#FFFDF8" d="M110.6 64.9h-9.9c0-20.3-16.4-36.9-36.8-36.9-20.1 0-36.5 16.2-36.9 36.2C26.6 84.9 45 105 65.4 105h2.6c17.9 0 41.9-14 45.6-31 .7-3.1-1.6-9.1-3-9.1zM52.5 66c0 2.8-2.3 5-5 5s-5-2.3-5-5 2.3-5.1 5-5.1 5 2.3 5 5.1zm17.3 0c0 2.8-2.3 5-5 5s-5-2.3-5-5 2.3-5.1 5-5.1 5 2.3 5 5.1z"/>' +
                             '</svg>'
-  return icontHtmlString
+  return icontHtmlString;
 }

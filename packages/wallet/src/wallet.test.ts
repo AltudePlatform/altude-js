@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
-  AltudeGasStation,
   CreateAccountOptions,
   GaslessTransactionSigner,
   SendOptions,
 } from '@altude/gasstation'
+import { AltudeGasStation } from '@altude/gasstation'
 import { createHash } from 'node:crypto'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { decodeBase58, encodeBase58 } from './crypto.js'
@@ -118,6 +118,7 @@ describe('AltudeWallet', () => {
   function createWallet(
     externalWallets: readonly ExternalWalletProvider[] = [],
     passkeys?: PasskeyAdapter,
+    executor?: AltudeGasStation,
   ) {
     return new AltudeWallet({
       apiKey: 'test-api-key',
@@ -129,7 +130,7 @@ describe('AltudeWallet', () => {
       store,
       sessionTokenStore: sessionTokens,
       fetch: fetchMock as typeof fetch,
-      gasStation: gasStation as unknown as AltudeGasStation,
+      gasStation: executor ?? (gasStation as unknown as AltudeGasStation),
     })
   }
 
@@ -676,6 +677,84 @@ describe('AltudeWallet', () => {
     })
     expect(store.records.size).toBe(0)
   })
+
+  it.each(['broker', 'legacy'] as const)(
+    'keeps a pending %s restore unlocked when an older connection finishes',
+    async (mode) => {
+      if (mode === 'broker') browserBackend()
+      else
+        fetchMock.mockImplementation((_url: string, request: RequestInit) => {
+          const body = parseBody(request.body)
+          return Promise.resolve(
+            jsonResponse({
+              success: true,
+              sessionToken: 'retained-session',
+              user: { id: 'legacy-user', walletAddress: body.walletAddress },
+            }),
+          )
+        })
+      const wallet = createWallet()
+      const identity =
+        mode === 'broker'
+          ? browserIdentity()
+          : { accessToken: 'provider-token', identityKey: 'auth0|restore-owner' }
+      const first = await wallet.connect(identity)
+      wallet.lock()
+      const record = [...store.records.values()][0]
+      if (!record) throw new Error('Expected persisted key')
+      const implementation = fetchMock.getMockImplementation() as
+        | ((url: string, request: RequestInit) => Promise<Response>)
+        | undefined
+      if (!implementation) throw new Error('Expected synthetic API')
+      const exchangeEntered = deferred<boolean>()
+      const exchange = deferred<Response>()
+      fetchMock.mockImplementation((url: string, request: RequestInit) => {
+        if (url.endsWith('/api/browser-wallet/session') || url.endsWith('/auth0')) {
+          exchangeEntered.resolve(true)
+          return exchange.promise
+        }
+        if (mode === 'legacy' && url.endsWith('/session'))
+          return Promise.resolve(
+            jsonResponse({
+              isAuthenticated: true,
+              user: { id: 'legacy-user', walletAddress: first.address },
+            }),
+          )
+        return implementation(url, request)
+      })
+      const connecting = wallet.connect(
+        mode === 'broker' ? browserIdentity('second-ticket') : identity,
+      )
+      await exchangeEntered.promise
+      const readEntered = deferred<boolean>()
+      const read = deferred<WalletStoreRecord | undefined>()
+      const get = store.get.bind(store)
+      store.get = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          readEntered.resolve(true)
+          return read.promise
+        })
+        .mockImplementation(get)
+      const restoring = wallet.restoreSession()
+      await readEntered.promise
+      exchange.resolve(
+        jsonResponse({
+          Success: true,
+          SessionToken: 'superseded-session',
+          ...(mode === 'broker' ? { AppId: '-17.42', UserId: 'broker-user' } : {}),
+          User: {
+            Id: mode === 'broker' ? 'broker-user' : 'legacy-user',
+            WalletAddress: first.address,
+          },
+        }),
+      )
+      await connecting
+      read.resolve(record)
+      expect(await restoring).toMatchObject({ status: 'connected', address: first.address })
+      await expect(wallet.signMessage(new Uint8Array([1, 2, 3]))).resolves.toHaveLength(64)
+    },
+  )
 
   it('does not generate a key for an authoritative lookup completing after sign-out', async () => {
     browserBackend()
@@ -1448,6 +1527,159 @@ describe('AltudeWallet', () => {
       }),
     ).toThrow(AltudeWalletError)
   })
+
+  it.each([
+    ['transfer', 'reject'],
+    ['transfer', 'signout'],
+    ['provisioning', 'reject'],
+    ['provisioning', 'signout'],
+    ['provisioning', 'abort'],
+  ] as const)(
+    'prevents the actual HTTP relay when %s is cancelled by %s during final config refresh',
+    async (operation, cancellation) => {
+      fetchMock.mockImplementation(() =>
+        Promise.resolve(
+          jsonResponse({
+            Success: true,
+            SessionToken: 'session-token',
+            User: { Id: 'dispatch-user' },
+          }),
+        ),
+      )
+      const gs = new AltudeGasStation({
+        apiKey: 'test-api-key',
+        baseUrl: 'https://api.example.test',
+      })
+      const configEntered = deferred<boolean>()
+      const configRelease = deferred<boolean>()
+      let signed = false
+      let relayCalls = 0
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url.startsWith('https://rpc.example.test')) {
+            const request: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '')
+            if (
+              !request ||
+              typeof request !== 'object' ||
+              !('method' in request) ||
+              !('id' in request) ||
+              typeof request.method !== 'string' ||
+              (typeof request.id !== 'number' && typeof request.id !== 'string')
+            )
+              throw new Error('Invalid synthetic RPC request')
+            if (request.method !== 'getAccountInfo' && request.method !== 'getLatestBlockhash')
+              throw new Error(`Unexpected RPC method: ${request.method}`)
+            return jsonResponse({
+              jsonrpc: '2.0',
+              id: request.id,
+              result: {
+                context: { slot: 1 },
+                value:
+                  request.method === 'getAccountInfo'
+                    ? null
+                    : {
+                        blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+                        lastValidBlockHeight: 100,
+                      },
+              },
+            })
+          }
+          if (url.endsWith('/api/transaction/config')) {
+            if (signed) {
+              configEntered.resolve(true)
+              await configRelease.promise
+            }
+            return jsonResponse({
+              FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+              RpcUrl: 'https://rpc.example.test',
+              RpcEnvironment: 'devnet',
+              Token: 'synthetic-token',
+              TokenExpiration: '2099-01-01T00:00:00Z',
+            })
+          }
+          if (!url.endsWith('/api/Transaction/send') && !url.endsWith('/api/Account/create'))
+            throw new Error(`Unexpected HTTP request ${url}`)
+          relayCalls++
+          return jsonResponse({ Signature: 'relay-signature', Status: 'Success' })
+        }),
+      )
+      // Instrument only the signer's return so the pause occurs after the
+      // wallet's last signing check, in the real facade's final config refresh.
+      const send = gs.send.bind(gs)
+      vi.spyOn(gs, 'send').mockImplementation((options) => {
+        const signer = options.sourceSigner
+        if (!signer?.signTransactionMessage) throw new Error('Expected transaction signer')
+        const sign = signer.signTransactionMessage.bind(signer)
+        return send({
+          ...options,
+          sourceSigner: {
+            ...signer,
+            signTransactionMessage: async (bytes) => {
+              const signature = await sign(bytes)
+              signed = true
+              return signature
+            },
+          },
+        })
+      })
+      const provision = gs.createAccount.bind(gs)
+      vi.spyOn(gs, 'createAccount').mockImplementation((options) => {
+        const signer = options?.signer
+        if (!signer?.signTransactionMessage) throw new Error('Expected provisioning signer')
+        const sign = signer.signTransactionMessage.bind(signer)
+        return provision({
+          ...options,
+          signer: {
+            ...signer,
+            signTransactionMessage: async (bytes) => {
+              const signature = await sign(bytes)
+              signed = true
+              return signature
+            },
+          },
+        })
+      })
+      const wallet = createWallet([], undefined, gs)
+      await wallet.connect({ accessToken: 'provider-token', identityKey: 'auth0|dispatch-user' })
+      const confirmation = deferred<string>()
+      wallet.onEvent((event) => {
+        if (event.type === 'transaction:confirmation' || event.type === 'provisioning:confirmation')
+          confirmation.resolve(event.id)
+      })
+      const controller = new AbortController()
+      const request =
+        operation === 'transfer'
+          ? wallet.requestTransaction({
+              kind: 'sol-transfer',
+              recipient: 'So11111111111111111111111111111111111111112',
+              amount: 1000,
+              network: 'devnet',
+            })
+          : wallet.createAccount(['So11111111111111111111111111111111111111112'], controller.signal)
+      const result = request.then(
+        () => 'unexpected-success',
+        (error: unknown) => error,
+      )
+      const id = await confirmation.promise
+      const approval =
+        operation === 'transfer' ? wallet.approveTransaction(id) : wallet.approveProvisioning(id)
+      const approved = approval.then(
+        () => 'unexpected-success',
+        (error: unknown) => error,
+      )
+      await configEntered.promise
+      expect(relayCalls).toBe(0)
+      if (cancellation === 'signout') await wallet.signOut()
+      else if (cancellation === 'abort') controller.abort()
+      else if (operation === 'transfer') wallet.rejectTransaction(id)
+      else wallet.rejectProvisioning(id)
+      configRelease.resolve(true)
+      expect(await result).toBeInstanceOf(AltudeWalletError)
+      expect(await approved).toBeInstanceOf(AltudeWalletError)
+      expect(relayCalls).toBe(0)
+    },
+  )
 
   it('rejects unsupported runtime intent kinds before confirmation or relay', async () => {
     fetchMock.mockResolvedValue(

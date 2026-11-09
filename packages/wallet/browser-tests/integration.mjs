@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
+import { createRequire } from 'node:module'
 
 const edgeExecutable =
   process.env.EDGE_EXECUTABLE ??
@@ -18,7 +19,11 @@ if (!edgeExecutable || !existsSync(edgeExecutable)) {
 }
 
 const bundle = await build({
-  entryPoints: [fileURLToPath(new URL('../src/index.ts', import.meta.url))],
+  stdin: {
+    contents: "export * from './src/index.ts'; export { AltudeGasStation } from '../gasstation/src/index.ts'",
+    resolveDir: fileURLToPath(new URL('..', import.meta.url)),
+    loader: 'ts',
+  },
   bundle: true,
   format: 'iife',
   globalName: 'AltudeWalletSDK',
@@ -458,12 +463,87 @@ try {
   assert.equal(brokerRequests.filter(({ path }) => path === '/otp/start').length, 2, 'failed OTP requires explicit resend')
   assert.equal(apiRequests, 2, 'broker must never use the direct Auth0 exchange')
   await runCompletenessAcceptance(browser, `http://127.0.0.1:${address.port}`)
+  await testDemo(browser)
   console.log('Wallet real-browser integration passed in Microsoft Edge.')
 } finally {
   await browser?.close()
   await new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()))
   })
+}
+
+async function testDemo(browser) {
+  const demoRoot = fileURLToPath(new URL('../../../examples/wallet-infrastructure-demo/', import.meta.url))
+  const require = createRequire(new URL('../../../examples/wallet-infrastructure-demo/package.json', import.meta.url))
+  const vitePackage = pathToFileURL(require.resolve('vite/package.json'))
+  const { createServer: createViteServer } = await import(new URL('./dist/node/index.js', vitePackage))
+  const vite = await createViteServer({
+    root: demoRoot, configFile: false, logLevel: 'silent',
+    server: { host: '127.0.0.1', port: 0, strictPort: false },
+  })
+  let page
+  try {
+    await vite.listen()
+    const port = vite.httpServer.address().port
+    const origin = `http://127.0.0.1:${port}`
+    page = await browser.newPage()
+    const external = []
+    await page.route('**/*', async (route) => {
+      if (new URL(route.request().url()).origin !== origin) {
+        external.push(route.request().url())
+        await route.abort()
+      } else await route.continue()
+    })
+    await page.goto(origin)
+    await page.getByRole('button', { name: 'Open wallet', exact: true }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByRole('textbox', { name: 'Email address' }).fill('demo@example.test')
+    await dialog.getByRole('button', { name: 'Send code', exact: true }).click()
+    await dialog.getByRole('textbox', { name: 'Digit 1 of 6', exact: true }).pressSequentially('246810')
+    await dialog.locator('.account-identity').waitFor()
+    await dialog.getByRole('button', { name: 'Create token account', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Confirm and create', exact: true }).click()
+    await dialog.getByText('Simulated token account creation. No transaction was sent to Solana.', { exact: true }).waitFor()
+    const evidence = await page.evaluate(async () => {
+      const { createDemoWallet } = await import('/src/main.ts')
+      const wallet = createDemoWallet('demo-only-api-key', 'https://api.demo.invalid', [])
+      const state = await wallet.connect({
+        identityKey: 'wallet-demo:demo@example.test',
+        accessToken: 'demo-token:demo%40example.test',
+      })
+      const confirmations = []
+      wallet.onEvent((event) => {
+        if (event.type === 'transaction:confirmation') {
+          confirmations.push(event.intent)
+          void wallet.approveTransaction(event.id)
+        } else if (event.type === 'provisioning:confirmation') {
+          confirmations.push({ operation: 'provision', network: event.network, tokens: event.tokens })
+          void wallet.approveProvisioning(event.id)
+        }
+      })
+      const recipient = 'Vote111111111111111111111111111111111111111'
+      const mint = 'So11111111111111111111111111111111111111112'
+      const provision = await wallet.createAccount([mint])
+      const sol = await wallet.requestTransaction({ kind: 'sol-transfer', recipient, amount: 25 })
+      const spl = await wallet.requestTransaction({ kind: 'spl-transfer', recipient, mint, amount: 31 })
+      return { address: state.address, confirmations, provision, sol, spl }
+    })
+    const messages = [
+      { result: evidence.provision, payload: { operation: 'provision', tokens: ['So11111111111111111111111111111111111111112'] } },
+      { result: evidence.sol, payload: { operation: 'transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 25, token: null } },
+      { result: evidence.spl, payload: { operation: 'transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 31, token: 'So11111111111111111111111111111111111111112' } },
+    ]
+    assert.equal(evidence.confirmations.length, 3)
+    for (const { result, payload } of messages) {
+      const message = JSON.stringify({ domain: 'altude-wallet-demo-simulation-v1', network: 'devnet', signer: evidence.address, ...payload })
+      assert.equal(verifyEd25519(evidence.address, Buffer.from(message), Buffer.from(result.Signature ?? result.signature, 'base64')), true)
+      assert.match(result.Message ?? result.message, /Simulated/)
+    }
+    assert.deepEqual(external, [], 'simulated demo must make no external requests')
+  } finally {
+    await page?.close()
+    await vite.close()
+  }
 }
 
 async function runCompletenessAcceptance(browser, origin) {
@@ -484,7 +564,7 @@ async function runCompletenessAcceptance(browser, origin) {
     window.acceptanceWallet = new sdk.AltudeWallet({
       apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: {
         startOtp: () => { window.smsStarts++; return new Promise((resolve) => { window.finishSms = resolve }) },
-        verifyOtp: () => { throw new Error('Verification was not requested') },
+        verifyOtp: () => new Promise((resolve) => { window.finishVerify = resolve }),
       },
     })
     window.testMount(window.acceptanceWallet)
@@ -526,14 +606,24 @@ async function runCompletenessAcceptance(browser, origin) {
   assert.equal(await privacy.evaluate((element) => element === document.activeElement), true)
   await root.getByRole('button', { name: 'Send code', exact: true }).click()
   assert.equal(await page.evaluate(() => window.smsStarts), 1)
-  const reducedMotion = await root.locator('button[type=submit]').evaluate((button) => ({
-    element: getComputedStyle(button).animationName,
-    pseudo: getComputedStyle(button, '::after').animationName,
-  }))
-  assert.equal(reducedMotion.element, 'none')
-  assert.equal(reducedMotion.pseudo, 'none', 'pseudo-element spinners must stop too')
   await page.evaluate(() => window.finishSms())
   await root.getByRole('button', { name: 'Resend code', exact: true }).waitFor()
+  await root.getByRole('checkbox').uncheck()
+  assert.equal(await root.getByRole('button', { name: 'Resend code', exact: true }).isDisabled(), true)
+  assert.equal(await page.evaluate(() => window.smsStarts), 1)
+  await root.getByRole('checkbox').check()
+  await root.getByRole('button', { name: 'Resend code', exact: true }).click()
+  assert.equal(await page.evaluate(() => window.smsStarts), 2)
+  await page.evaluate(() => window.finishSms())
+  await root.getByRole('textbox', { name: 'Digit 1 of 6', exact: true }).pressSequentially('246810')
+  await root.locator('.setup-orb').waitFor()
+  const reducedMotion = await root.evaluate((container) => ({
+    orb: getComputedStyle(container.querySelector('.setup-orb'), '::after').animationName,
+    spinner: getComputedStyle(container.querySelector('.setup-step-spinner')).animationName,
+  }))
+  assert.equal(reducedMotion.orb, 'none', 'the real setup orb pseudo-element stops')
+  assert.equal(reducedMotion.spinner, 'none', 'the real setup-step spinner stops')
+  await page.evaluate(() => window.unmountAcceptance())
 
   await page.evaluate(() => {
     window.testMount(window.acceptanceWallet, { authMethods: { smsOtp: true } })
@@ -541,7 +631,7 @@ async function runCompletenessAcceptance(browser, origin) {
   await root.getByText('SMS sign-in requires configured consent text.').waitFor()
   await root.getByRole('textbox').fill('+12025550123')
   assert.equal(await root.getByRole('button', { name: 'Send code', exact: true }).isDisabled(), true)
-  assert.equal(await page.evaluate(() => window.smsStarts), 1, 'missing consent copy cannot send')
+  assert.equal(await page.evaluate(() => window.smsStarts), 2, 'missing consent copy cannot send')
 
   await page.evaluate(() => {
     const sdk = window.AltudeWalletSDK
@@ -553,8 +643,8 @@ async function runCompletenessAcceptance(browser, origin) {
     })
     window.testMount(window.unavailableWallet, { authMethods: { externalWallets: ['phantom'], passkey: true } })
   })
-  await root.getByRole('button', { name: /Web3|wallets/i }).click()
-  assert.equal(await root.getByRole('button', { name: 'Connect Phantom', exact: true }).isDisabled(), true)
+  assert.equal(await root.getByRole('button', { name: /Web3|wallets/i }).count(), 0)
+  assert.equal(await root.getByRole('button', { name: 'Connect Phantom', exact: true }).count(), 0)
   assert.equal(await root.getByRole('button', { name: 'Use a passkey', exact: true }).count(), 0)
   assert.equal(await page.evaluate(async () => {
     try { await window.unavailableWallet.connectExternalWallet('phantom'); return 'connected' }
@@ -599,7 +689,15 @@ async function runCompletenessAcceptance(browser, origin) {
       getConfig: async () => ({ RpcEnvironment: window.authoritativeNetwork }),
       getBalance: async (options) => { window.balanceTokens.push(options.token); return { uiAmount: 7 } },
       createAccount: async () => { window.relayCalls++; return { Status: 'Success', Signature: '', Message: 'Account already exists' } },
-      send: async () => { window.relayCalls++; return { Status: 'Success', Signature: 'synthetic-transfer' } },
+      send: async (options) => {
+        window.relayCalls++
+        const bytes = new TextEncoder().encode('synthetic approved transfer')
+        const signature = await options.sourceSigner.signTransactionMessage(bytes)
+        options.beforeDispatch?.()
+        window.transferSignature = Array.from(signature)
+        window.transferOptions = { account: options.account, recipient: options.toAddress, amount: options.amount, network: options.expectedNetwork }
+        return { Status: 'Success', Signature: 'synthetic-transfer' }
+      },
     }
     window.localWallet = new sdk.AltudeWallet({
       apiKey: 'acceptance', apiBaseUrl: 'https://api.example.test', auth: {}, network: 'devnet', passkeys: window.localPasskeys, gasStation: window.localGas,
@@ -660,6 +758,23 @@ async function runCompletenessAcceptance(browser, origin) {
     catch (error) { return error.code }
   }), 'TRANSACTION')
   assert.equal(await page.evaluate(() => window.relayCalls), 1)
+  await page.evaluate(() => {
+    window.authoritativeNetwork = 'devnet'
+    window.transactionOutcome = window.localWallet.requestTransaction({
+      kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 3,
+    })
+  })
+  await transaction.getByText('Network: devnet', { exact: true }).waitFor()
+  await transaction.getByRole('button', { name: 'Confirm and submit', exact: true }).click()
+  const completed = await page.evaluate(async () => ({
+    result: await window.transactionOutcome,
+    signature: window.transferSignature,
+    options: window.transferOptions,
+  }))
+  assert.equal(completed.result.signature, 'synthetic-transfer')
+  assert.deepEqual(completed.options, { account: local.state.address, recipient: 'Vote111111111111111111111111111111111111111', amount: 3, network: 'devnet' })
+  assert.equal(verifyEd25519(local.state.address, Buffer.from('synthetic approved transfer'), Buffer.from(completed.signature)), true)
+  assert.equal(await page.evaluate(() => window.relayCalls), 2)
   await page.evaluate(async () => {
     window.authoritativeNetwork = 'devnet'
     await window.localWallet.signOut()
@@ -677,9 +792,367 @@ async function runCompletenessAcceptance(browser, origin) {
   assert.equal(await page.evaluate(() => window.authCalls), 0)
 
   await testPersistentCreationRace(page)
+  await testIdentityAndPresentations(page)
+  await testStaleRestore(page)
+  await testConnectBeforeRestore(page)
+  await testRealRelayCancellation(page)
+  await testRealRelayNetworkChange(page)
   await testIframeSources(page, origin)
   await testLegacySocialOutcomes(page)
   await page.close()
+}
+
+async function testConnectBeforeRestore(page) {
+  const result = await page.evaluate(async () => {
+    const sdk = window.AltudeWalletSDK
+    const base = new sdk.IndexedDbWalletStore()
+    let pauseRead = false
+    let readReached, releaseRead, exchangeReached, releaseExchange
+    const readWaiting = new Promise((resolve) => { readReached = resolve })
+    const readGate = new Promise((resolve) => { releaseRead = resolve })
+    const exchangeWaiting = new Promise((resolve) => { exchangeReached = resolve })
+    const exchangeGate = new Promise((resolve) => { releaseExchange = resolve })
+    const store = {
+      get: async (key) => {
+        const record = await base.get(key)
+        if (pauseRead) { pauseRead = false; readReached(); await readGate }
+        return record
+      },
+      getByServerUserId: (id) => base.getByServerUserId(id),
+      put: (record) => base.put(record),
+      delete: (key) => base.delete(key),
+      update: (key, fn) => base.update(key, fn),
+      createIfAbsent: (record) => base.createIfAbsent(record),
+    }
+    let exchangeCount = 0
+    let user
+    const wallet = new sdk.AltudeWallet({
+      apiKey: 'connect-restore-race', apiBaseUrl: 'https://api.example.test', auth: {}, store,
+      fetch: async (url, request) => {
+        if (url.endsWith('/auth0')) {
+          exchangeCount++
+          const address = JSON.parse(request.body).walletAddress
+          if (exchangeCount === 2) { exchangeReached(); await exchangeGate }
+          user = { Id: 'connect-restore-user', WalletAddress: address }
+          return new Response(JSON.stringify({ Success: true, SessionToken: 'persisted-restore-token', User: user }))
+        }
+        if (url.endsWith('/session')) {
+          if (new Headers(request.headers).get('Authorization') !== 'Bearer persisted-restore-token')
+            throw new Error('Restore must use the persisted session token')
+          return new Response(JSON.stringify({ IsAuthenticated: true, User: user }))
+        }
+        throw new Error(`Unexpected request ${url}`)
+      },
+    })
+    const identity = { identityKey: 'connect-before-restore-identity', accessToken: 'synthetic' }
+    const initial = await wallet.connect(identity)
+    const persisted = await base.get(identity.identityKey)
+    const connect = wallet.connect(identity)
+    await exchangeWaiting
+    pauseRead = true
+    let restoreFinished = false
+    const restore = wallet.restoreSession().finally(() => { restoreFinished = true })
+    await readWaiting
+    releaseExchange()
+    await connect
+    const pendingAtConnectCompletion = !restoreFinished
+    releaseRead()
+    const restored = await restore
+    const signature = await wallet.signMessage(new TextEncoder().encode('connect before restore'))
+    return { initial, persisted: persisted?.publicKey, pendingAtConnectCompletion, restored, final: wallet.state, signature: Array.from(signature), exchangeCount }
+  })
+  assert.equal(result.persisted, result.initial.address, 'initial key must be persisted in IndexedDB')
+  assert.equal(result.exchangeCount, 2)
+  assert.equal(result.pendingAtConnectCompletion, true, 'older connect must finish while restore local read is blocked')
+  assert.equal(result.restored.status, 'connected')
+  assert.equal(result.restored.address, result.initial.address)
+  assert.equal(result.final.session.user.id, 'connect-restore-user')
+  assert.equal(result.final.status, 'connected')
+  assert.equal(verifyEd25519(result.final.address, Buffer.from('connect before restore'), Buffer.from(result.signature)), true)
+}
+
+async function testStaleRestore(page) {
+  const result = await page.evaluate(async () => {
+    const sdk = window.AltudeWalletSDK
+    const base = new sdk.IndexedDbWalletStore()
+    let pause = false
+    let release
+    let reached
+    const waiting = new Promise((resolve) => { reached = resolve })
+    const gate = new Promise((resolve) => { release = resolve })
+    const store = {
+      get: async (key) => {
+        const record = await base.get(key)
+        if (pause) { pause = false; reached(); await gate }
+        return record
+      },
+      getByServerUserId: (id) => base.getByServerUserId(id),
+      put: (record) => base.put(record),
+      delete: (key) => base.delete(key),
+      update: (key, fn) => base.update(key, fn),
+      createIfAbsent: (record) => base.createIfAbsent(record),
+    }
+    let user
+    const wallet = new sdk.AltudeWallet({
+      apiKey: 'restore-race', apiBaseUrl: 'https://api.example.test', auth: {}, store,
+      fetch: async (url, request) => {
+        if (url.endsWith('/auth0')) {
+          user = { Id: 'restore-race-user', WalletAddress: JSON.parse(request.body).walletAddress }
+          return new Response(JSON.stringify({ Success: true, SessionToken: 'restore-race-token', User: user }))
+        }
+        if (url.endsWith('/session')) return new Response(JSON.stringify({ IsAuthenticated: true, User: user }))
+        throw new Error(`Unexpected restore request ${url}`)
+      },
+    })
+    const identity = { identityKey: 'restore-race-identity', accessToken: 'synthetic' }
+    const initial = await wallet.connect(identity)
+    pause = true
+    const restoring = wallet.restoreSession()
+    await waiting
+    const newer = wallet.connect(identity)
+    release()
+    await restoring
+    const connected = await newer
+    const signature = await wallet.signMessage(new TextEncoder().encode('restore race winner'))
+    return { initial, connected, final: wallet.state, signature: Array.from(signature) }
+  })
+  assert.equal(result.connected.address, result.initial.address)
+  assert.equal(result.final.status, 'connected', 'stale restore must not lock a newer session')
+  assert.equal(verifyEd25519(result.final.address, Buffer.from('restore race winner'), Buffer.from(result.signature)), true)
+}
+
+async function testRealRelayCancellation(page) {
+  let relayCount = 0
+  let configCount = 0
+  let reachedRefresh
+  let releaseRefresh
+  const refreshReached = new Promise((resolve) => { reachedRefresh = resolve })
+  const refreshRelease = new Promise((resolve) => { releaseRefresh = resolve })
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' }
+  await page.route('https://relay-acceptance.example.test/**', async (route) => {
+    const request = route.request()
+    if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+    const path = new URL(request.url()).pathname
+    if (path === '/api/transaction/config') {
+      configCount++
+      if (relayCount) {
+        reachedRefresh()
+        await refreshRelease
+      }
+      await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({
+        FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+        RpcUrl: 'https://rpc-acceptance.example.test',
+        Token: 'synthetic-rpc-token', TokenExpiration: null, RpcEnvironment: 'devnet',
+      }) })
+    } else if (path.toLowerCase() === '/api/transaction/send') {
+      relayCount++
+      assert.equal(request.method(), 'POST')
+      assert.ok(Object.values(request.postDataJSON()).some((value) => typeof value === 'string' && value.length > 40), 'real facade must relay a signed transaction')
+      await route.fulfill({ status: 401, headers: cors, body: 'expired synthetic authorization' })
+    } else throw new Error(`Unexpected relay request ${path}`)
+  })
+  await page.route('https://rpc-acceptance.example.test/**', async (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+    const body = route.request().postDataJSON()
+    assert.equal(body.method, 'getLatestBlockhash')
+    assert.equal(route.request().headers().authorization, 'Bearer synthetic-rpc-token')
+    await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({
+      jsonrpc: '2.0', id: body.id,
+      result: { context: { slot: 1 }, value: { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 100 } },
+    }) })
+  })
+  try {
+    await page.evaluate(async () => {
+      const sdk = window.AltudeWalletSDK
+      const gasStation = new sdk.AltudeGasStation({ apiKey: 'real-relay-test', baseUrl: 'https://relay-acceptance.example.test', network: 'devnet' })
+      const wallet = new sdk.AltudeWallet({
+        apiKey: 'real-relay-test', apiBaseUrl: 'https://api.example.test', auth: {}, network: 'devnet', gasStation,
+        fetch: async (url, request) => {
+          if (url.endsWith('/auth0')) return new Response(JSON.stringify({
+            Success: true, SessionToken: 'relay-session',
+            User: { Id: 'relay-user', WalletAddress: JSON.parse(request.body).walletAddress },
+          }), { headers: { 'Content-Type': 'application/json' } })
+          if (url.endsWith('/signout')) return new Response('{"Success":true}', { headers: { 'Content-Type': 'application/json' } })
+          throw new Error(`Unexpected identity request ${url}`)
+        },
+      })
+      await wallet.connect({ identityKey: 'real-relay-identity', accessToken: 'synthetic' })
+      window.realRelayWallet = wallet
+      wallet.onEvent((event) => {
+        if (event.type === 'transaction:confirmation')
+          window.realRelayApproval = wallet.approveTransaction(event.id).then(() => 'submitted', (error) => error.code)
+      })
+      window.realRelayOutcome = wallet.requestTransaction({
+        kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 1,
+      }).then(() => 'submitted', (error) => { window.realRelayError = error.message; return error.code })
+    })
+    await Promise.race([refreshReached, page.waitForFunction(() => window.realRelayError, null, { timeout: 15_000 }).then(async () => { throw new Error(`Real relay failed: ${await page.evaluate(() => window.realRelayError)}`) })])
+    await page.evaluate(() => window.realRelayWallet.signOut())
+    releaseRefresh()
+    assert.equal(await page.evaluate(() => window.realRelayOutcome), 'SESSION')
+    assert.equal(await page.evaluate(() => window.realRelayApproval), 'SESSION')
+    assert.equal(relayCount, 1, 'sign-out during refresh must prevent the authenticated retry')
+    assert.ok(configCount >= 2, 'real dispatcher must refresh configuration after relay 401')
+  } finally {
+    releaseRefresh()
+    await page.unroute('https://relay-acceptance.example.test/**')
+    await page.unroute('https://rpc-acceptance.example.test/**')
+  }
+}
+
+async function testRealRelayNetworkChange(page) {
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' }
+  for (const operation of ['transfer', 'provision']) {
+    let relayCount = 0
+    const configNetworks = []
+    const rpcMethods = []
+    const base = `https://network-${operation}.example.test`
+    const rpc = `https://rpc-network-${operation}.example.test`
+    await page.route(`${base}/**`, async (route) => {
+      const request = route.request()
+      if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+      assert.equal(request.headers()['x-api-key'], `network-${operation}`)
+      const path = new URL(request.url()).pathname.toLowerCase()
+      if (path === '/api/transaction/config') {
+        const network = relayCount ? 'mainnet-beta' : 'devnet'
+        configNetworks.push(network)
+        await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({
+          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+          RpcUrl: rpc, Token: 'synthetic-network-token', TokenExpiration: null, RpcEnvironment: network,
+        }) })
+      } else {
+        assert.equal(path, operation === 'transfer' ? '/api/transaction/send' : '/api/account/create')
+        relayCount++
+        const body = request.postDataJSON()
+        const signed = body.SignedTransaction ?? body.signedTransaction
+        assert.equal(typeof signed, 'string')
+        assert.ok(Buffer.from(signed, 'base64').length > 100, 'actual facade must submit a signed transaction')
+        await route.fulfill({ status: 401, headers: cors, body: 'synthetic expired authorization' })
+      }
+    })
+    await page.route(`${rpc}/**`, async (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+      assert.equal(route.request().headers().authorization, 'Bearer synthetic-network-token')
+      const body = route.request().postDataJSON()
+      rpcMethods.push(body.method)
+      const value = body.method === 'getAccountInfo'
+        ? null
+        : body.method === 'getLatestBlockhash'
+          ? { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 100 }
+          : undefined
+      assert.notEqual(value, undefined, `Unexpected RPC method ${body.method}`)
+      await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({
+        jsonrpc: '2.0', id: body.id, result: { context: { slot: 1 }, value },
+      }) })
+    })
+    try {
+      const evidence = await page.evaluate(async ({ operation, base }) => {
+        const sdk = window.AltudeWalletSDK
+        const gasStation = new sdk.AltudeGasStation({ apiKey: `network-${operation}`, baseUrl: base, network: 'devnet' })
+        const wallet = new sdk.AltudeWallet({
+          apiKey: `network-${operation}`, apiBaseUrl: 'https://api.example.test', network: 'devnet', auth: {}, gasStation,
+          fetch: async (url, request) => {
+            if (!url.endsWith('/auth0')) throw new Error(`Unexpected identity request ${url}`)
+            return new Response(JSON.stringify({
+              Success: true, SessionToken: 'network-session',
+              User: { Id: `network-${operation}`, WalletAddress: JSON.parse(request.body).walletAddress },
+            }))
+          },
+        })
+        await wallet.connect({ identityKey: `network-refresh-${operation}`, accessToken: 'synthetic' })
+        let approval
+        let confirmedNetwork
+        wallet.onEvent((event) => {
+          if (event.type === 'transaction:confirmation' || event.type === 'provisioning:confirmation') {
+            confirmedNetwork = event.type === 'transaction:confirmation' ? event.intent.network : event.network
+            const promise = event.type === 'transaction:confirmation'
+              ? wallet.approveTransaction(event.id) : wallet.approveProvisioning(event.id)
+            approval = promise.then(() => ({ success: true }), (error) => ({ code: error.code, message: error.message }))
+          }
+        })
+        const request = operation === 'transfer'
+          ? wallet.requestTransaction({ kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 1 })
+          : wallet.createAccount(['So11111111111111111111111111111111111111112'])
+        const outcome = await request.then(() => ({ success: true }), (error) => ({ code: error.code, message: error.message }))
+        return { confirmedNetwork, outcome, approval: await approval }
+      }, { operation, base })
+      assert.equal(evidence.confirmedNetwork, 'devnet')
+      assert.equal(evidence.outcome.code, 'RPC_ERROR')
+      assert.equal(evidence.approval.code, 'RPC_ERROR')
+      assert.match(evidence.outcome.message, /environment changed/i)
+      assert.equal(relayCount, 1, `${operation}: no retry or fallback after refreshed network changes`)
+      assert.equal(configNetworks.at(-1), 'mainnet-beta')
+      assert.ok(configNetworks.includes('devnet'))
+      assert.ok(rpcMethods.includes('getLatestBlockhash'))
+      if (operation === 'provision') assert.ok(rpcMethods.includes('getAccountInfo'))
+    } finally {
+      await page.unroute(`${base}/**`)
+      await page.unroute(`${rpc}/**`)
+    }
+  }
+}
+
+async function testIdentityAndPresentations(page) {
+  for (const presentation of ['inline', 'fullscreen']) {
+    await page.evaluate((presentation) => {
+      const sdk = window.AltudeWalletSDK
+      const sessions = new Map()
+      window.presentationRequests = []
+      const wallet = new sdk.AltudeWallet({
+        apiKey: `presentation-${presentation}`, apiBaseUrl: 'https://api.example.test',
+        auth: {
+          startOtp: async () => {},
+          verifyOtp: async (_channel, identifier) => ({ identityKey: `identity:${presentation}:${identifier}`, accessToken: identifier }),
+        },
+        fetch: async (url, request) => {
+          const path = new URL(url).pathname
+          window.presentationRequests.push(path)
+          let data
+          if (path.endsWith('/auth0')) {
+            const body = JSON.parse(request.body)
+            const user = { id: body.accessToken, email: body.accessToken, walletAddress: body.walletAddress }
+            const token = `token:${body.accessToken}`
+            sessions.set(token, user)
+            data = { Success: true, SessionToken: token, User: user }
+          } else if (path.endsWith('/session')) {
+            const token = new Headers(request.headers).get('Authorization').replace('Bearer ', '')
+            data = { IsAuthenticated: true, User: sessions.get(token) }
+          } else throw new Error(`Unexpected request ${path}`)
+          return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } })
+        },
+      })
+      window.presentationWallet = wallet
+      window.testMount(wallet, { presentation, authMethods: { emailOtp: true } })
+    }, presentation)
+    const root = page.locator('#acceptance')
+    assert.equal(await root.getByRole('region').count(), 1)
+    assert.equal(await root.getByRole('dialog').count(), 0)
+    const email = root.getByRole('textbox', { name: 'Email address' })
+    await email.fill('')
+    await email.fill('first@example.test')
+    await root.getByRole('button', { name: 'Send code', exact: true }).click()
+    await root.getByRole('textbox', { name: 'Digit 1 of 6', exact: true }).pressSequentially('246810')
+    await root.getByText('first@example.test', { exact: true }).waitFor()
+    const identities = await page.evaluate(async (presentation) => {
+      const wallet = window.presentationWallet
+      const first = wallet.state
+      const second = await wallet.connect({ identityKey: `identity:${presentation}:second@example.test`, accessToken: 'second@example.test' })
+      const signature = await wallet.signMessage(new TextEncoder().encode('identity switch'))
+      const restored = await wallet.restoreSession()
+      const restoredSignature = await wallet.signMessage(new TextEncoder().encode('identity restore'))
+      return { first, second, restored, signature: Array.from(signature), restoredSignature: Array.from(restoredSignature) }
+    }, presentation)
+    assert.notEqual(identities.first.address, identities.second.address)
+    assert.equal(identities.second.session.user.id, 'second@example.test')
+    assert.equal(identities.restored.address, identities.second.address)
+    assert.equal(identities.restored.session.user.id, 'second@example.test')
+    assert.equal(verifyEd25519(identities.second.address, Buffer.from('identity switch'), Buffer.from(identities.signature)), true)
+    assert.equal(verifyEd25519(identities.second.address, Buffer.from('identity restore'), Buffer.from(identities.restoredSignature)), true)
+    await root.getByText('second@example.test', { exact: true }).waitFor()
+    assert.deepEqual(await page.evaluate(() => window.presentationRequests), [
+      '/api/EmbeddedWallet/auth0', '/api/EmbeddedWallet/auth0', '/api/EmbeddedWallet/session',
+    ])
+  }
 }
 
 async function testLegacySocialOutcomes(page) {
@@ -804,7 +1277,6 @@ async function testIframeSources(page, origin) {
     })
     const trusted = await makeFrame(`${origin}/trusted-frame`)
     const wrongSource = await makeFrame(`${origin}/wrong-source`)
-    const wrongOrigin = await makeFrame(`${origin.replace('127.0.0.1', 'localhost')}/wrong-origin?parent=${encodeURIComponent(origin)}`)
     const provider = new sdk.WalletEmbedProvider({ walletUrl: `${origin}/trusted-frame`, iframe: trusted })
     const received = []
     let acceptTrusted
@@ -813,31 +1285,32 @@ async function testIframeSources(page, origin) {
     const envelope = { channel: sdk.WALLET_EMBED_CHANNEL, version: sdk.WALLET_EMBED_VERSION, id: 'unsolicited', type: 'session.changed', payload: { status: 'connected', address: 'test-address' } }
     const sender = `addEventListener('message', e => parent.postMessage(e.data, ${JSON.stringify(origin)}))`
     for (const frame of [trusted, wrongSource]) frame.contentWindow.eval(sender)
-    let invalidDeliveries = 0
-    let acceptInvalid
-    const invalidReceived = new Promise((resolve, reject) => {
-      acceptInvalid = resolve
-      setTimeout(() => reject(new Error('Both untrusted frames must actually deliver messages')), 5_000)
-    })
-    const observe = (event) => {
-      if (event.data?.type === 'session.changed' &&
-        (event.source === wrongSource.contentWindow || event.source === wrongOrigin.contentWindow)) {
-        if (++invalidDeliveries === 2) acceptInvalid()
+    const observed = (source, expectedOrigin) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Expected frame message was not delivered')), 5_000)
+      const listener = (event) => {
+        if (event.data?.type !== 'session.changed' || event.source !== source || event.origin !== expectedOrigin) return
+        clearTimeout(timer)
+        window.removeEventListener('message', listener)
+        resolve()
       }
-    }
-    window.addEventListener('message', observe)
-    // Both untrusted messages are delivered by real browser frame windows.
-    wrongOrigin.contentWindow.postMessage(envelope, new URL(wrongOrigin.src).origin)
+      window.addEventListener('message', listener)
+    })
+    const wrongSourceDelivered = observed(wrongSource.contentWindow, origin)
     wrongSource.contentWindow.postMessage(envelope, origin)
-    await invalidReceived
-    const afterWrongSources = received.length
+    await wrongSourceDelivered
     trusted.contentWindow.postMessage(envelope, origin)
     await trustedReceived
-    window.removeEventListener('message', observe)
+    const otherOrigin = origin.replace('127.0.0.1', 'localhost')
+    await new Promise((resolve) => {
+      trusted.onload = resolve
+      trusted.src = `${otherOrigin}/wrong-origin?parent=${encodeURIComponent(origin)}`
+    })
+    const wrongOriginDelivered = observed(trusted.contentWindow, otherOrigin)
+    trusted.contentWindow.postMessage({ ...envelope, payload: { status: 'connected', address: 'wrong-origin' } }, otherOrigin)
+    await wrongOriginDelivered
     provider.destroy()
-    for (const frame of [trusted, wrongSource, wrongOrigin]) frame.remove()
-    return { afterWrongSources, received }
+    for (const frame of [trusted, wrongSource]) frame.remove()
+    return received
   }, origin)
-  assert.equal(events.afterWrongSources, 0, 'real same-origin wrong-source and cross-origin frames are ignored')
-  assert.deepEqual(events.received, ['test-address'], 'only the exact configured frame can change wallet state')
+  assert.deepEqual(events, ['test-address'], 'reject wrong source and wrong origin even when the source is the configured frame')
 }

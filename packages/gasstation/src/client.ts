@@ -62,7 +62,13 @@ export interface WalletUiConfiguration {
   } | null
 }
 
-export interface SendTransactionOptions {
+export interface RelayDispatchConstraints {
+  expectedNetwork?: SolanaNetwork
+  /** Synchronous guard invoked after configuration awaits, immediately before each dispatch. */
+  beforeDispatch?: () => void
+}
+
+export interface SendTransactionOptions extends RelayDispatchConstraints {
   /** Base64-encoded signed transaction */
   transaction: string
   /** Commitment level — kept for forward compatibility; not sent to the relay */
@@ -84,7 +90,7 @@ export interface BatchTransactionOptions {
   signedTransaction: string
 }
 
-export interface CreateAccountOptions {
+export interface CreateAccountOptions extends RelayDispatchConstraints {
   /** Base64-encoded partially-signed transaction (built by the gasstation facade) */
   signedTransaction: string
 }
@@ -391,24 +397,16 @@ export class AltudeHttpClient {
 
   async sendTransaction(options: SendTransactionOptions): Promise<SendTransactionResponse> {
     if (this.isMockMode) {
+      options.beforeDispatch?.()
       return { Signature: 'MockSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    try {
-      const response = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
-        SignedTransaction: options.transaction,
-      })
-      return this.#normalizeTransactionResponse(response)
-    } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
-
-      const fallback = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
-        transaction: options.transaction,
-      })
-      return this.#normalizeTransactionResponse(fallback)
-    }
+    return this.#dispatchTransaction<SendTransactionResponse>(
+      '/api/Transaction/send',
+      { SignedTransaction: options.transaction },
+      { transaction: options.transaction },
+      options,
+    )
   }
 
   async sendBatchTransaction(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
@@ -439,22 +437,44 @@ export class AltudeHttpClient {
 
   async createAccount(options: CreateAccountOptions): Promise<CreateAccountResponse> {
     if (this.isMockMode) {
+      options.beforeDispatch?.()
       return { Signature: 'MockAccountSig' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
+    return this.#dispatchTransaction<CreateAccountResponse>(
+      '/api/Account/create',
+      { signedTransaction: options.signedTransaction },
+      { SignedTransaction: options.signedTransaction },
+      options,
+    )
+  }
+
+  async #dispatchTransaction<T extends SendTransactionResponse>(
+    path: string,
+    body: unknown,
+    fallbackBody: unknown,
+    constraints: RelayDispatchConstraints,
+  ): Promise<T> {
+    const guard = { failed: false }
+    const guarded: RelayDispatchConstraints = {
+      ...constraints,
+      beforeDispatch: () => {
+        try {
+          constraints.beforeDispatch?.()
+        } catch (error) {
+          guard.failed = true
+          throw error
+        }
+      },
+    }
     try {
-      const response = await this.#post<CreateAccountResponse>('/api/Account/create', {
-        signedTransaction: options.signedTransaction,
-      })
+      const response = await this.#post<T>(path, body, 3, guarded)
       return this.#normalizeTransactionResponse(response)
     } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+      if (guard.failed || !(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
         throw err
       }
-
-      const fallback = await this.#post<CreateAccountResponse>('/api/Account/create', {
-        SignedTransaction: options.signedTransaction,
-      })
+      const fallback = await this.#post<T>(path, fallbackBody, 3, guarded)
       return this.#normalizeTransactionResponse(fallback)
     }
   }
@@ -1005,15 +1025,21 @@ export class AltudeHttpClient {
   // Internal fetch with retry and error normalization
   // ---------------------------------------------------------------------------
 
-  async #post<T>(path: string, body?: unknown, retries = 3): Promise<T> {
-    return this.#request<T>('POST', path, body, retries)
+  async #post<T>(
+    path: string, body?: unknown, retries = 3,
+    constraints?: RelayDispatchConstraints,
+  ): Promise<T> {
+    return this.#request<T>('POST', path, body, retries, constraints)
   }
 
   async #get<T>(path: string, retries = 3): Promise<T> {
     return this.#request<T>('GET', path, undefined, retries)
   }
 
-  async #request<T>(method: 'GET' | 'POST', path: string, body?: unknown, retries = 3): Promise<T> {
+  async #request<T>(
+    method: 'GET' | 'POST', path: string, body?: unknown, retries = 3,
+    constraints?: RelayDispatchConstraints,
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1026,6 +1052,18 @@ export class AltudeHttpClient {
     let hasRefreshedConfigAfterAuthError = false
     const isConfigEndpoint = path.startsWith('/api/transaction/config')
     for (let attempt = 0; attempt < retries; attempt++) {
+      if (constraints?.expectedNetwork) {
+        const config = await this.getConfig()
+        const actual = config.RpcEnvironment.toLowerCase()
+        if ((actual === 'mainnet' ? 'mainnet-beta' : actual) !== constraints.expectedNetwork) {
+          throw new AltudeError({
+            code: 'RPC_ERROR',
+            message: 'The authoritative RPC environment changed before relay dispatch.',
+            remediation: 'Review the network and request a new approval.',
+          })
+        }
+      }
+      constraints?.beforeDispatch?.()
       try {
         const response = await fetch(url, {
           method,

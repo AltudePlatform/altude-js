@@ -344,15 +344,17 @@ assuming an ID is available immediately after requesting a transfer.
 The confirmation carries an immutable intent with that network. An explicitly
 configured wallet network is a constraint, not permission to override the
 server. Changes are rejected before signing and again before relay; the
-Gas Station execution receives the same `expectedNetwork`. Without an explicit
+Gas Station execution and its HTTP retry/fallback boundaries receive the same
+`expectedNetwork`. Without an explicit
 constraint, the server selects the network. Missing/unsupported config fails
 closed rather than falling back to a public RPC or guessed cluster.
 
 Approval claims the request immediately; concurrent `approveTransaction(id)`
 calls reject with a `TRANSACTION` error rather than submit another transfer.
 Requests stay cancellable while submitting. Changing identity, signing out, or
-rejecting the request cancels its pending result and prevents a late relay
-response from reporting completion. Cancellation cannot retract a transfer
+rejecting the request cancels its pending result, prevents HTTP submission or
+retry after cancellation (including during a final config refresh), and prevents
+a late relay response from reporting completion. Cancellation cannot retract a transfer
 already sent to the relay; check its status before requesting another transfer.
 
 `createAccount(tokens?, signal?)` now **requests** provisioning; it does not immediately
@@ -382,7 +384,7 @@ and external-wallet adapters; an enabled method without an adapter is not shown.
 When the API returns no wallet UI settings, use explicit developer configuration
 as a fallback (`authMethods` and `legal`, or a supplied `walletUi` object).
 With neither source configured, the UI offers no guessed login methods.
-Unavailable external providers are disabled, and capability checks also apply
+Unavailable external providers are hidden, and capability checks also apply
 to headless connection attempts. SMS send/resend requires initially unchecked
 consent and configured copy; editing the phone number or channel clears consent.
 

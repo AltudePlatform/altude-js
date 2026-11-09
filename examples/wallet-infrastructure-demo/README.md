@@ -22,7 +22,7 @@ providers are offered.
 
 The **Web3 wallets** switch enables Phantom and MetaMask options in either mode.
 Phantom connects as a Solana external wallet; MetaMask connects as an EVM
-external wallet. The options remain visible but disabled if an extension is missing;
+external wallet. Unavailable extensions are not offered;
 install the extension before opening the wallet to connect. These
 connections are external custody: they do not create an Altude API session, and
 the demo does not provide their transaction-signing adapters or sponsored
@@ -155,7 +155,9 @@ access is not an authenticated Altude session.
 
 **Simulated mode** uses a local demo OTP, `demoApiFetch`, and `DemoGasStation`;
 it does not send OTP messages, call the Altude API, or submit blockchain
-transactions. **Live mode** defaults to the SDK-provided browser broker and the
+transactions. Approvals sign a domain-separated JSON simulation message with the
+local signer; the returned base64 signature is not a Solana transaction or an
+on-chain receipt. **Live mode** defaults to the SDK-provided browser broker and the
 Altude backend/Gas Station. Live email/SMS keep code entry in the wallet UI
 and require the broker operator's connections and message delivery providers in
 Auth0. Never ship server-secret API keys or treat client-side profile data as
