@@ -37,11 +37,27 @@ export interface ConfigResponse {
   TokenExpiration: string | null
 }
 
+export function getConfigNetwork(config: ConfigResponse): SolanaNetwork {
+  const raw: unknown = config.RpcEnvironment
+  const network = typeof raw === 'string' ? raw.toLowerCase() : ''
+  if (network === 'mainnet' || network === 'mainnet-beta') return 'mainnet-beta'
+  if (network === 'devnet' || network === 'testnet') return network
+  throw new AltudeError({
+    code: 'RPC_ERROR',
+    message: 'The transaction config has an invalid RPC environment.',
+    remediation: 'Check the API key configuration and retry.',
+  })
+}
+
 export interface SendTransactionOptions {
   /** Base64-encoded signed transaction */
   transaction: string
   /** Commitment level — kept for forward compatibility; not sent to the relay */
   commitment?: 'confirmed' | 'finalized'
+  /** Approved transaction network; checked before every relay dispatch. */
+  expectedNetwork?: SolanaNetwork
+  /** Synchronous cancellation check immediately before each relay dispatch. */
+  beforeDispatch?: () => void
 }
 
 /** Mirrors Android SDK `TransactionResponse` — all fields are PascalCase as returned by the relay. */
@@ -366,22 +382,46 @@ export class AltudeHttpClient {
 
   async sendTransaction(options: SendTransactionOptions): Promise<SendTransactionResponse> {
     if (this.isMockMode) {
+      options.beforeDispatch?.()
       return { Signature: 'MockSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
+    const guard = { failed: false }
+    const prepareDispatch = async () => {
+      try {
+        if (options.expectedNetwork && getConfigNetwork(await this.getConfig(true)) !== options.expectedNetwork) {
+          throw new AltudeError({
+            code: 'RPC_ERROR',
+            message: 'The authoritative RPC environment changed before relay dispatch.',
+            remediation: 'Review the network and request a new approval.',
+          })
+        }
+      } catch (error) {
+        guard.failed = true
+        throw error
+      }
+    }
+    const beforeDispatch = () => {
+      try {
+        options.beforeDispatch?.()
+      } catch (error) {
+        guard.failed = true
+        throw error
+      }
+    }
     try {
       const response = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
         SignedTransaction: options.transaction,
-      })
+      }, 3, prepareDispatch, beforeDispatch)
       return this.#normalizeTransactionResponse(response)
     } catch (err) {
-      if (!(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
+      if (guard.failed || !(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
         throw err
       }
 
       const fallback = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
         transaction: options.transaction,
-      })
+      }, 3, prepareDispatch, beforeDispatch)
       return this.#normalizeTransactionResponse(fallback)
     }
   }
@@ -980,15 +1020,21 @@ export class AltudeHttpClient {
   // Internal fetch with retry and error normalization
   // ---------------------------------------------------------------------------
 
-  async #post<T>(path: string, body?: unknown, retries = 3): Promise<T> {
-    return this.#request<T>('POST', path, body, retries)
+  async #post<T>(
+    path: string, body?: unknown, retries = 3,
+    prepareDispatch?: () => Promise<void>, beforeDispatch?: () => void,
+  ): Promise<T> {
+    return this.#request<T>('POST', path, body, retries, prepareDispatch, beforeDispatch)
   }
 
   async #get<T>(path: string, retries = 3): Promise<T> {
     return this.#request<T>('GET', path, undefined, retries)
   }
 
-  async #request<T>(method: 'GET' | 'POST', path: string, body?: unknown, retries = 3): Promise<T> {
+  async #request<T>(
+    method: 'GET' | 'POST', path: string, body?: unknown, retries = 3,
+    prepareDispatch?: () => Promise<void>, beforeDispatch?: () => void,
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1001,6 +1047,8 @@ export class AltudeHttpClient {
     let hasRefreshedConfigAfterAuthError = false
     const isConfigEndpoint = path.startsWith('/api/transaction/config')
     for (let attempt = 0; attempt < retries; attempt++) {
+      if (prepareDispatch) await prepareDispatch()
+      beforeDispatch?.()
       try {
         const response = await fetch(url, {
           method,

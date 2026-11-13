@@ -8,7 +8,8 @@ export type {
   CloseAccountOptions,
   GaslessTransactionSigner,
 } from './gasstation.js'
-export { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient, ALTUDE_FEE_PAYER } from './client.js'
+export { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient, getConfigNetwork, ALTUDE_FEE_PAYER } from './client.js'
+export type { SolanaNetwork } from '@altude/core'
 export type {
   BlockhashResponse,
   ConfigResponse,

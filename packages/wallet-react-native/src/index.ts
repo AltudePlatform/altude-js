@@ -13,6 +13,7 @@ export type {
   NativeWalletState,
   NativeWalletStatus,
   NativeWalletTransfer,
+  NativeWalletTransferApproval,
 } from './wallet.js'
 export { NativeWalletSessionAdapter } from './session.js'
 export type { NativeWalletAccess, NativeWalletAccessSession } from './session.js'

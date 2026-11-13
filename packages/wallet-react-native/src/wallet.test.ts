@@ -205,6 +205,7 @@ afterEach(() => {
   })
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('AltudeNativeWallet', () => {
@@ -515,6 +516,10 @@ describe('AltudeNativeWallet', () => {
   it('submits only the frozen approved transfer through Gas Station with a guarded signer', async () => {
     const { wallet } = makeWallet()
     await wallet.connect()
+    vi.spyOn(AltudeGasStation.prototype, 'getConfig').mockResolvedValue({
+      FeePayer: 'fee-payer', RpcUrl: 'https://rpc.example.test', Token: 'token',
+      RpcEnvironment: 'devnet', TokenExpiration: null,
+    })
     const send = vi
       .spyOn(AltudeGasStation.prototype, 'send')
       .mockImplementation(async (options) => {
@@ -527,17 +532,25 @@ describe('AltudeNativeWallet', () => {
     const intent = { kind: 'sol-transfer' as const, recipient: 'original', amount: 7 }
     const result = await wallet.sendTransfer(intent, (snapshot) => {
       expect(Object.isFrozen(snapshot)).toBe(true)
+      expect(snapshot.network).toBe('devnet')
       intent.recipient = 'changed'
       intent.amount = 500
       return true
     })
     expect(result.Signature).toBe('signed-transfer')
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ toAddress: 'original', amount: 7 }))
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      toAddress: 'original', amount: 7, expectedNetwork: 'devnet',
+    }))
+    expect(typeof send.mock.calls[0]?.[0].beforeDispatch).toBe('function')
   })
 
   it('does not submit after account switching during local authorization', async () => {
     const { wallet } = makeWallet()
     await wallet.connect()
+    vi.spyOn(AltudeGasStation.prototype, 'getConfig').mockResolvedValue({
+      FeePayer: 'fee-payer', RpcUrl: 'https://rpc.example.test', Token: 'token',
+      RpcEnvironment: 'devnet', TokenExpiration: null,
+    })
     const send = vi.spyOn(AltudeGasStation.prototype, 'send')
     await expect(
       wallet.sendTransfer({ kind: 'sol-transfer', recipient: 'recipient', amount: 1 }, async () => {
@@ -546,6 +559,58 @@ describe('AltudeNativeWallet', () => {
       }),
     ).rejects.toMatchObject({ code: 'SESSION' })
     expect(send).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid network configuration before asking for approval', async () => {
+    const { wallet } = makeWallet()
+    await wallet.connect()
+    vi.spyOn(AltudeGasStation.prototype, 'getConfig').mockResolvedValue({
+      FeePayer: 'fee-payer', RpcUrl: 'https://rpc.example.test', Token: 'token',
+      RpcEnvironment: 'unknown', TokenExpiration: null,
+    })
+    const approve = vi.fn(() => true)
+    await expect(wallet.sendTransfer({
+      kind: 'sol-transfer', recipient: 'recipient', amount: 1,
+    }, approve)).rejects.toMatchObject({ code: 'RPC_ERROR' })
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('prevents a real relay dispatch if the wallet locks after signing', async () => {
+    const { wallet } = makeWallet()
+    await wallet.connect()
+    let configCount = 0
+    let relayCount = 0
+    vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => {
+      if (input.endsWith('/api/transaction/config')) {
+        configCount++
+        if (configCount === 3) wallet.lock()
+        return Promise.resolve(new Response(JSON.stringify({
+          FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+          RpcUrl: 'https://rpc.example.test', Token: 'token', RpcEnvironment: 'devnet',
+          TokenExpiration: '2099-01-01T00:00:00Z',
+        })))
+      }
+      if (input.startsWith('https://rpc.example.test')) {
+        if (typeof init?.body !== 'string') throw new Error('Expected JSON RPC body.')
+        const request = JSON.parse(init.body) as { id: string | number }
+        return Promise.resolve(new Response(JSON.stringify({
+          jsonrpc: '2.0', id: request.id, result: {
+            context: { slot: 1 },
+            value: { blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N', lastValidBlockHeight: 100 },
+          },
+        })))
+      }
+      if (input.endsWith('/api/Transaction/send')) {
+        relayCount++
+        return Promise.resolve(new Response(JSON.stringify({ Signature: 'unexpected' })))
+      }
+      throw new Error(`Unexpected request: ${input}`)
+    }))
+    await expect(wallet.sendTransfer({
+      kind: 'sol-transfer', recipient: 'So11111111111111111111111111111111111111112', amount: 1,
+    }, () => true)).rejects.toMatchObject({ code: 'SESSION' })
+    expect(configCount).toBe(3)
+    expect(relayCount).toBe(0)
   })
 
   it('rejects wrong server app or user bindings before exposing a signer', async () => {

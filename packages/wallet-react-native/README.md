@@ -104,8 +104,10 @@ tracked in [#79](https://github.com/AltudePlatform/altude-js/issues/79).
 An identity credential cannot reconstruct a Solana key. Device storage protection
 is not a passkey authentication or cross-device recovery claim.
 
-Transfers snapshot and freeze the recipient, amount and mint before local
-approval. Session validity is checked before approval and again before signing.
+Transfers snapshot and freeze the recipient, amount, mint and authoritative network before local
+approval. The approval UI must display the network. The SDK rechecks the approved
+network and cancellation immediately before each relay dispatch, including retries.
+Session validity is checked before approval and again before signing.
 Account switching, lock, expiry, refresh failure, or revocation invalidate the
 signer and stale completions. Gas Station builds and relays using Altude's
 existing transaction configuration, fresh blockhash and configured fee payer;

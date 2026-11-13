@@ -1,5 +1,5 @@
-import { AltudeGasStation } from '@altude/gasstation'
-import type { GaslessTransactionSigner, SendTransactionResponse } from '@altude/gasstation'
+import { AltudeGasStation, getConfigNetwork } from '@altude/gasstation'
+import type { GaslessTransactionSigner, SendTransactionResponse, SolanaNetwork } from '@altude/gasstation'
 import { NativeWalletClient } from './client.js'
 import type { NativeWalletClientOptions } from './client.js'
 import { NativeWalletError } from './errors.js'
@@ -41,6 +41,10 @@ export type NativeWalletTransfer =
       readonly amount: number
       readonly mint: string
     }
+
+export type NativeWalletTransferApproval = NativeWalletTransfer & {
+  readonly network: SolanaNetwork
+}
 
 export interface AltudeNativeWalletOptions extends Omit<NativeWalletClientOptions, 'onSignedOut'> {
   keyStore: NativeWalletKeyStore
@@ -120,7 +124,7 @@ export class AltudeNativeWallet {
 
   async sendTransfer(
     intent: NativeWalletTransfer,
-    authorize: (intent: Readonly<NativeWalletTransfer>) => boolean | Promise<boolean>,
+    authorize: (intent: NativeWalletTransferApproval) => boolean | Promise<boolean>,
   ): Promise<SendTransactionResponse> {
     const kind: unknown = intent.kind
     if (kind !== 'sol-transfer' && kind !== 'spl-transfer') {
@@ -152,7 +156,10 @@ export class AltudeNativeWallet {
     }
     const generation = this.#generation
     const signer = await this.#authorizedSigner(generation)
-    if (!(await authorize(snapshot)))
+    const network = getConfigNetwork(await this.#station.getConfig(true))
+    this.#assertCurrent(generation)
+    const approval: NativeWalletTransferApproval = Object.freeze({ ...snapshot, network })
+    if (!(await authorize(approval)))
       throw new NativeWalletError('CANCELLED', 'The wallet transfer was not approved.')
     this.#assertCurrent(generation)
     const guardedSigner: GaslessTransactionSigner = {
@@ -172,6 +179,12 @@ export class AltudeNativeWallet {
       amount: snapshot.amount,
       ...(snapshot.kind === 'spl-transfer' ? { token: snapshot.mint } : {}),
       sourceSigner: guardedSigner,
+      expectedNetwork: network,
+      beforeDispatch: () => {
+        this.#assertCurrent(generation)
+        void this.state
+        this.#assertCurrent(generation)
+      },
     })
     this.#assertCurrent(generation)
     return result
