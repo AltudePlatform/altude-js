@@ -68,7 +68,6 @@ export class AltudeNativeWallet {
   #generation = 0
   #connecting = false
   #signingOut = false
-  #hasIdentity = false
   #expiryTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(options: AltudeNativeWalletOptions) {
@@ -116,7 +115,6 @@ export class AltudeNativeWallet {
       try {
         await this.#auth.signOut()
       } finally {
-        this.#hasIdentity = false
         this.#signingOut = false
       }
     }
@@ -203,22 +201,16 @@ export class AltudeNativeWallet {
       this.#setState('authenticating', null, null, null)
       this.#progress('authenticating')
       this.#assertCurrent(generation)
-      if (!restore && this.#hasIdentity) {
-        try {
-          await this.#auth.signOut()
-        } finally {
-          this.#hasIdentity = false
-        }
+      if (!restore) {
+        await this.#auth.signOut()
         this.#assertCurrent(generation)
       }
       const identity = restore ? await this.#auth.restoreSession() : await this.#auth.signIn()
       this.#assertCurrent(generation)
       if (!identity) {
-        this.#hasIdentity = false
         this.#setState('disconnected', null, null, null)
         return this.#state
       }
-      this.#hasIdentity = true
       this.#setState('authenticated')
       this.#progress('connecting-account')
       this.#assertCurrent(generation)

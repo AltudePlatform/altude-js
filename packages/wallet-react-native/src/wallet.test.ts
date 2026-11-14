@@ -162,10 +162,9 @@ function makeServer() {
   }
 }
 
-function makeWallet(server = makeServer(), keys = memoryKeys(), seed = 1) {
-  let randomCounter = seed
+function memoryRefreshTokens(): RefreshTokenStore {
   let refreshToken: string | null = null
-  const refreshTokenStore: RefreshTokenStore = {
+  return {
     get: () => Promise.resolve(refreshToken),
     set: (_app, token) => {
       refreshToken = token
@@ -176,6 +175,23 @@ function makeWallet(server = makeServer(), keys = memoryKeys(), seed = 1) {
       return Promise.resolve()
     },
   }
+}
+
+function makeWallet(
+  server = makeServer(),
+  keys = memoryKeys(),
+  seed = 1,
+  refreshTokenStore = memoryRefreshTokens(),
+) {
+  let randomCounter = seed
+  const browser = {
+    openAuthSession: vi.fn((url: string, callback: string) =>
+      Promise.resolve({
+        type: 'success' as const,
+        url: `${callback}?code=broker-code&state=${new URL(url).searchParams.get('state') ?? ''}`,
+      }),
+    ),
+  }
   const wallet = new AltudeNativeWallet({
     apiKey: 'client-key',
     apiBaseUrl: 'https://api.altude.so',
@@ -183,17 +199,10 @@ function makeWallet(server = makeServer(), keys = memoryKeys(), seed = 1) {
     randomBytes: (length) => new Uint8Array(length).fill(randomCounter++),
     refreshTokenStore,
     fetch: server.fetcher,
-    browser: {
-      openAuthSession(url, callback) {
-        return Promise.resolve({
-          type: 'success',
-          url: `${callback}?code=broker-code&state=${new URL(url).searchParams.get('state') ?? ''}`,
-        })
-      },
-    },
+    browser,
   })
   clients.push(wallet)
-  return { wallet, keys, server }
+  return { wallet, keys, server, browser }
 }
 
 beforeEach(() => {
@@ -239,6 +248,108 @@ describe('AltudeNativeWallet', () => {
     expect(keys.keys.size).toBe(1)
     await wallet.connect()
     expect(server.address).toBe(original)
+  })
+
+  it('revokes the persisted family before fresh login after restart replaces credentials', async () => {
+    const store = memoryRefreshTokens()
+    const first = makeWallet(makeServer(), memoryKeys(), 1, store)
+    await first.wallet.connect()
+    first.wallet.lock()
+    const oldToken = await store.get(appId)
+    const originalAddress = first.server.address
+    const original = first.server.fetcher.getMockImplementation()
+    let completeRevoke: (() => void) | undefined
+    const revokeStarted = new Promise<void>((resolve) => {
+      first.server.fetcher.mockImplementation(async (input, options) => {
+        if (!original) throw new Error('Expected API fixture.')
+        if (typeof input === 'string' && input.endsWith('/revoke')) {
+          expect(JSON.parse(options?.body as string)).toEqual({
+            AppId: appId,
+            RefreshToken: oldToken,
+          })
+          await new Promise<void>((complete) => {
+            completeRevoke = complete
+            resolve()
+          })
+        }
+        const reply = await original(input, options)
+        if (typeof input === 'string' && input.endsWith('/token')) {
+          return new Response(
+            JSON.stringify({ ...(await reply.json()), RefreshToken: 'refresh-new-family' }),
+          )
+        }
+        return reply
+      })
+    })
+    const restarted = makeWallet(first.server, first.keys, 10, store)
+    const login = restarted.wallet.connect()
+    await revokeStarted
+    expect(restarted.browser.openAuthSession).not.toHaveBeenCalled()
+    expect(await store.get(appId)).toBe(oldToken)
+    completeRevoke?.()
+    expect(await login).toMatchObject({ status: 'ready', address: originalAddress })
+    expect(await store.get(appId)).toBe('refresh-new-family')
+    expect(
+      first.server.fetcher.mock.calls.filter(
+        ([input]) => typeof input === 'string' && input.endsWith('/revoke'),
+      ),
+    ).toHaveLength(1)
+    expect(first.keys.keys.size).toBe(1)
+  })
+
+  it('rotates the persisted credential without revoking its family on restore after restart', async () => {
+    const store = memoryRefreshTokens()
+    const first = makeWallet(makeServer(), memoryKeys(), 1, store)
+    await first.wallet.connect()
+    first.wallet.lock()
+    const oldToken = await store.get(appId)
+    const original = first.server.fetcher.getMockImplementation()
+    first.server.fetcher.mockImplementation(async (input, options) => {
+      if (!original) throw new Error('Expected API fixture.')
+      const reply = await original(input, options)
+      if (typeof input === 'string' && input.endsWith('/refresh')) {
+        expect(JSON.parse(options?.body as string)).toEqual({
+          AppId: appId,
+          RefreshToken: oldToken,
+        })
+        return new Response(
+          JSON.stringify({ ...(await reply.json()), RefreshToken: 'refresh-rotated' }),
+        )
+      }
+      return reply
+    })
+    first.server.fetcher.mockClear()
+    const restarted = makeWallet(first.server, first.keys, 10, store)
+    expect(await restarted.wallet.restore()).toMatchObject({
+      status: 'ready',
+      address: first.server.address,
+    })
+    expect(await store.get(appId)).toBe('refresh-rotated')
+    expect(restarted.browser.openAuthSession).not.toHaveBeenCalled()
+    expect(
+      first.server.fetcher.mock.calls.some(
+        ([input]) => typeof input === 'string' && input.endsWith('/revoke'),
+      ),
+    ).toBe(false)
+    expect(first.keys.keys.size).toBe(1)
+  })
+
+  it('blocks fresh login after restart when persisted-family revocation fails', async () => {
+    const store = memoryRefreshTokens()
+    const first = makeWallet(makeServer(), memoryKeys(), 1, store)
+    await first.wallet.connect()
+    first.wallet.lock()
+    first.server.revokeFails = true
+    first.server.fetcher.mockClear()
+    const restarted = makeWallet(first.server, first.keys, 10, store)
+    await expect(restarted.wallet.connect()).rejects.toMatchObject({ code: 'API', status: 503 })
+    expect(restarted.wallet.state.status).toBe('failed')
+    expect(restarted.browser.openAuthSession).not.toHaveBeenCalled()
+    expect(
+      first.server.fetcher.mock.calls.some(
+        ([input]) => typeof input === 'string' && input.endsWith('/token'),
+      ),
+    ).toBe(false)
   })
 
   it('resumes the same key when registration succeeded but its response was lost', async () => {

@@ -85,7 +85,10 @@ and validates the resulting wallet session before exposing `ready`.
 and signer setup. `lock()` immediately invalidates every active signer and clears
 the derived session; `signOut()` also revokes the native family, even when a
 state listener throws. Starting a new login first locks the old signer and
-revokes its native family.
+revokes any native family in protected refresh-token storage, including after
+an app restart, before opening the browser or replacing credentials. Cleanup
+failure aborts that login attempt. Use `restore()` to preserve the family and
+rotate its refresh credential instead.
 
 State distinguishes `authenticating`, `authenticated`, `creating`, `recovering`,
 `recovery-required`, `locked`, `ready`, `failed`, and `disconnected`.
