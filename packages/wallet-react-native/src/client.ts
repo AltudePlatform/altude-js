@@ -1,5 +1,6 @@
 import { NativeWalletError } from './errors.js'
 import { createPkcePair, createState } from './crypto.js'
+import { normalizeApiBaseUrl } from './platform.js'
 import type {
   NativeAuthBrowser,
   NativeBrowserResult,
@@ -98,8 +99,8 @@ export class NativeWalletClient {
       )
     }
 
-    const normalizedOrigin = `${apiUrl.protocol.toLowerCase()}//${apiUrl.authority.toLowerCase()}`
-    const basePath = apiUrl.path.replace(/\/+$/, '')
+    const normalizedApiBaseUrl = normalizeApiBaseUrl(options.apiBaseUrl)
+    const normalizedOrigin = normalizeApiBaseUrl(`${apiUrl.protocol}//${apiUrl.authority}`)
     const fetchImpl = options.fetch ?? globalThis.fetch
     if (typeof fetchImpl !== 'function') {
       throw new NativeWalletError(
@@ -109,7 +110,7 @@ export class NativeWalletClient {
     }
 
     this.#apiKey = options.apiKey
-    this.#apiBaseUrl = `${normalizedOrigin}${basePath}`
+    this.#apiBaseUrl = normalizedApiBaseUrl
     this.#apiOrigin = normalizedOrigin
     this.#browser = options.browser
     this.#refreshTokenStore = options.refreshTokenStore
@@ -244,7 +245,7 @@ export class NativeWalletClient {
       }
       if (config) {
         try {
-          refreshToken = await this.#refreshTokenStore.get(config.appId)
+          refreshToken = await this.#refreshTokenStore.get(this.#apiBaseUrl, config.appId)
         } catch (error) {
           revokeFailure = error
         }
@@ -259,7 +260,7 @@ export class NativeWalletClient {
           }
         }
         try {
-          await this.#refreshTokenStore.remove(config.appId)
+          await this.#refreshTokenStore.remove(this.#apiBaseUrl, config.appId)
         } catch (error) {
           storageFailure = error
         }
@@ -301,7 +302,7 @@ export class NativeWalletClient {
     const config = await this.getBrokerConfig()
     let refreshToken: string | null
     try {
-      refreshToken = await this.#refreshTokenStore.get(config.appId)
+      refreshToken = await this.#refreshTokenStore.get(this.#apiBaseUrl, config.appId)
     } catch (cause) {
       if (cause instanceof NativeWalletError) throw cause
       throw new NativeWalletError(
@@ -339,7 +340,7 @@ export class NativeWalletClient {
         this.#accessToken = undefined
         this.#expiresAt = 0
         try {
-          await this.#refreshTokenStore.remove(config.appId)
+          await this.#refreshTokenStore.remove(this.#apiBaseUrl, config.appId)
         } catch (cause) {
           throw new NativeWalletError(
             'SECURE_STORAGE',
@@ -372,13 +373,13 @@ export class NativeWalletClient {
 
   async #persistRefreshToken(appId: string, token: string, tokenToRevoke: string): Promise<void> {
     try {
-      await this.#refreshTokenStore.set(appId, token)
+      await this.#refreshTokenStore.set(this.#apiBaseUrl, appId, token)
     } catch (cause) {
       this.#accessToken = undefined
       this.#expiresAt = 0
       const failures: unknown[] = [cause]
       try {
-        await this.#refreshTokenStore.remove(appId)
+        await this.#refreshTokenStore.remove(this.#apiBaseUrl, appId)
       } catch (error) {
         failures.push(error)
       }
@@ -411,7 +412,7 @@ export class NativeWalletClient {
       revokeFailure = error
     }
     try {
-      await this.#refreshTokenStore.remove(appId)
+      await this.#refreshTokenStore.remove(this.#apiBaseUrl, appId)
     } catch (error) {
       storageFailure = error
     }
@@ -663,28 +664,33 @@ function parseHttpUrl(value: string): ParsedUrl | null {
 function isExpectedApiUrl(value: string, expected: string, apiOrigin: string): boolean {
   const actual = parseHttpUrl(value)
   const expectedUrl = parseHttpUrl(expected)
+  if (
+    !actual ||
+    !expectedUrl ||
+    !isSecureProtocol(actual.protocol, actual.authority) ||
+    !isValidAuthority(actual.authority)
+  ) {
+    return false
+  }
+  if (actual.query !== null || actual.fragment !== null) return false
   return (
-    actual !== null &&
-    expectedUrl !== null &&
-    isSecureProtocol(actual.protocol, actual.authority) &&
-    `${actual.protocol}//${actual.authority.toLowerCase()}` === apiOrigin &&
-    actual.path === expectedUrl.path &&
-    actual.query === null &&
-    actual.fragment === null
+    normalizeApiBaseUrl(`${actual.protocol}//${actual.authority}`) === apiOrigin &&
+    normalizeApiBaseUrl(value) === normalizeApiBaseUrl(expected)
   )
 }
 
 function parseTrustedIssuer(value: string, apiOrigin: string): boolean {
   const parsed = parseHttpUrl(value)
-  return (
-    parsed !== null &&
-    isSecureProtocol(parsed.protocol, parsed.authority) &&
-    isValidAuthority(parsed.authority) &&
-    parsed.path === '/' &&
-    `${parsed.protocol}//${parsed.authority.toLowerCase()}` === apiOrigin &&
-    parsed.query === null &&
-    parsed.fragment === null
-  )
+  if (
+    !parsed ||
+    !isSecureProtocol(parsed.protocol, parsed.authority) ||
+    !isValidAuthority(parsed.authority) ||
+    parsed.query !== null ||
+    parsed.fragment !== null
+  ) {
+    return false
+  }
+  return normalizeApiBaseUrl(value) === apiOrigin
 }
 
 function isValidAuthority(authority: string): boolean {

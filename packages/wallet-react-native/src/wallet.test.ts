@@ -165,12 +165,12 @@ function makeServer() {
 function memoryRefreshTokens(): RefreshTokenStore {
   let refreshToken: string | null = null
   return {
-    get: () => Promise.resolve(refreshToken),
-    set: (_app, token) => {
+    get: (_apiBaseUrl, _app) => Promise.resolve(refreshToken),
+    set: (_apiBaseUrl, _app, token) => {
       refreshToken = token
       return Promise.resolve()
     },
-    remove: () => {
+    remove: (_apiBaseUrl, _app) => {
       refreshToken = null
       return Promise.resolve()
     },
@@ -255,7 +255,7 @@ describe('AltudeNativeWallet', () => {
     const first = makeWallet(makeServer(), memoryKeys(), 1, store)
     await first.wallet.connect()
     first.wallet.lock()
-    const oldToken = await store.get(appId)
+    const oldToken = await store.get('https://api.altude.so', appId)
     const originalAddress = first.server.address
     const original = first.server.fetcher.getMockImplementation()
     let completeRevoke: (() => void) | undefined
@@ -285,10 +285,10 @@ describe('AltudeNativeWallet', () => {
     const login = restarted.wallet.connect()
     await revokeStarted
     expect(restarted.browser.openAuthSession).not.toHaveBeenCalled()
-    expect(await store.get(appId)).toBe(oldToken)
+    expect(await store.get('https://api.altude.so', appId)).toBe(oldToken)
     completeRevoke?.()
     expect(await login).toMatchObject({ status: 'ready', address: originalAddress })
-    expect(await store.get(appId)).toBe('refresh-new-family')
+    expect(await store.get('https://api.altude.so', appId)).toBe('refresh-new-family')
     expect(
       first.server.fetcher.mock.calls.filter(
         ([input]) => typeof input === 'string' && input.endsWith('/revoke'),
@@ -302,7 +302,7 @@ describe('AltudeNativeWallet', () => {
     const first = makeWallet(makeServer(), memoryKeys(), 1, store)
     await first.wallet.connect()
     first.wallet.lock()
-    const oldToken = await store.get(appId)
+    const oldToken = await store.get('https://api.altude.so', appId)
     const original = first.server.fetcher.getMockImplementation()
     first.server.fetcher.mockImplementation(async (input, options) => {
       if (!original) throw new Error('Expected API fixture.')
@@ -324,7 +324,7 @@ describe('AltudeNativeWallet', () => {
       status: 'ready',
       address: first.server.address,
     })
-    expect(await store.get(appId)).toBe('refresh-rotated')
+    expect(await store.get('https://api.altude.so', appId)).toBe('refresh-rotated')
     expect(restarted.browser.openAuthSession).not.toHaveBeenCalled()
     expect(
       first.server.fetcher.mock.calls.some(

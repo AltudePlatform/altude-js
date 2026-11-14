@@ -272,6 +272,15 @@ that key to enforce app scope. Broker requests use the documented `AppId` and
 PascalCase payloads. The SDK does not retry ambiguous code exchanges or refresh
 requests because the server may already have consumed the credential.
 
+Protected refresh credentials are scoped by the normalized API deployment URL
+(scheme and host are case-normalized, default ports and dot segments are
+canonicalized, trailing slashes are removed, and base-path casing is retained)
+and the original `AppId`; the API payload continues to use only that `AppId`.
+Earlier experimental Keychain entries scoped only by `AppId` are intentionally
+ignored and left untouched because their deployment cannot be determined
+safely. They are never copied, read, or removed by the deployment-scoped store;
+sign in again to establish a scoped credential.
+
 The returned Altude access token is an identity credential, not an embedded
 wallet session or proof of local key possession. Developer backends must
 validate its signature, exact issuer and audience, expiry, and app/tenant

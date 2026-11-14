@@ -10,9 +10,30 @@ export interface NativeAuthBrowser {
 }
 
 export interface RefreshTokenStore {
-  get(appId: string): Promise<string | null>
-  set(appId: string, token: string): Promise<void>
-  remove(appId: string): Promise<void>
+  get(apiBaseUrl: string, appId: string): Promise<string | null>
+  set(apiBaseUrl: string, appId: string, token: string): Promise<void>
+  remove(apiBaseUrl: string, appId: string): Promise<void>
+}
+
+export function normalizeApiBaseUrl(apiBaseUrl: string): string {
+  const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/i.exec(
+    apiBaseUrl,
+  )
+  const protocol = match?.[1]?.toLowerCase()
+  const authority = match?.[2]?.toLowerCase()
+  if (!protocol || !authority || match?.[4] !== undefined || match?.[5] !== undefined) {
+    throw new Error('An absolute API base URL without query or fragment is required.')
+  }
+
+  const authorityParts = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::(\d{1,5}))?$/i.exec(authority)
+  const host = authorityParts?.[1]
+  const port = authorityParts?.[2]
+  if (!host) throw new Error('The API base URL authority is invalid.')
+  const defaultPort = protocol === 'https' ? 443 : protocol === 'http' ? 80 : undefined
+  const normalizedAuthority =
+    port === undefined || Number(port) === defaultPort ? host : `${host}:${String(Number(port))}`
+  const path = normalizeApiPath(match?.[3] || '/')
+  return `${protocol}://${normalizedAuthority}${path.replace(/\/+$/, '')}`
 }
 
 export interface RandomBytesSource {
@@ -91,9 +112,11 @@ export function createKeychainRefreshTokenStore(keychain: KeychainModule): Refre
   }
 
   return {
-    async get(appId) {
+    async get(apiBaseUrl, appId) {
       try {
-        const credential = await keychain.getGenericPassword({ service: serviceFor(appId) })
+        const credential = await keychain.getGenericPassword({
+          service: serviceFor(apiBaseUrl, appId),
+        })
         return credential === false ? null : credential.password
       } catch (cause) {
         throw new NativeWalletError(
@@ -104,10 +127,10 @@ export function createKeychainRefreshTokenStore(keychain: KeychainModule): Refre
         )
       }
     },
-    async set(appId, token) {
+    async set(apiBaseUrl, appId, token) {
       try {
         const stored = await keychain.setGenericPassword('altude-wallet-refresh', token, {
-          service: serviceFor(appId),
+          service: serviceFor(apiBaseUrl, appId),
           accessible,
         })
         if (stored === false) {
@@ -122,9 +145,9 @@ export function createKeychainRefreshTokenStore(keychain: KeychainModule): Refre
         )
       }
     },
-    async remove(appId) {
+    async remove(apiBaseUrl, appId) {
       try {
-        const service = serviceFor(appId)
+        const service = serviceFor(apiBaseUrl, appId)
         const stored = await keychain.getGenericPassword({ service })
         if (stored === false) return
         const removed = await keychain.resetGenericPassword({ service })
@@ -160,6 +183,33 @@ export function createCryptoRandomSource(
   }
 }
 
-function serviceFor(appId: string): string {
-  return `so.altude.wallet.refresh.${encodeURIComponent(appId)}`
+function serviceFor(apiBaseUrl: string, appId: string): string {
+  return `so.altude.wallet.refresh.v2.${encodeURIComponent(normalizeApiBaseUrl(apiBaseUrl))}.${encodeURIComponent(appId)}`
+}
+
+function normalizeApiPath(path: string): string {
+  const segments = path.replace(/\\/g, '/').split('/')
+  const normalized: string[] = []
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index] ?? ''
+    const lowerSegment = segment.toLowerCase()
+    const isDot = segment === '.' || lowerSegment === '%2e'
+    const isDotDot =
+      segment === '..' ||
+      lowerSegment === '.%2e' ||
+      lowerSegment === '%2e.' ||
+      lowerSegment === '%2e%2e'
+    if (isDot) {
+      if (index === segments.length - 1) normalized.push('')
+      continue
+    }
+    if (isDotDot) {
+      if (normalized.length > 1) normalized.pop()
+      if (index === segments.length - 1) normalized.push('')
+      continue
+    }
+    normalized.push(segment)
+  }
+  const result = normalized.join('/')
+  return result.startsWith('/') ? result : `/${result}`
 }

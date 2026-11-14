@@ -44,14 +44,14 @@ function response(data: unknown, status = 200): Response {
 function makeStore(initial: string | null = null): RefreshTokenStore & { value: string | null } {
   return {
     value: initial,
-    get() {
+    get(_apiBaseUrl: string, _appId: string) {
       return Promise.resolve(this.value)
     },
-    set(_appId, token) {
+    set(_apiBaseUrl, _appId, token) {
       this.value = token
       return Promise.resolve()
     },
-    remove() {
+    remove(_apiBaseUrl: string, _appId: string) {
       this.value = null
       return Promise.resolve()
     },
@@ -275,7 +275,7 @@ describe('NativeWalletClient', () => {
       const failure = await client.refreshSession().catch((error: unknown) => error)
       expect(failure).toBeInstanceOf(NativeWalletError)
       expect(failure).toMatchObject({ code: 'SECURE_STORAGE' })
-      expect(remove).toHaveBeenCalledWith(brokerConfig.AppId)
+      expect(remove).toHaveBeenCalledWith('https://api.altude.so', brokerConfig.AppId)
       expect(store.value).toBe(removalFails ? 'refresh-1' : null)
       const revokeCall = vi
         .mocked(fetcher)
@@ -654,12 +654,15 @@ describe('native platform adapters', () => {
           options: { service: string; accessible?: unknown }
         }
       | undefined
+    const items = new Map<string, string>([['so.altude.wallet.refresh.-17.42', 'legacy-token']])
     const keychain = {
       ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only' },
-      getGenericPassword: vi.fn(
-        (): Promise<false | { password: string }> =>
-          Promise.resolve(saved ? { password: saved.password } : false),
-      ),
+      getGenericPassword: vi.fn(({ service }: { service: string }) => {
+        const password = items.get(service)
+        return Promise.resolve<false | { password: string }>(
+          password === undefined ? false : { password },
+        )
+      }),
       setGenericPassword: vi.fn(
         (
           username: string,
@@ -667,28 +670,115 @@ describe('native platform adapters', () => {
           options: { service: string; accessible?: unknown },
         ) => {
           saved = { username, password, options }
+          items.set(options.service, password)
           return Promise.resolve(true)
         },
       ),
-      resetGenericPassword: vi.fn(() => {
+      resetGenericPassword: vi.fn(({ service }: { service: string }) => {
         saved = undefined
+        items.delete(service)
         return Promise.resolve(true)
       }),
     }
     const store = createKeychainRefreshTokenStore(keychain)
 
-    await store.set('-17.42', 'refresh-secret')
+    await store.set('https://api.altude.so', '-17.42', 'refresh-secret')
     expect(saved).toMatchObject({
       username: 'altude-wallet-refresh',
       password: 'refresh-secret',
       options: {
-        service: 'so.altude.wallet.refresh.-17.42',
+        service: 'so.altude.wallet.refresh.v2.https%3A%2F%2Fapi.altude.so.-17.42',
         accessible: 'device-only',
       },
     })
-    await expect(store.get('-17.42')).resolves.toBe('refresh-secret')
-    await store.remove('-17.42')
+    await expect(store.get('https://api.altude.so', '-17.42')).resolves.toBe('refresh-secret')
+    await store.remove('https://api.altude.so', '-17.42')
     expect(saved).toBeUndefined()
+    expect(items.get('so.altude.wallet.refresh.-17.42')).toBe('legacy-token')
+    await expect(store.get('https://other.altude.so', '-17.42')).resolves.toBeNull()
+    await store.remove('https://other.altude.so', '-17.42')
+    expect(items.get('so.altude.wallet.refresh.-17.42')).toBe('legacy-token')
+  })
+
+  it('isolates same-AppId refresh cleanup between deployments in a shared Keychain', async () => {
+    const items = new Map<string, string>()
+    const keychain = {
+      ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only' },
+      getGenericPassword: vi.fn(({ service }: { service: string }) => {
+        const password = items.get(service)
+        return Promise.resolve<false | { password: string }>(
+          password === undefined ? false : { password },
+        )
+      }),
+      setGenericPassword: vi.fn(
+        (_username: string, password: string, options: { service: string }) => {
+          items.set(options.service, password)
+          return Promise.resolve(true)
+        },
+      ),
+      resetGenericPassword: vi.fn(({ service }: { service: string }) => {
+        items.delete(service)
+        return Promise.resolve(true)
+      }),
+    }
+    const store = createKeychainRefreshTokenStore(keychain)
+    const apiA = 'https://api.altude.so'
+    const apiBInput = 'HTTPS://STAGING.ALTUDE.SO:0443/native-wallet/./child/..////'
+    const apiB = 'https://staging.altude.so/native-wallet'
+    await store.set(apiA, brokerConfig.AppId, 'refresh-A')
+    await store.set(apiBInput, brokerConfig.AppId, 'refresh-B')
+
+    const configFor = (baseUrl: string) => {
+      const base = new URL(baseUrl)
+      return {
+        ...brokerConfig,
+        Issuer: `${base.origin}/`,
+        AuthorizationUrl: `${base.origin}${base.pathname.replace(/\/+$/, '')}/api/native-wallet/authorize`,
+        JwksUrl: `${base.origin}${base.pathname.replace(/\/+$/, '')}/api/native-wallet/jwks`,
+      }
+    }
+    const responses: string[] = []
+    const fetchFor = (baseUrl: string, refreshStatus = 200): typeof fetch =>
+      vi.fn<typeof fetch>((input, init) => {
+        const url = requestUrl(input)
+        if (url.endsWith('/config')) return Promise.resolve(response(configFor(baseUrl)))
+        if (url.endsWith('/refresh')) {
+          responses.push(JSON.stringify({ url, body: init?.body }))
+          return Promise.resolve(
+            refreshStatus === 200
+              ? response({ ...accessResponse, RefreshToken: 'refresh-A-rotated' })
+              : response({ Error: 'invalid_refresh_token' }, refreshStatus),
+          )
+        }
+        return Promise.resolve(response({ Error: 'invalid_request' }, 400))
+      })
+    const makeScopedClient = (apiBaseUrl: string, fetcher: typeof fetch) =>
+      new NativeWalletClient({
+        apiKey: 'client-safe-key',
+        apiBaseUrl,
+        browser: { openAuthSession: vi.fn() },
+        refreshTokenStore: store,
+        randomBytes: makeRandomBytes(),
+        fetch: fetcher,
+      })
+    const clientA = makeScopedClient(apiA, fetchFor(apiA))
+    const clientB = makeScopedClient(apiBInput, fetchFor(apiB, 401))
+
+    await expect(clientB.refreshSession()).rejects.toMatchObject({ status: 401 })
+    await expect(store.get(apiA, brokerConfig.AppId)).resolves.toBe('refresh-A')
+    await expect(store.get(apiB, brokerConfig.AppId)).resolves.toBeNull()
+    await expect(clientA.refreshSession()).resolves.toMatchObject({ accessToken: 'access-1' })
+    expect(responses).toEqual([
+      JSON.stringify({
+        url: `${apiB}/api/native-wallet/refresh`,
+        body: JSON.stringify({ AppId: brokerConfig.AppId, RefreshToken: 'refresh-B' }),
+      }),
+      JSON.stringify({
+        url: `${apiA}/api/native-wallet/refresh`,
+        body: JSON.stringify({ AppId: brokerConfig.AppId, RefreshToken: 'refresh-A' }),
+      }),
+    ])
+    await expect(store.get(apiA, brokerConfig.AppId)).resolves.toBe('refresh-A-rotated')
   })
 
   it('requires a cryptographically secure random provider', () => {
