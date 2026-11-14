@@ -64,6 +64,7 @@ export class NativeWalletClient {
   #accessToken: string | undefined
   #expiresAt = 0
   #loginPending = false
+  #signingOut = false
   #refreshPromise: Promise<NativeWalletSession | null> | undefined
   #generation = 0
 
@@ -129,10 +130,10 @@ export class NativeWalletClient {
   }
 
   async signIn(): Promise<NativeWalletSession> {
-    if (this.#loginPending || this.#refreshPromise) {
+    if (this.#loginPending || this.#refreshPromise || this.#signingOut) {
       throw new NativeWalletError(
         'CONCURRENT_OPERATION',
-        'Another native wallet authentication operation is already in progress.',
+        'Another native wallet authentication or sign-out operation is already in progress.',
       )
     }
 
@@ -194,10 +195,10 @@ export class NativeWalletClient {
   }
 
   async refreshSession(): Promise<NativeWalletSession | null> {
-    if (this.#loginPending) {
+    if (this.#loginPending || this.#signingOut) {
       throw new NativeWalletError(
         'CONCURRENT_OPERATION',
-        'A native wallet sign-in attempt is already in progress.',
+        'A native wallet sign-in or sign-out attempt is already in progress.',
       )
     }
     if (this.#refreshPromise) return this.#refreshPromise
@@ -218,60 +219,71 @@ export class NativeWalletClient {
   }
 
   async signOut(): Promise<void> {
-    this.#generation += 1
-    this.#accessToken = undefined
-    this.#expiresAt = 0
-    let config: NativeWalletBrokerConfig | undefined
-    let refreshToken: string | null = null
-    let configFailure: unknown
-    let revokeFailure: unknown
-    let storageFailure: unknown
-    let callbackFailure: unknown
-
-    try {
-      config = await this.getBrokerConfig()
-    } catch (error) {
-      configFailure = error
+    if (this.#signingOut) {
+      throw new NativeWalletError(
+        'CONCURRENT_OPERATION',
+        'Native wallet sign-out is already in progress.',
+      )
     }
-    if (config) {
+    this.#signingOut = true
+    try {
+      this.#generation += 1
+      this.#accessToken = undefined
+      this.#expiresAt = 0
+      let config: NativeWalletBrokerConfig | undefined
+      let refreshToken: string | null = null
+      let configFailure: unknown
+      let revokeFailure: unknown
+      let storageFailure: unknown
+      let callbackFailure: unknown
+
       try {
-        refreshToken = await this.#refreshTokenStore.get(config.appId)
+        config = await this.getBrokerConfig()
       } catch (error) {
-        revokeFailure = error
+        configFailure = error
       }
-      if (refreshToken) {
+      if (config) {
         try {
-          await this.#request(`${API_PATH}/revoke`, {
-            method: 'POST',
-            body: { AppId: config.appId, RefreshToken: refreshToken },
-          })
+          refreshToken = await this.#refreshTokenStore.get(config.appId)
         } catch (error) {
           revokeFailure = error
         }
+        if (refreshToken) {
+          try {
+            await this.#request(`${API_PATH}/revoke`, {
+              method: 'POST',
+              body: { AppId: config.appId, RefreshToken: refreshToken },
+            })
+          } catch (error) {
+            revokeFailure = error
+          }
+        }
+        try {
+          await this.#refreshTokenStore.remove(config.appId)
+        } catch (error) {
+          storageFailure = error
+        }
       }
       try {
-        await this.#refreshTokenStore.remove(config.appId)
+        await this.#onSignedOut?.()
       } catch (error) {
-        storageFailure = error
+        callbackFailure = error
       }
-    }
-    try {
-      await this.#onSignedOut?.()
-    } catch (error) {
-      callbackFailure = error
-    }
 
-    const failures = [configFailure, revokeFailure, storageFailure, callbackFailure].filter(
-      (error): error is unknown => error !== undefined,
-    )
-    if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) {
-      throw new NativeWalletError(
-        storageFailure ? 'SECURE_STORAGE' : 'SESSION',
-        'Sign-out completed locally, but one or more cleanup operations failed.',
-        undefined,
-        new AggregateError(failures),
+      const failures = [configFailure, revokeFailure, storageFailure, callbackFailure].filter(
+        (error): error is unknown => error !== undefined,
       )
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) {
+        throw new NativeWalletError(
+          storageFailure ? 'SECURE_STORAGE' : 'SESSION',
+          'Sign-out completed locally, but one or more cleanup operations failed.',
+          undefined,
+          new AggregateError(failures),
+        )
+      }
+    } finally {
+      this.#signingOut = false
     }
   }
 

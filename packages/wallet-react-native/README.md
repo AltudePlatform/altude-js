@@ -90,6 +90,12 @@ an app restart, before opening the browser or replacing credentials. Cleanup
 failure aborts that login attempt. Use `restore()` to preserve the family and
 rotate its refresh credential instead.
 
+The exported low-level `NativeWalletClient` rejects new sign-in, refresh/restore,
+and overlapping sign-out calls with `CONCURRENT_OPERATION` until sign-out's
+revocation, protected-storage cleanup, and `onSignedOut` callback finish.
+Sign-out can still supersede authentication already in flight; late credentials
+are discarded. The guard is released even when cleanup fails.
+
 State distinguishes `authenticating`, `authenticated`, `creating`, `recovering`,
 `recovery-required`, `locked`, `ready`, `failed`, and `disconnected`.
 `setup:progress` events expose authentication, account lookup, device protection,

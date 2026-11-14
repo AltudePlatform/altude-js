@@ -69,6 +69,7 @@ function makeClient(
     fetch?: typeof fetch
     store?: RefreshTokenStore
     randomBytes?: RandomBytesSource
+    onSignedOut?: () => void | Promise<void>
     openAuthSession?: (
       url: string,
       redirectUrl: string,
@@ -105,6 +106,7 @@ function makeClient(
     randomBytes: overrides.randomBytes ?? makeRandomBytes(),
     fetch: fetcher,
     now: () => 1_000,
+    ...(overrides.onSignedOut ? { onSignedOut: overrides.onSignedOut } : {}),
   })
   return { client, fetcher, browser, store }
 }
@@ -280,6 +282,175 @@ describe('NativeWalletClient', () => {
     await expect(client.refreshSession()).resolves.toBeNull()
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+
+  it.each([200, 503])(
+    'rejects authentication and overlapping sign-out until delayed revocation settles (%s)',
+    async (status) => {
+      let finishRevoke: ((value: Response) => void) | undefined
+      const revoke = new Promise<Response>((resolve) => {
+        finishRevoke = resolve
+      })
+      const fetcher = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input)
+        if (url.endsWith('/config')) return Promise.resolve(response(brokerConfig))
+        if (url.endsWith('/revoke')) return revoke
+        return Promise.resolve(response(accessResponse))
+      })
+      const store = makeStore()
+      const { client, browser } = makeClient({ fetch: fetcher, store })
+      await client.signIn()
+
+      const signOut = client.signOut()
+      const settled =
+        status === 200
+          ? expect(signOut).resolves.toBeUndefined()
+          : expect(signOut).rejects.toMatchObject({ code: 'API', status: 503 })
+      await vi.waitFor(() => {
+        expect(fetcher.mock.calls.some(([input]) => requestUrl(input).endsWith('/revoke'))).toBe(
+          true,
+        )
+      })
+      const callsBefore = fetcher.mock.calls.length
+      await expect(client.signIn()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.refreshSession()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.restoreSession()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.getAccessToken()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.signOut()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      expect(fetcher).toHaveBeenCalledTimes(callsBefore)
+      expect(browser.openAuthSession).toHaveBeenCalledOnce()
+      expect(store.value).toBe('refresh-1')
+
+      if (!finishRevoke) throw new Error('Expected pending revocation.')
+      finishRevoke(response(status === 200 ? { Revoked: true } : { Error: 'unavailable' }, status))
+      await settled
+      expect(store.value).toBeNull()
+      await expect(client.getAccessToken()).resolves.toBeNull()
+      await client.signIn()
+      expect(store.value).toBe('refresh-1')
+      await expect(client.getAccessToken()).resolves.toBe('access-1')
+    },
+  )
+
+  it.each([
+    ['signIn', 'during'],
+    ['signIn', 'after'],
+    ['refreshSession', 'during'],
+    ['refreshSession', 'after'],
+  ] as const)(
+    'supersedes in-flight %s returning %s delayed sign-out cleanup',
+    async (operation, timing) => {
+      let finishAuth: ((value: Response) => void) | undefined
+      let finishRevoke: ((value: Response) => void) | undefined
+      const authResponse = new Promise<Response>((resolve) => {
+        finishAuth = resolve
+      })
+      const revokeResponse = new Promise<Response>((resolve) => {
+        finishRevoke = resolve
+      })
+      const fetcher = vi.fn<typeof fetch>((input, init) => {
+        const url = requestUrl(input)
+        if (url.endsWith('/config')) return Promise.resolve(response(brokerConfig))
+        if (url.endsWith('/token') || url.endsWith('/refresh')) return authResponse
+        if (url.endsWith('/revoke')) {
+          return init?.body ===
+            JSON.stringify({ AppId: brokerConfig.AppId, RefreshToken: 'refresh-old' })
+            ? revokeResponse
+            : Promise.resolve(response({ Revoked: true }))
+        }
+        return Promise.resolve(response({ Error: 'invalid_request' }, 400))
+      })
+      const store = makeStore('refresh-old')
+      const { client } = makeClient({ fetch: fetcher, store })
+      const authentication = client[operation]()
+      const superseded = expect(authentication).rejects.toMatchObject({ code: 'SESSION' })
+      const endpoint = operation === 'signIn' ? '/token' : '/refresh'
+      await vi.waitFor(() => {
+        expect(fetcher.mock.calls.some(([input]) => requestUrl(input).endsWith(endpoint))).toBe(
+          true,
+        )
+      })
+
+      const signOut = client.signOut()
+      await vi.waitFor(() => {
+        expect(fetcher.mock.calls.some(([input]) => requestUrl(input).endsWith('/revoke'))).toBe(
+          true,
+        )
+      })
+      await expect(client.signOut()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.refreshSession()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      if (!finishAuth || !finishRevoke)
+        throw new Error('Expected pending authentication and revoke.')
+      if (timing === 'during') {
+        finishAuth(
+          response({ ...accessResponse, AccessToken: 'access-late', RefreshToken: 'refresh-late' }),
+        )
+        await superseded
+        await expect(client.signIn()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      }
+      finishRevoke(response({ Revoked: true }))
+      await signOut
+      if (timing === 'after') {
+        await expect(client.signIn()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+        finishAuth(
+          response({ ...accessResponse, AccessToken: 'access-late', RefreshToken: 'refresh-late' }),
+        )
+        await superseded
+      }
+      expect(store.value).toBeNull()
+      await expect(client.getAccessToken()).resolves.toBeNull()
+      expect(
+        fetcher.mock.calls.filter(([input]) => requestUrl(input).endsWith('/revoke')),
+      ).toHaveLength(2)
+
+      fetcher.mockImplementation((input) =>
+        Promise.resolve(
+          response(requestUrl(input).endsWith('/revoke') ? { Revoked: true } : accessResponse),
+        ),
+      )
+      await client.signIn()
+      expect(store.value).toBe('refresh-1')
+      await expect(client.getAccessToken()).resolves.toBe('access-1')
+    },
+  )
+
+  it.each([false, true])(
+    'keeps the sign-out guard through pending local cleanup and releases it on failure (%s)',
+    async (failCleanup) => {
+      let finishCleanup: (() => void) | undefined
+      const cleanup = new Promise<void>((resolve) => {
+        finishCleanup = resolve
+      })
+      const onSignedOut = vi.fn(async () => {
+        await cleanup
+        if (failCleanup) throw new Error('wallet lock failed')
+      })
+      const { client, fetcher } = makeClient({ onSignedOut })
+      await client.signIn()
+      const signOut = client.signOut()
+      const settled = failCleanup
+        ? expect(signOut).rejects.toThrow('wallet lock failed')
+        : expect(signOut).resolves.toBeUndefined()
+      await vi.waitFor(() => {
+        expect(onSignedOut).toHaveBeenCalledOnce()
+      })
+      const callsBefore = vi.mocked(fetcher).mock.calls.length
+      await expect(client.signIn()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.refreshSession()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      await expect(client.signOut()).rejects.toMatchObject({ code: 'CONCURRENT_OPERATION' })
+      expect(fetcher).toHaveBeenCalledTimes(callsBefore)
+      if (!finishCleanup) throw new Error('Expected pending local cleanup.')
+      finishCleanup()
+      await settled
+      await client.signIn()
+      await expect(client.getAccessToken()).resolves.toBe('access-1')
+      if (failCleanup) {
+        await expect(client.signOut()).rejects.toThrow('wallet lock failed')
+      } else {
+        await client.signOut()
+      }
+      expect(onSignedOut).toHaveBeenCalledTimes(2)
+    },
+  )
 
   it('discards a broker token returned after sign-out supersedes login', async () => {
     let finishBrowser: ((result: { type: 'success'; url: string }) => void) | undefined
