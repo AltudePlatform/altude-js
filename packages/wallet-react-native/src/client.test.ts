@@ -42,7 +42,13 @@ function response(data: unknown, status = 200): Response {
 }
 
 function makeStore(initial: string | null = null): RefreshTokenStore & { value: string | null } {
+  let appId: string | null = null
   return {
+    getAppId: () => Promise.resolve(appId),
+    setAppId: (_apiBaseUrl, _apiKeyFingerprint, value) => {
+      appId = value
+      return Promise.resolve()
+    },
     value: initial,
     get(_apiBaseUrl: string, _appId: string) {
       return Promise.resolve(this.value)
@@ -64,8 +70,34 @@ function requestUrl(input: RequestInfo | URL): string {
   return input.url
 }
 
+function memoryKeychain() {
+  const items = new Map<string, string>()
+  return {
+    items,
+    ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only' },
+    getGenericPassword: vi.fn(({ service }: { service: string }) => {
+      const password = items.get(service)
+      return Promise.resolve<false | { password: string }>(
+        password === undefined ? false : { password },
+      )
+    }),
+    setGenericPassword: vi.fn(
+      (_username: string, password: string, options: { service: string; accessible?: unknown }) => {
+        items.set(options.service, password)
+        return Promise.resolve(true)
+      },
+    ),
+    resetGenericPassword: vi.fn(({ service }: { service: string }) => {
+      items.delete(service)
+      return Promise.resolve(true)
+    }),
+  }
+}
+
 function makeClient(
   overrides: {
+    apiKey?: string
+    apiBaseUrl?: string
     fetch?: typeof fetch
     store?: RefreshTokenStore
     randomBytes?: RandomBytesSource
@@ -99,8 +131,8 @@ function makeClient(
   }
   const store = overrides.store ?? makeStore()
   const client = new NativeWalletClient({
-    apiKey: 'client-safe-key',
-    apiBaseUrl: 'https://api.altude.so',
+    apiKey: overrides.apiKey ?? 'client-safe-key',
+    apiBaseUrl: overrides.apiBaseUrl ?? 'https://api.altude.so',
     browser,
     refreshTokenStore: store,
     randomBytes: overrides.randomBytes ?? makeRandomBytes(),
@@ -341,7 +373,7 @@ describe('NativeWalletClient', () => {
   it('removes a partially written credential when initial sign-in storage fails', async () => {
     const store = makeStore()
     const failure = new Error('write failed after storage')
-    vi.spyOn(store, 'set').mockImplementation((_appId, token) => {
+    vi.spyOn(store, 'set').mockImplementation((_apiBaseUrl, _appId, token) => {
       store.value = token
       return Promise.reject(failure)
     })
@@ -378,6 +410,168 @@ describe('NativeWalletClient', () => {
     await expect(client.signOut()).rejects.toMatchObject({ code: 'API', status: 503 })
     expect(store.value).toBeNull()
     expect(onSignedOut).toHaveBeenCalledOnce()
+  })
+
+  it('removes cold-start credentials without bootstrap, leaving other deployments and apps intact', async () => {
+    const keychain = memoryKeychain()
+    const store = createKeychainRefreshTokenStore(keychain)
+    await makeClient({ store }).client.signIn()
+    const otherAppId = '-17.43'
+    const otherFetcher = vi.fn<typeof fetch>((input) =>
+      Promise.resolve(
+        requestUrl(input).endsWith('/config')
+          ? response({
+              ...brokerConfig,
+              AppId: otherAppId,
+              Audience: `urn:altude:wallet:app:${otherAppId}`,
+            })
+          : response({ ...accessResponse, RefreshToken: 'other-app-token' }),
+      ),
+    )
+    await makeClient({ store, apiKey: 'other-api-key', fetch: otherFetcher }).client.signIn()
+    await store.set('https://staging.altude.so', brokerConfig.AppId, 'staging-token')
+    await store.set('https://api.altude.so/another-deployment', brokerConfig.AppId, 'path-token')
+    keychain.items.set('so.altude.wallet.refresh.-17.42', 'legacy-token')
+    expect([...keychain.items.keys()].some((key) => key.includes('client-safe-key'))).toBe(false)
+
+    const bootstrapFailure = new Error('bootstrap unavailable')
+    const fetcher = vi.fn<typeof fetch>((input) =>
+      requestUrl(input).endsWith('/config')
+        ? Promise.reject(bootstrapFailure)
+        : Promise.resolve(response({ Revoked: true })),
+    )
+    const onSignedOut = vi.fn()
+    const restarted = makeClient({
+      apiBaseUrl: 'HTTPS://API.ALTUDE.SO:0443/child/..///',
+      store: createKeychainRefreshTokenStore(keychain),
+      fetch: fetcher,
+      onSignedOut,
+    }).client
+    await expect(restarted.signOut()).rejects.toMatchObject({
+      code: 'NETWORK',
+      cause: bootstrapFailure,
+    })
+    expect(onSignedOut).toHaveBeenCalledOnce()
+    expect(fetcher.mock.calls[1]?.[1]?.body).toBe(
+      JSON.stringify({ AppId: brokerConfig.AppId, RefreshToken: 'refresh-1' }),
+    )
+    await expect(store.get('https://api.altude.so', brokerConfig.AppId)).resolves.toBeNull()
+    await expect(store.get('https://staging.altude.so', brokerConfig.AppId)).resolves.toBe(
+      'staging-token',
+    )
+    await expect(
+      store.get('https://api.altude.so/another-deployment', brokerConfig.AppId),
+    ).resolves.toBe('path-token')
+    await expect(store.get('https://api.altude.so', otherAppId)).resolves.toBe('other-app-token')
+    expect(keychain.items.get('so.altude.wallet.refresh.-17.42')).toBe('legacy-token')
+
+    const later = makeClient({ store: createKeychainRefreshTokenStore(keychain) })
+    await expect(later.client.restoreSession()).resolves.toBeNull()
+    expect(later.fetcher).toHaveBeenCalledOnce()
+    expect(later.browser.openAuthSession).not.toHaveBeenCalled()
+    await expect(
+      makeClient({ store, apiKey: 'other-api-key', fetch: otherFetcher }).client.restoreSession(),
+    ).resolves.toMatchObject({ accessToken: 'access-1' })
+  })
+
+  it('does not use another API key association during cold-start sign-out', async () => {
+    const keychain = memoryKeychain()
+    const store = createKeychainRefreshTokenStore(keychain)
+    await makeClient({ store }).client.signIn()
+    const remove = vi.spyOn(store, 'remove')
+    const fetcher = vi.fn<typeof fetch>(() => Promise.reject(new Error('offline')))
+    const onSignedOut = vi.fn()
+    const { client } = makeClient({ store, apiKey: 'unrelated-key', fetch: fetcher, onSignedOut })
+    await expect(client.signOut()).rejects.toMatchObject({ code: 'NETWORK' })
+    expect(remove).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(onSignedOut).toHaveBeenCalledOnce()
+    await expect(store.get('https://api.altude.so', brokerConfig.AppId)).resolves.toBe('refresh-1')
+  })
+
+  it('cleans up locally and preserves both bootstrap and revoke failures when entirely offline', async () => {
+    const store = makeStore()
+    await makeClient({ store }).client.signIn()
+    const fetcher = vi.fn<typeof fetch>(() => Promise.reject(new Error('offline')))
+    const onSignedOut = vi.fn()
+    const { client } = makeClient({ store, fetch: fetcher, onSignedOut })
+    const failure = await client.signOut().catch((error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'SESSION' })
+    expect((failure as NativeWalletError).cause).toBeInstanceOf(AggregateError)
+    expect((failure as NativeWalletError).cause).toMatchObject({
+      errors: [
+        expect.objectContaining({ code: 'NETWORK' }),
+        expect.objectContaining({ code: 'NETWORK' }),
+      ],
+    })
+    expect(store.value).toBeNull()
+    expect(onSignedOut).toHaveBeenCalledOnce()
+    await expect(makeClient({ store }).client.restoreSession()).resolves.toBeNull()
+  })
+
+  it.each(['association-read', 'credential-read', 'removal'] as const)(
+    'attempts wallet locking and preserves cold-start bootstrap, %s and callback failures',
+    async (operation) => {
+      const store = makeStore()
+      await makeClient({ store }).client.signIn()
+      const storageFailure = new NativeWalletError('SECURE_STORAGE', 'storage failed')
+      const lockFailure = new Error('lock failed')
+      const remove = vi.spyOn(store, 'remove')
+      if (operation === 'association-read')
+        vi.spyOn(store, 'getAppId').mockRejectedValue(storageFailure)
+      if (operation === 'credential-read') vi.spyOn(store, 'get').mockRejectedValue(storageFailure)
+      if (operation === 'removal') remove.mockRejectedValue(storageFailure)
+      const bootstrapFailure = new Error('bootstrap unavailable')
+      const fetcher = vi.fn<typeof fetch>((input) =>
+        requestUrl(input).endsWith('/config')
+          ? Promise.reject(bootstrapFailure)
+          : Promise.resolve(response({ Revoked: true })),
+      )
+      const onSignedOut = vi.fn<() => void>(() => {
+        throw lockFailure
+      })
+      const { client } = makeClient({ store, fetch: fetcher, onSignedOut })
+      const failure = await client.signOut().catch((error: unknown) => error)
+      expect(failure).toBeInstanceOf(NativeWalletError)
+      expect((failure as NativeWalletError).cause).toMatchObject({
+        errors: [
+          expect.objectContaining({ code: 'NETWORK', cause: bootstrapFailure }),
+          storageFailure,
+          lockFailure,
+        ],
+      })
+      expect(onSignedOut).toHaveBeenCalledOnce()
+      if (operation === 'association-read') {
+        expect(remove).not.toHaveBeenCalled()
+      } else {
+        expect(remove).toHaveBeenCalledWith('https://api.altude.so', brokerConfig.AppId)
+      }
+      expect(store.value).toBe(operation === 'credential-read' ? null : 'refresh-1')
+      onSignedOut.mockImplementation(() => undefined)
+      fetcher.mockImplementation((input) =>
+        Promise.resolve(
+          response(requestUrl(input).endsWith('/config') ? brokerConfig : accessResponse),
+        ),
+      )
+      await expect(client.signIn()).resolves.toMatchObject({ accessToken: 'access-1' })
+    },
+  )
+
+  it('never writes a refresh credential if its durable association cannot be saved', async () => {
+    const keychain = memoryKeychain()
+    keychain.setGenericPassword.mockResolvedValue(false)
+    const store = createKeychainRefreshTokenStore(keychain)
+    const set = vi.spyOn(store, 'set')
+    const remove = vi.spyOn(store, 'remove')
+    const { client, fetcher } = makeClient({ store })
+    await expect(client.signIn()).rejects.toMatchObject({ code: 'SECURE_STORAGE' })
+    expect(set).not.toHaveBeenCalled()
+    expect(remove).toHaveBeenCalledWith('https://api.altude.so', brokerConfig.AppId)
+    expect(keychain.items.size).toBe(0)
+    expect(vi.mocked(fetcher).mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({ AppId: brokerConfig.AppId, RefreshToken: 'refresh-1' }),
+    )
+    await expect(client.getAccessToken()).resolves.toBeNull()
   })
 
   it('discards an ambiguously consumed refresh credential instead of retrying it', async () => {

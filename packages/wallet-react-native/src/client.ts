@@ -1,5 +1,5 @@
 import { NativeWalletError } from './errors.js'
-import { createPkcePair, createState } from './crypto.js'
+import { createApiKeyFingerprint, createPkcePair, createState } from './crypto.js'
 import { normalizeApiBaseUrl } from './platform.js'
 import type {
   NativeAuthBrowser,
@@ -55,6 +55,7 @@ export class NativeWalletClient {
   readonly #apiKey: string
   readonly #apiBaseUrl: string
   readonly #apiOrigin: string
+  readonly #apiKeyFingerprint: string
   readonly #browser: NativeAuthBrowser
   readonly #refreshTokenStore: RefreshTokenStore
   readonly #randomBytes: RandomBytesSource
@@ -91,6 +92,8 @@ export class NativeWalletClient {
       typeof options.refreshTokenStore.set !== 'function' ||
       typeof options.refreshTokenStore.remove !== 'function' ||
       typeof options.refreshTokenStore.get !== 'function' ||
+      typeof options.refreshTokenStore.getAppId !== 'function' ||
+      typeof options.refreshTokenStore.setAppId !== 'function' ||
       typeof options.randomBytes !== 'function'
     ) {
       throw new NativeWalletError(
@@ -110,6 +113,7 @@ export class NativeWalletClient {
     }
 
     this.#apiKey = options.apiKey
+    this.#apiKeyFingerprint = createApiKeyFingerprint(options.apiKey)
     this.#apiBaseUrl = normalizedApiBaseUrl
     this.#apiOrigin = normalizedOrigin
     this.#browser = options.browser
@@ -232,6 +236,7 @@ export class NativeWalletClient {
       this.#accessToken = undefined
       this.#expiresAt = 0
       let config: NativeWalletBrokerConfig | undefined
+      let appId: string | null = null
       let refreshToken: string | null = null
       let configFailure: unknown
       let revokeFailure: unknown
@@ -244,8 +249,17 @@ export class NativeWalletClient {
         configFailure = error
       }
       if (config) {
+        appId = config.appId
+      } else {
         try {
-          refreshToken = await this.#refreshTokenStore.get(this.#apiBaseUrl, config.appId)
+          appId = await this.#refreshTokenStore.getAppId(this.#apiBaseUrl, this.#apiKeyFingerprint)
+        } catch (error) {
+          storageFailure = error
+        }
+      }
+      if (appId) {
+        try {
+          refreshToken = await this.#refreshTokenStore.get(this.#apiBaseUrl, appId)
         } catch (error) {
           revokeFailure = error
         }
@@ -253,14 +267,14 @@ export class NativeWalletClient {
           try {
             await this.#request(`${API_PATH}/revoke`, {
               method: 'POST',
-              body: { AppId: config.appId, RefreshToken: refreshToken },
+              body: { AppId: appId, RefreshToken: refreshToken },
             })
           } catch (error) {
             revokeFailure = error
           }
         }
         try {
-          await this.#refreshTokenStore.remove(this.#apiBaseUrl, config.appId)
+          await this.#refreshTokenStore.remove(this.#apiBaseUrl, appId)
         } catch (error) {
           storageFailure = error
         }
@@ -278,7 +292,7 @@ export class NativeWalletClient {
       if (failures.length > 1) {
         throw new NativeWalletError(
           storageFailure ? 'SECURE_STORAGE' : 'SESSION',
-          'Sign-out completed locally, but one or more cleanup operations failed.',
+          'Sign-out cleared in-memory access, but one or more cleanup operations failed.',
           undefined,
           new AggregateError(failures),
         )
@@ -373,6 +387,8 @@ export class NativeWalletClient {
 
   async #persistRefreshToken(appId: string, token: string, tokenToRevoke: string): Promise<void> {
     try {
+      // Persist the offline cleanup scope before any credential can reach storage.
+      await this.#refreshTokenStore.setAppId(this.#apiBaseUrl, this.#apiKeyFingerprint, appId)
       await this.#refreshTokenStore.set(this.#apiBaseUrl, appId, token)
     } catch (cause) {
       this.#accessToken = undefined

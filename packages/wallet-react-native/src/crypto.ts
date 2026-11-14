@@ -31,6 +31,17 @@ export function createState(randomBytes: RandomBytesSource): string {
   return base64UrlEncode(bytes)
 }
 
+export function createApiKeyFingerprint(apiKey: string): string {
+  // Hash UTF-16 code units without relying on Hermes to provide TextEncoder.
+  const bytes = new Uint8Array(apiKey.length * 2)
+  for (let index = 0; index < apiKey.length; index += 1) {
+    const code = apiKey.charCodeAt(index)
+    bytes[index * 2] = code >> 8
+    bytes[index * 2 + 1] = code & 0xff
+  }
+  return base64UrlEncode(sha256(bytes))
+}
+
 function asciiBytes(value: string): Uint8Array {
   const bytes = new Uint8Array(value.length)
   for (let index = 0; index < value.length; index += 1) {

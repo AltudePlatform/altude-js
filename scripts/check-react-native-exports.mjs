@@ -73,6 +73,7 @@ assert.equal(typeof nativeWallet.AltudeNativeWallet, 'function')
 
 const keys = new Map()
 let nativeRefreshToken = null
+let nativeStoredAppId = null
 let nativeAddress = null
 let randomCounter = 1
 const wallet = new nativeWallet.AltudeNativeWallet({
@@ -80,8 +81,12 @@ const wallet = new nativeWallet.AltudeNativeWallet({
   apiBaseUrl: 'https://api.altude.so',
   randomBytes: (length) => new Uint8Array(length).fill(randomCounter++),
   refreshTokenStore: {
+    getAppId: async () => nativeStoredAppId,
+    setAppId: async (_apiBaseUrl, _apiKeyFingerprint, appId) => {
+      nativeStoredAppId = appId
+    },
     get: async () => nativeRefreshToken,
-    set: async (_appId, token) => {
+    set: async (_apiBaseUrl, _appId, token) => {
       nativeRefreshToken = token
     },
     remove: async () => {
@@ -175,6 +180,36 @@ assert.equal((await wallet.restore()).address, nativeAddress)
 assert.equal(keys.size, 1)
 wallet.lock()
 assert.equal(wallet.state.status, 'locked')
+
+const offlineClient = new nativeWallet.NativeWalletClient({
+  apiKey: 'smoke-api-key',
+  apiBaseUrl: 'HTTPS://API.ALTUDE.SO:0443/',
+  randomBytes: (length) => new Uint8Array(length).fill(randomCounter++),
+  browser: { openAuthSession: async () => ({ type: 'cancel' }) },
+  refreshTokenStore: {
+    getAppId: async () => nativeStoredAppId,
+    setAppId: async () => {},
+    get: async () => nativeRefreshToken,
+    set: async () => {},
+    remove: async () => {
+      nativeRefreshToken = null
+    },
+  },
+  onSignedOut: () => wallet.lock(),
+  fetch: async () => {
+    throw new Error('offline')
+  },
+})
+await assert.rejects(offlineClient.signOut(), (error) => {
+  assert.equal(error.code, 'SESSION')
+  assert.equal(error.cause.errors.length, 2)
+  assert.ok(error.cause.errors.every((failure) => failure.code === 'NETWORK'))
+  return true
+})
+assert.equal(nativeRefreshToken, null)
+assert.equal(wallet.state.status, 'locked')
+assert.equal((await wallet.restore()).status, 'disconnected')
+assert.equal(keys.size, 1)
 
 const hermesLikeSource = `const Buffer = undefined;\nconst DOMException = undefined;\n${bundledSource}`
 const bundledModuleUrl = `data:text/javascript;base64,${Buffer.from(hermesLikeSource).toString('base64')}`

@@ -10,6 +10,8 @@ export interface NativeAuthBrowser {
 }
 
 export interface RefreshTokenStore {
+  getAppId(apiBaseUrl: string, apiKeyFingerprint: string): Promise<string | null>
+  setAppId(apiBaseUrl: string, apiKeyFingerprint: string, appId: string): Promise<void>
   get(apiBaseUrl: string, appId: string): Promise<string | null>
   set(apiBaseUrl: string, appId: string, token: string): Promise<void>
   remove(apiBaseUrl: string, appId: string): Promise<void>
@@ -112,6 +114,39 @@ export function createKeychainRefreshTokenStore(keychain: KeychainModule): Refre
   }
 
   return {
+    async getAppId(apiBaseUrl, apiKeyFingerprint) {
+      try {
+        const association = await keychain.getGenericPassword({
+          service: associationServiceFor(apiBaseUrl, apiKeyFingerprint),
+        })
+        return association === false ? null : association.password
+      } catch (cause) {
+        throw new NativeWalletError(
+          'SECURE_STORAGE',
+          'The native wallet storage association could not be read.',
+          undefined,
+          cause,
+        )
+      }
+    },
+    async setAppId(apiBaseUrl, apiKeyFingerprint, appId) {
+      try {
+        const stored = await keychain.setGenericPassword('altude-wallet-app', appId, {
+          service: associationServiceFor(apiBaseUrl, apiKeyFingerprint),
+          accessible,
+        })
+        if (stored === false) {
+          throw new Error('The Keychain provider declined the storage association write.')
+        }
+      } catch (cause) {
+        throw new NativeWalletError(
+          'SECURE_STORAGE',
+          'The native wallet storage association could not be saved.',
+          undefined,
+          cause,
+        )
+      }
+    },
     async get(apiBaseUrl, appId) {
       try {
         const credential = await keychain.getGenericPassword({
@@ -185,6 +220,10 @@ export function createCryptoRandomSource(
 
 function serviceFor(apiBaseUrl: string, appId: string): string {
   return `so.altude.wallet.refresh.v2.${encodeURIComponent(normalizeApiBaseUrl(apiBaseUrl))}.${encodeURIComponent(appId)}`
+}
+
+function associationServiceFor(apiBaseUrl: string, apiKeyFingerprint: string): string {
+  return `so.altude.wallet.app.v1.${encodeURIComponent(normalizeApiBaseUrl(apiBaseUrl))}.${encodeURIComponent(apiKeyFingerprint)}`
 }
 
 function normalizeApiPath(path: string): string {

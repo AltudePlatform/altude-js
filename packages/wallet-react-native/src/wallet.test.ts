@@ -7,6 +7,7 @@ import type { NativeWalletEvent } from './wallet.js'
 import { NativeWalletVault, createKeychainWalletKeyStore } from './vault.js'
 import type { NativeWalletKeyStore, NativeWalletScope } from './vault.js'
 import type { RefreshTokenStore } from './platform.js'
+import type { NativeWalletError } from './errors.js'
 
 const appId = '-17.42'
 const userId = 'wallet-user-1'
@@ -164,7 +165,13 @@ function makeServer() {
 
 function memoryRefreshTokens(): RefreshTokenStore {
   let refreshToken: string | null = null
+  let storedAppId: string | null = null
   return {
+    getAppId: () => Promise.resolve(storedAppId),
+    setAppId: (_apiBaseUrl, _apiKeyFingerprint, value) => {
+      storedAppId = value
+      return Promise.resolve()
+    },
     get: (_apiBaseUrl, _app) => Promise.resolve(refreshToken),
     set: (_apiBaseUrl, _app, token) => {
       refreshToken = token
@@ -333,6 +340,44 @@ describe('AltudeNativeWallet', () => {
       ),
     ).toBe(false)
     expect(first.keys.keys.size).toBe(1)
+  })
+
+  it('signs out after restart while offline without deleting signing keys or restoring readiness', async () => {
+    const store = memoryRefreshTokens()
+    const first = makeWallet(makeServer(), memoryKeys(), 1, store)
+    await first.wallet.connect()
+    first.wallet.lock()
+    const savedKeys = [...first.keys.keys.entries()].map(([key, value]) => [key, value.slice()])
+    const online = first.server.fetcher.getMockImplementation()
+    first.server.fetcher.mockRejectedValue(new Error('offline'))
+    const restarted = makeWallet(first.server, first.keys, 10, store)
+    const failure = await restarted.wallet.signOut().catch((error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'SESSION' })
+    expect((failure as NativeWalletError).cause).toBeInstanceOf(AggregateError)
+    expect(restarted.wallet.state).toMatchObject({
+      status: 'disconnected',
+      appId: null,
+      walletUserId: null,
+      address: null,
+    })
+    expect(await store.get('https://api.altude.so', appId)).toBeNull()
+    expect([...first.keys.keys.entries()]).toEqual(savedKeys)
+    const authorize = vi.fn(() => true)
+    await expect(
+      restarted.wallet.sendTransfer(
+        { kind: 'sol-transfer', recipient: 'recipient', amount: 1 },
+        authorize,
+      ),
+    ).rejects.toMatchObject({ code: 'LOCKED' })
+    expect(authorize).not.toHaveBeenCalled()
+
+    if (!online) throw new Error('Expected API fixture.')
+    first.server.fetcher.mockImplementation(online)
+    first.server.fetcher.mockClear()
+    expect(await restarted.wallet.restore()).toMatchObject({ status: 'disconnected' })
+    expect(first.server.fetcher).toHaveBeenCalledOnce()
+    expect(restarted.browser.openAuthSession).not.toHaveBeenCalled()
+    expect([...first.keys.keys.entries()]).toEqual(savedKeys)
   })
 
   it('blocks fresh login after restart when persisted-family revocation fails', async () => {
@@ -590,6 +635,8 @@ describe('AltudeNativeWallet', () => {
       fetch: server.fetcher,
       randomBytes: (length) => new Uint8Array(length).fill(7),
       refreshTokenStore: {
+        getAppId: () => Promise.resolve(null),
+        setAppId: () => Promise.resolve(),
         get: () => Promise.resolve(null),
         set: () => Promise.resolve(),
         remove: () => Promise.resolve(),

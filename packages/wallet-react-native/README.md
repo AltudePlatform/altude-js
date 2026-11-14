@@ -103,6 +103,19 @@ revocation, protected-storage cleanup, and `onSignedOut` callback finish.
 Sign-out can still supersede authentication already in flight; late credentials
 are discarded. The guard is released even when cleanup fails.
 
+Before persisting a refresh credential, the SDK saves its AppId association in
+protected storage, scoped by normalized API deployment URL and a SHA-256 API-key
+fingerprint (never the raw key). A fresh client's `signOut()` can use this
+association even when `/config` is unavailable: it attempts credential removal,
+family revocation and wallet locking, while still reporting bootstrap and cleanup
+failures. The association is retained for subsequent offline cleanup and never
+used to authorize login or restore. Custom `RefreshTokenStore` implementations
+must durably implement `getAppId`/`setAppId` with both scope parameters; an
+instance-local map cannot support app restart. Existing experimental credentials
+without an association require successful bootstrap before their first offline
+cleanup; successful login/refresh establishes the association. Other deployments,
+other API-key associations and ambiguous AppId-only legacy items are not swept.
+
 State distinguishes `authenticating`, `authenticated`, `creating`, `recovering`,
 `recovery-required`, `locked`, `ready`, `failed`, and `disconnected`.
 `setup:progress` events expose authentication, account lookup, device protection,
