@@ -550,7 +550,14 @@ function parseBrokerConfig(
     )
   }
 
-  return { appId, nativeScheme, issuer, audience, authorizationUrl, jwksUrl }
+  return {
+    appId,
+    nativeScheme,
+    issuer,
+    audience,
+    authorizationUrl: `${apiBaseUrl}${API_PATH}/authorize`,
+    jwksUrl: `${apiBaseUrl}${API_PATH}/jwks`,
+  }
 }
 
 function parseTokenResponse(value: unknown): TokenResponse {

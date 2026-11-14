@@ -78,6 +78,8 @@ generator.
 `AltudeNativeWallet` composes `NativeWalletClient`,
 `NativeWalletSessionAdapter`, and `NativeWalletVault`. Applications provide
 platform modules and a transfer approval UI, not identity-to-wallet session glue.
+The configured `apiBaseUrl` is normalized consistently for broker, wallet
+access, and Gas Station requests, including when it has a trailing slash.
 `connect()` signs in, looks up the authorized existing wallet, creates a key
 only when the server explicitly reports no association, proves key possession,
 and validates the resulting wallet session before exposing `ready`.

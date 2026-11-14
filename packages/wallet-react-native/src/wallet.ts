@@ -3,6 +3,7 @@ import type { GaslessTransactionSigner, SendTransactionResponse, SolanaNetwork }
 import { NativeWalletClient } from './client.js'
 import type { NativeWalletClientOptions } from './client.js'
 import { NativeWalletError } from './errors.js'
+import { normalizeApiBaseUrl } from './platform.js'
 import { NativeWalletSessionAdapter } from './session.js'
 import type { NativeWalletAccessSession } from './session.js'
 import { NativeWalletVault } from './vault.js'
@@ -74,7 +75,10 @@ export class AltudeNativeWallet {
     this.#auth = new NativeWalletClient(options)
     this.#sessions = new NativeWalletSessionAdapter(this.#auth, options)
     this.#vault = new NativeWalletVault(options.keyStore, options.randomBytes)
-    this.#station = new AltudeGasStation({ apiKey: options.apiKey, baseUrl: options.apiBaseUrl })
+    this.#station = new AltudeGasStation({
+      apiKey: options.apiKey,
+      baseUrl: normalizeApiBaseUrl(options.apiBaseUrl),
+    })
     this.#now = options.now ?? Date.now
   }
 

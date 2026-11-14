@@ -182,6 +182,7 @@ function makeWallet(
   keys = memoryKeys(),
   seed = 1,
   refreshTokenStore = memoryRefreshTokens(),
+  apiBaseUrl = 'https://api.altude.so',
 ) {
   let randomCounter = seed
   const browser = {
@@ -194,7 +195,7 @@ function makeWallet(
   }
   const wallet = new AltudeNativeWallet({
     apiKey: 'client-key',
-    apiBaseUrl: 'https://api.altude.so',
+    apiBaseUrl,
     keyStore: keys,
     randomBytes: (length) => new Uint8Array(length).fill(randomCounter++),
     refreshTokenStore,
@@ -684,6 +685,119 @@ describe('AltudeNativeWallet', () => {
       kind: 'sol-transfer', recipient: 'recipient', amount: 1,
     }, approve)).rejects.toMatchObject({ code: 'RPC_ERROR' })
     expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('uses the normalized deployment URL for login, wallet access, and a signed transfer', async () => {
+    const server = makeServer()
+    const original = server.fetcher.getMockImplementation()
+    server.fetcher.mockImplementation((input, options) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      expect(url.startsWith('https://api.altude.so/api/')).toBe(true)
+      if (url === 'https://api.altude.so/api/native-wallet/config') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              AppId: appId,
+              NativeScheme: 'so.altude.wallet.tn17.a42',
+              Issuer: 'https://api.altude.so/',
+              Audience: `urn:altude:wallet:app:${appId}`,
+              AuthorizationUrl: 'https://API.ALTUDE.SO:443/api/native-wallet/authorize',
+              JwksUrl: 'https://API.ALTUDE.SO:443/api/native-wallet/jwks',
+            }),
+          ),
+        )
+      }
+      if (!original) throw new Error('Expected API fixture.')
+      return original(input, options)
+    })
+    const { wallet } = makeWallet(
+      server,
+      memoryKeys(),
+      1,
+      memoryRefreshTokens(),
+      'https://api.altude.so/',
+    )
+    const requests: string[] = []
+    let signedTransaction = ''
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string, init?: RequestInit) => {
+        requests.push(input)
+        if (input === 'https://api.altude.so/api/transaction/config') {
+          expect(new Headers(init?.headers).get('X-API-Key')).toBe('client-key')
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+                RpcUrl: 'https://rpc.example.test',
+                Token: 'token',
+                RpcEnvironment: 'devnet',
+                TokenExpiration: '2099-01-01T00:00:00Z',
+              }),
+            ),
+          )
+        }
+        if (input === 'https://rpc.example.test') {
+          expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token')
+          if (typeof init?.body !== 'string') throw new Error('Expected JSON RPC body.')
+          const request = JSON.parse(init.body) as { id: string | number; method: string }
+          expect(request.method).toBe('getLatestBlockhash')
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id: request.id,
+                result: {
+                  context: { slot: 1 },
+                  value: {
+                    blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N',
+                    lastValidBlockHeight: 100,
+                  },
+                },
+              }),
+            ),
+          )
+        }
+        if (input === 'https://api.altude.so/api/Transaction/send') {
+          expect(new Headers(init?.headers).get('X-API-Key')).toBe('client-key')
+          if (typeof init?.body !== 'string') throw new Error('Expected relay body.')
+          signedTransaction = (JSON.parse(init.body) as { SignedTransaction: string })
+            .SignedTransaction
+          return Promise.resolve(new Response(JSON.stringify({ Signature: 'relayed' })))
+        }
+        throw new Error(`Unexpected request: ${input}`)
+      }),
+    )
+    const state = await wallet.connect()
+    expect(state.status).toBe('ready')
+    const approve = vi.fn(() => true)
+    const result = await wallet.sendTransfer(
+      {
+        kind: 'sol-transfer',
+        recipient: 'So11111111111111111111111111111111111111112',
+        amount: 1,
+      },
+      approve,
+    )
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({ network: 'devnet' }))
+    expect(result.Signature).toBe('relayed')
+    expect(requests).toContain('https://api.altude.so/api/transaction/config')
+    expect(requests).toContain('https://rpc.example.test')
+    expect(requests).toContain('https://api.altude.so/api/Transaction/send')
+    const bytes = base64.decode(signedTransaction)
+    const signatureCount = bytes[0] ?? 0
+    expect(signatureCount).toBe(2)
+    const message = bytes.slice(1 + signatureCount * 64)
+    expect(state.address).not.toBeNull()
+    expect(
+      Array.from({ length: signatureCount }, (_, index) =>
+        ed25519.verify(
+          bytes.slice(1 + index * 64, 1 + (index + 1) * 64),
+          message,
+          base58.decode(state.address ?? ''),
+        ),
+      ).some(Boolean),
+    ).toBe(true)
   })
 
   it('prevents a real relay dispatch if the wallet locks after signing', async () => {
