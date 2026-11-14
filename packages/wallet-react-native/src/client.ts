@@ -374,20 +374,27 @@ export class NativeWalletClient {
     try {
       await this.#refreshTokenStore.set(appId, token)
     } catch (cause) {
-      let revokeFailure: unknown
+      this.#accessToken = undefined
+      this.#expiresAt = 0
+      const failures: unknown[] = [cause]
+      try {
+        await this.#refreshTokenStore.remove(appId)
+      } catch (error) {
+        failures.push(error)
+      }
       try {
         await this.#request(`${API_PATH}/revoke`, {
           method: 'POST',
           body: { AppId: appId, RefreshToken: tokenToRevoke },
         })
       } catch (error) {
-        revokeFailure = error
+        failures.push(error)
       }
       throw new NativeWalletError(
         'SECURE_STORAGE',
-        'The new refresh credential could not be stored securely; the session was not retained.',
+        'The new refresh credential could not be stored securely; local cleanup and revocation were attempted.',
         undefined,
-        revokeFailure === undefined ? cause : new AggregateError([cause, revokeFailure]),
+        failures.length === 1 ? cause : new AggregateError(failures),
       )
     }
   }

@@ -90,6 +90,11 @@ an app restart, before opening the browser or replacing credentials. Cleanup
 failure aborts that login attempt. Use `restore()` to preserve the family and
 rotate its refresh credential instead.
 
+If storing a new or rotated refresh credential fails, the client clears its
+in-memory access token and attempts both protected-storage removal and family
+revocation. The `SECURE_STORAGE` error retains any cleanup failures in its
+cause; a removal failure can leave a credential in protected storage.
+
 The exported low-level `NativeWalletClient` rejects new sign-in, refresh/restore,
 and overlapping sign-out calls with `CONCURRENT_OPERATION` until sign-out's
 revocation, protected-storage cleanup, and `onSignedOut` callback finish.

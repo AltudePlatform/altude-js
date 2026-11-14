@@ -242,6 +242,119 @@ describe('NativeWalletClient', () => {
     expect(store.value).toBe('refresh-rotated')
   })
 
+  it.each([
+    { removalFails: false, revocationFails: false },
+    { removalFails: true, revocationFails: false },
+    { removalFails: false, revocationFails: true },
+    { removalFails: true, revocationFails: true },
+  ])(
+    'cleans up after a failed rotated credential write (removal=$removalFails, revocation=$revocationFails)',
+    async ({ removalFails, revocationFails }) => {
+      const writeFailure = new Error('write failed')
+      const removalFailure = new Error('removal failed')
+      const store = makeStore()
+      const set = vi.spyOn(store, 'set')
+      const remove = vi.spyOn(store, 'remove')
+      const fetcher: typeof fetch = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input)
+        if (url.endsWith('/config')) return Promise.resolve(response(brokerConfig))
+        if (url.endsWith('/token')) return Promise.resolve(response(accessResponse))
+        if (url.endsWith('/refresh')) {
+          return Promise.resolve(
+            response({ ...accessResponse, AccessToken: 'access-2', RefreshToken: 'refresh-2' }),
+          )
+        }
+        return Promise.resolve(response({}, revocationFails ? 503 : 200))
+      })
+      const { client } = makeClient({ fetch: fetcher, store })
+      await client.signIn()
+      expect(await client.getAccessToken()).toBe('access-1')
+      set.mockRejectedValueOnce(writeFailure)
+      if (removalFails) remove.mockRejectedValueOnce(removalFailure)
+
+      const failure = await client.refreshSession().catch((error: unknown) => error)
+      expect(failure).toBeInstanceOf(NativeWalletError)
+      expect(failure).toMatchObject({ code: 'SECURE_STORAGE' })
+      expect(remove).toHaveBeenCalledWith(brokerConfig.AppId)
+      expect(store.value).toBe(removalFails ? 'refresh-1' : null)
+      const revokeCall = vi
+        .mocked(fetcher)
+        .mock.calls.find(([input]) => requestUrl(input).endsWith('/revoke'))
+      expect(revokeCall?.[1]?.body).toBe(
+        JSON.stringify({ AppId: brokerConfig.AppId, RefreshToken: 'refresh-2' }),
+      )
+
+      const cause = (failure as NativeWalletError).cause
+      if (!removalFails && !revocationFails) {
+        expect(cause).toBe(writeFailure)
+      } else {
+        expect(cause).toBeInstanceOf(AggregateError)
+        const errors = (cause as AggregateError).errors
+        expect(errors).toHaveLength(1 + Number(removalFails) + Number(revocationFails))
+        expect(errors[0]).toBe(writeFailure)
+        if (removalFails) expect(errors).toContain(removalFailure)
+        if (revocationFails) expect(errors).toContainEqual(expect.objectContaining({ status: 503 }))
+      }
+
+      if (removalFails) vi.spyOn(store, 'get').mockResolvedValue(null)
+      await expect(client.getAccessToken()).resolves.toBeNull()
+      await expect(
+        makeClient({ fetch: fetcher, store }).client.restoreSession(),
+      ).resolves.toBeNull()
+      expect(
+        vi.mocked(fetcher).mock.calls.filter(([input]) => requestUrl(input).endsWith('/refresh')),
+      ).toHaveLength(1)
+    },
+  )
+
+  it('does not expose the previous access token while failed-write cleanup is pending', async () => {
+    const store = makeStore()
+    const { client } = makeClient({ store })
+    await client.signIn()
+    vi.spyOn(store, 'set').mockRejectedValueOnce(new Error('write failed'))
+    let finishRemoval: (() => void) | undefined
+    let startedRemoval: (() => void) | undefined
+    const removalStarted = new Promise<void>((resolve) => {
+      startedRemoval = resolve
+    })
+    vi.spyOn(store, 'remove').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRemoval = () => {
+            store.value = null
+            resolve()
+          }
+          startedRemoval?.()
+        }),
+    )
+
+    const refresh = client.refreshSession()
+    const rejection = expect(refresh).rejects.toMatchObject({ code: 'SECURE_STORAGE' })
+    await removalStarted
+    const access = client.getAccessToken()
+    const accessRejection = expect(access).rejects.toMatchObject({ code: 'SECURE_STORAGE' })
+    finishRemoval?.()
+    await Promise.all([rejection, accessRejection])
+    await expect(client.getAccessToken()).resolves.toBeNull()
+  })
+
+  it('removes a partially written credential when initial sign-in storage fails', async () => {
+    const store = makeStore()
+    const failure = new Error('write failed after storage')
+    vi.spyOn(store, 'set').mockImplementation((_appId, token) => {
+      store.value = token
+      return Promise.reject(failure)
+    })
+    const { client, fetcher } = makeClient({ store })
+
+    await expect(client.signIn()).rejects.toMatchObject({ code: 'SECURE_STORAGE', cause: failure })
+    expect(store.value).toBeNull()
+    expect(
+      vi.mocked(fetcher).mock.calls.some(([input]) => requestUrl(input).endsWith('/revoke')),
+    ).toBe(true)
+    await expect(client.getAccessToken()).resolves.toBeNull()
+  })
+
   it('clears local credentials and invokes the wallet lock callback if revoke fails', async () => {
     const fetcher: typeof fetch = vi.fn<typeof fetch>((input) =>
       Promise.resolve(
