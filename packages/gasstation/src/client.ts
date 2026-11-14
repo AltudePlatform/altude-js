@@ -386,44 +386,19 @@ export class AltudeHttpClient {
       return { Signature: 'MockSignature' + Math.random().toString(36).slice(2), Status: 'Success', Message: '' }
     }
     await this.#ensureConfig()
-    const guard = { failed: false }
     const prepareDispatch = async () => {
-      try {
-        if (options.expectedNetwork && getConfigNetwork(await this.getConfig(true)) !== options.expectedNetwork) {
-          throw new AltudeError({
-            code: 'RPC_ERROR',
-            message: 'The authoritative RPC environment changed before relay dispatch.',
-            remediation: 'Review the network and request a new approval.',
-          })
-        }
-      } catch (error) {
-        guard.failed = true
-        throw error
+      if (options.expectedNetwork && getConfigNetwork(await this.getConfig(true)) !== options.expectedNetwork) {
+        throw new AltudeError({
+          code: 'RPC_ERROR',
+          message: 'The authoritative RPC environment changed before relay dispatch.',
+          remediation: 'Review the network and request a new approval.',
+        })
       }
     }
-    const beforeDispatch = () => {
-      try {
-        options.beforeDispatch?.()
-      } catch (error) {
-        guard.failed = true
-        throw error
-      }
-    }
-    try {
-      const response = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
-        SignedTransaction: options.transaction,
-      }, 3, prepareDispatch, beforeDispatch)
-      return this.#normalizeTransactionResponse(response)
-    } catch (err) {
-      if (guard.failed || !(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
-
-      const fallback = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
-        transaction: options.transaction,
-      }, 3, prepareDispatch, beforeDispatch)
-      return this.#normalizeTransactionResponse(fallback)
-    }
+    const response = await this.#post<SendTransactionResponse>('/api/Transaction/send', {
+      SignedTransaction: options.transaction,
+    }, 1, prepareDispatch, options.beforeDispatch, true)
+    return this.#normalizeTransactionResponse(response)
   }
 
   async sendBatchTransaction(options: BatchTransactionOptions): Promise<SendTransactionResponse> {
@@ -1023,8 +998,9 @@ export class AltudeHttpClient {
   async #post<T>(
     path: string, body?: unknown, retries = 3,
     prepareDispatch?: () => Promise<void>, beforeDispatch?: () => void,
+    singleRelaySubmission = false,
   ): Promise<T> {
-    return this.#request<T>('POST', path, body, retries, prepareDispatch, beforeDispatch)
+    return this.#request<T>('POST', path, body, retries, prepareDispatch, beforeDispatch, singleRelaySubmission)
   }
 
   async #get<T>(path: string, retries = 3): Promise<T> {
@@ -1034,6 +1010,7 @@ export class AltudeHttpClient {
   async #request<T>(
     method: 'GET' | 'POST', path: string, body?: unknown, retries = 3,
     prepareDispatch?: () => Promise<void>, beforeDispatch?: () => void,
+    singleRelaySubmission = false,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
@@ -1059,7 +1036,7 @@ export class AltudeHttpClient {
         if (!response.ok) {
           const text = await response.text()
           const isAuthError = response.status === 401 || response.status === 403
-          if (!this.isMockMode && !isConfigEndpoint && isAuthError && !hasRefreshedConfigAfterAuthError) {
+          if (!singleRelaySubmission && !this.isMockMode && !isConfigEndpoint && isAuthError && !hasRefreshedConfigAfterAuthError) {
             hasRefreshedConfigAfterAuthError = true
             await this.getConfig(true)
             continue
@@ -1071,8 +1048,27 @@ export class AltudeHttpClient {
           })
         }
 
-        return (await response.json()) as T
+        const result: unknown = await response.json()
+        if (singleRelaySubmission) {
+          if (!result || typeof result !== 'object' || Array.isArray(result)) {
+            throw new Error('Invalid relay response.')
+          }
+          const relayResult = result as Record<string, unknown>
+          if (![relayResult.Signature, relayResult.signature, relayResult.Status, relayResult.status]
+            .some((value) => typeof value === 'string')) {
+            throw new Error('Invalid relay response.')
+          }
+        }
+        return result as T
       } catch (err) {
+        if (singleRelaySubmission) {
+          throw new AltudeError({
+            code: 'RELAY_SUBMISSION_UNCERTAIN',
+            message: 'The relay submission outcome is uncertain; the transaction may have been submitted.',
+            remediation: 'Check the transaction status on the approved network before deciding whether to submit again. Do not retry automatically.',
+            cause: err,
+          })
+        }
         lastError = err
         if (err instanceof AltudeError) throw err
         // Retry on network errors

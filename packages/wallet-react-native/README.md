@@ -135,13 +135,17 @@ is not a passkey authentication or cross-device recovery claim.
 
 Transfers snapshot and freeze the recipient, amount, mint and authoritative network before local
 approval. The approval UI must display the network. The SDK rechecks the approved
-network and cancellation immediately before each relay dispatch, including retries.
+network and cancellation immediately before relay dispatch.
 Session validity is checked before approval and again before signing.
 Account switching, lock, expiry, refresh failure, or revocation invalidate the
 signer and stale completions. Gas Station builds and relays using Altude's
 existing transaction configuration, fresh blockhash and configured fee payer;
 the wallet does not introduce a public RPC fallback or retry ambiguous relay
 submission. Cancellation cannot retract a transaction already relayed.
+If the relay response is lost, invalid, or reports an error, Gas Station throws
+`AltudeError` with code `RELAY_SUBMISSION_UNCERTAIN`. Check transaction status
+on the approved network before deciding whether to submit again; do not retry
+automatically. The error does not mean that multiple on-chain executions occurred.
 
 ## Coordinated wallet-access contract
 
@@ -306,10 +310,12 @@ dashboard/platform endpoints.
 
 ## Errors and validation
 
-Operations reject with `NativeWalletError`, which provides a typed `code` and
+Native broker and wallet lifecycle operations reject with `NativeWalletError`, which provides a typed `code` and
 optional HTTP `status`. Cancellation, API errors, invalid broker responses,
 browser failures, and secure-storage failures are explicit; credentials and
 callback contents are not included in error messages.
+Transfer operations can also surface Gas Station `AltudeError` values, including
+`RELAY_SUBMISSION_UNCERTAIN`.
 
 Run package checks with:
 

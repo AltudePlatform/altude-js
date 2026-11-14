@@ -70,6 +70,13 @@ const accountResult = await gasStation.createAccount({
 })
 ```
 
+For `send` and `AltudeHttpClient.sendTransaction`, the SDK submits the
+canonical `SignedTransaction` payload only once. If a relay response is lost,
+invalid, or reports an error, the SDK throws an `AltudeError` with code
+`RELAY_SUBMISSION_UNCERTAIN`: the transaction may have been submitted. Check
+its status on the intended network before deciding whether to submit again;
+do not retry automatically.
+
 ## What's included
 
 - `AltudeGasStation` — high-level client (`send`, `createAccount`, `closeAccount`,
