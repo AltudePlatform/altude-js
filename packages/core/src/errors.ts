@@ -31,6 +31,7 @@ export type AltudeErrorCode =
   | 'VAULT_PERMISSION_ERROR' // VAULT-0501
   // Network / relay errors
   | 'RELAY_ERROR'
+  | 'RELAY_SUBMISSION_UNCERTAIN'
   | 'RPC_ERROR'
 
 export interface AltudeErrorOptions {

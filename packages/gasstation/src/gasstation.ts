@@ -12,7 +12,7 @@
 
 import type { SolanaNetwork } from '@altude/core'
 import type { createAltudeClient } from '@altude/core'
-import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient } from './client.js'
+import { AltudeHttpClient, createAltudeDevnetClient, createAltudeMainnetClient, getConfigNetwork } from './client.js'
 import {
   createTransaction,
   transactionToBase64WithSigners,
@@ -54,6 +54,10 @@ export interface AltudeGasStationConfig {
 }
 
 export interface SendOptions {
+  /** Fail closed if the network changes after approval. */
+  expectedNetwork?: SolanaNetwork
+  /** Check cancellation immediately before each relay dispatch. */
+  beforeDispatch?: () => void
   /** Sender wallet address (base58). Mirrors Android SDK `SendOptions.account`. */
   account?: string
   /** Recipient address (base58). Mirrors Android SDK `SendOptions.toAddress`. */
@@ -308,6 +312,8 @@ export class AltudeGasStation {
     if (options.signedTransaction) {
       return this.client.sendTransaction({
         transaction: options.signedTransaction,
+        ...(options.expectedNetwork && { expectedNetwork: options.expectedNetwork }),
+        ...(options.beforeDispatch && { beforeDispatch: options.beforeDispatch }),
         ...(options.commitment !== undefined && { commitment: options.commitment }),
       })
     }
@@ -325,6 +331,8 @@ export class AltudeGasStation {
 
     const execute = async (): Promise<SendTransactionResponse> => {
       const config = await this.getConfig()
+      if (options.expectedNetwork && getConfigNetwork(config) !== options.expectedNetwork)
+        throw new Error('The authoritative RPC environment does not match the approved transaction network.')
       const rpc = await this.getRpcClient()
       const feePayer = config.FeePayer as unknown as Address
       const sourceSigner = this.#toTransactionSigner(options.sourceSigner as GaslessTransactionSigner)
@@ -385,6 +393,8 @@ export class AltudeGasStation {
           ],
         })
         // 3) Partial sign with source signer(s).
+        if (options.expectedNetwork && getConfigNetwork(await this.getConfig(true)) !== options.expectedNetwork)
+          throw new Error('The authoritative RPC environment does not match the approved transaction network.')
         signedTransaction = await transactionToBase64WithSigners(transaction)
       } else {
         const transferInstruction = getTransferSolInstruction({
@@ -401,12 +411,16 @@ export class AltudeGasStation {
           latestBlockhash,
         })
         // 3) Partial sign with source signer(s).
+        if (options.expectedNetwork && getConfigNetwork(await this.getConfig(true)) !== options.expectedNetwork)
+          throw new Error('The authoritative RPC environment does not match the approved transaction network.')
         signedTransaction = await transactionToBase64WithSigners(transaction)
       }
 
       // 4) Relay broadcast request.
       return this.client.sendTransaction({
         transaction: signedTransaction,
+        ...(options.expectedNetwork && { expectedNetwork: options.expectedNetwork }),
+        ...(options.beforeDispatch && { beforeDispatch: options.beforeDispatch }),
         ...(options.commitment !== undefined && { commitment: options.commitment }),
       })
     }

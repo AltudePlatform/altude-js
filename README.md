@@ -11,8 +11,17 @@ Production TypeScript SDK for Altude gasless Solana infrastructure.
 | [`@altude/core`](./packages/core) | Shared types, BIP-39/BIP-44 key derivation, RPC client, error taxonomy |
 | [`@altude/gasstation`](./packages/gasstation) | Gasless transaction relay via the Altude API |
 
-Only packages in this table are supported and published. Experimental package
-work does not live on the production branch and carries no release commitment.
+Only packages in this table are supported and published. Experimental packages
+remain unpublished and carry no release commitment.
+
+## Experimental packages
+
+The experimental
+[`@altude/wallet-react-native`](./packages/wallet-react-native) package is a
+React Native SDK-owned login-to-wallet flow over the native callback broker,
+with app-scoped wallet lookup, protected local signing keys and explicit
+recovery-required handling. It remains unpublished; the coordinated API/browser
+wallet-access bridge and real-device release gates are described in its README.
 
 ## Quick Start
 
@@ -82,7 +91,9 @@ pnpm manifest:sync   # applies the manifest to package.json + .changeset/config.
 pnpm manifest:check  # verifies everything is in sync (run in CI)
 ```
 
-The release workflow builds, lints, typechecks and tests only the packages listed in the manifest.
+The release workflow builds, lints, typechecks and tests the packages listed in
+the manifest. It also builds the experimental `@altude/wallet-react-native`
+package for React Native export checks; this does not make it publishable.
 
 ### Workflow
 
