@@ -60,6 +60,9 @@ jobs:
       - name: Build
         run: pnpm turbo build ${{ steps.manifest.outputs.filters }}
 
+      - name: Build experimental native package for export checks
+        run: pnpm --filter @altude/wallet-react-native build
+
       - name: React Native exports
         run: node --conditions=react-native scripts/check-react-native-exports.mjs
 

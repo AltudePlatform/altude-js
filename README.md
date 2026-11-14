@@ -91,7 +91,9 @@ pnpm manifest:sync   # applies the manifest to package.json + .changeset/config.
 pnpm manifest:check  # verifies everything is in sync (run in CI)
 ```
 
-The release workflow builds, lints, typechecks and tests only the packages listed in the manifest.
+The release workflow builds, lints, typechecks and tests the packages listed in
+the manifest. It also builds the experimental `@altude/wallet-react-native`
+package for React Native export checks; this does not make it publishable.
 
 ### Workflow
 
