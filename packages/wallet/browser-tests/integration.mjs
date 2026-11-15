@@ -791,6 +791,7 @@ async function runCompletenessAcceptance(browser, origin) {
   assert.equal(await page.evaluate(() => window.reopenedLocalWallet.state.address), local.state.address)
   assert.equal(await page.evaluate(() => window.authCalls), 0)
 
+  await testManagedSignOutRetry(page, local.state.localIdentityKey)
   await testPersistentCreationRace(page)
   await testIdentityAndPresentations(page)
   await testStaleRestore(page)
@@ -801,6 +802,102 @@ async function runCompletenessAcceptance(browser, origin) {
   await testIframeSources(page, origin)
   await testLegacySocialOutcomes(page)
   await page.close()
+}
+
+async function testManagedSignOutRetry(page, localHandle) {
+  const root = page.locator('#acceptance')
+  let online = false
+  let revocations = 0
+  let walletAddress
+  await page.route('https://signout.example.test/**', async (route) => {
+    if (route.request().url().endsWith('/session')) {
+      await route.fulfill({ json: {
+        isAuthenticated: true, user: { id: 'managed-signout-user', walletAddress },
+      } })
+      return
+    }
+    if (route.request().url().endsWith('/signout')) {
+      revocations++
+      assert.equal(route.request().headers().authorization, 'Bearer managed-signout-token')
+      if (!online) {
+        await route.abort('internetdisconnected')
+        return
+      }
+      await route.fulfill({ json: { success: true } })
+      return
+    }
+    assert.ok(route.request().url().endsWith('/auth0'))
+    walletAddress = route.request().postDataJSON().walletAddress
+    await route.fulfill({ json: {
+      success: true, sessionToken: 'managed-signout-token',
+      user: { id: 'managed-signout-user', walletAddress },
+    } })
+  })
+  for (const custody of ['external', 'create-local', 'open-local']) {
+    online = false
+    const restored = page.waitForResponse('https://signout.example.test/api/EmbeddedWallet/session')
+    await page.evaluate(async () => {
+      const sdk = window.AltudeWalletSDK
+      window.signOutTokens = new sdk.MemorySessionTokenStore()
+      window.signOutWallet = new sdk.AltudeWallet({
+        apiKey: 'acceptance', apiBaseUrl: 'https://signout.example.test',
+        auth: {}, sessionTokenStore: window.signOutTokens,
+        passkeys: window.localPasskeys, gasStation: window.localGas,
+        externalWallets: [{
+          id: 'phantom', label: 'Phantom',
+          connect: async () => ({ chain: 'solana', address: 'Vote111111111111111111111111111111111111111' }),
+        }],
+      })
+      await window.signOutWallet.connect({
+        accessToken: 'synthetic-provider-token', identityKey: 'managed-signout-user',
+      })
+      window.testMount(window.signOutWallet, {
+        authMethods: { passkey: true, externalWallets: ['phantom'] },
+      })
+    })
+    await restored
+    await root.locator('.account-identity').waitFor()
+    await page.evaluate(() => {
+      window.signOutTransaction = window.signOutWallet.requestTransaction({
+        kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 1,
+      }).then(() => 'submitted', (error) => error.code)
+    })
+    await root.getByRole('group', { name: /^Transaction confirmation/ }).waitFor()
+    await root.getByRole('button', { name: 'Sign out', exact: true }).click()
+    const retry = root.getByRole('button', { name: 'Retry sign-out', exact: true })
+    await root.getByRole('alert').waitFor()
+    await retry.waitFor({ state: 'visible' })
+    assert.equal(await retry.isEnabled(), true)
+    assert.equal(await page.evaluate(() => window.signOutTransaction), 'SESSION', 'failed sign-out cancels approval')
+    assert.equal(await root.getByRole('group', { name: /^Transaction confirmation/ }).count(), 0)
+    assert.equal(await page.evaluate(() => window.signOutTokens.get()), 'managed-signout-token')
+    assert.equal(await page.evaluate(() => window.signOutWallet.state.status), 'disconnected')
+    // The UI recovery must not bypass the retained-session custody guards.
+    assert.equal(await page.evaluate(async () => {
+      try { await window.signOutWallet.connectExternalWallet('phantom'); return 'connected' }
+      catch (error) { return error.code }
+    }), 'SESSION')
+    online = true
+    await retry.click()
+    await root.getByRole('heading', { name: 'Sign in to Altude', exact: true }).waitFor()
+    assert.equal(await page.evaluate(() => window.signOutTokens.get()), null)
+    assert.equal(await retry.count(), 0)
+    if (custody === 'external') {
+      await root.getByRole('button', { name: /Connect a Web3 wallet/ }).click()
+      await root.getByRole('button', { name: 'Connect Phantom', exact: true }).click()
+      await root.getByRole('button', { name: 'Disconnect wallet', exact: true }).waitFor()
+    } else if (custody === 'create-local') {
+      await root.getByRole('button', { name: 'Create local wallet', exact: true }).click()
+      await root.locator('.local-handle').waitFor()
+    } else {
+      await root.getByRole('textbox', { name: 'Local wallet handle', exact: true }).fill(localHandle)
+      await root.getByRole('button', { name: 'Open local wallet', exact: true }).click()
+      await root.locator('.local-handle').waitFor()
+    }
+    assert.equal(await page.evaluate(() => window.signOutWallet.state.custody), custody === 'external' ? 'external' : 'local')
+  }
+  assert.equal(revocations, 6, 'each managed failure requires an explicit successful UI retry')
+  await page.unroute('https://signout.example.test/**')
 }
 
 async function testConnectBeforeRestore(page) {

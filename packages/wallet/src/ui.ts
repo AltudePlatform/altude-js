@@ -222,6 +222,7 @@ export function mountWalletUI(
   let tokenMint = ''
   let externalWalletsExpanded = false
   let busy = false
+  let signOutPending = false
   let message = ''
   let errorMessage = ''
   let loginErrorMessage = ''
@@ -348,7 +349,13 @@ export function mountWalletUI(
     panel.append(content)
     const state = wallet.state
 
-    if (state.status === 'disconnected' && loginErrorMessage) {
+    if (signOutPending) {
+      const title = document.createElement('h2')
+      title.textContent = 'Finish signing out'
+      const details = document.createElement('p')
+      details.textContent = 'Finish signing out before signing in or changing wallets. If connectivity was lost, reconnect and retry.'
+      content.append(title, details, button('Retry sign-out', signOut))
+    } else if (state.status === 'disconnected' && loginErrorMessage) {
       const errorState = document.createElement('div')
       errorState.className = 'login-state login-error'
       const icon = document.createElement('span')
@@ -1022,9 +1029,9 @@ export function mountWalletUI(
       const manageRecovery = button('Manage recovery', () => undefined, true, true)
       manageRecovery.setAttribute('aria-describedby', recoveryHelpId)
       manageRecovery.prepend(createIcon('shield'))
-      const signOut = button('Sign out', () => run(() => wallet.signOut()), true)
-      signOut.prepend(createIcon('signout'))
-      accountActions.append(manageRecovery, signOut)
+      const signOutButton = button('Sign out', signOut, true)
+      signOutButton.prepend(createIcon('signout'))
+      accountActions.append(manageRecovery, signOutButton)
       content.append(accountActions)
       const walletActions = document.createElement('div')
       walletActions.className = 'actions'
@@ -1088,7 +1095,7 @@ export function mountWalletUI(
       content.append(
         button(
           state.custody === 'external' ? 'Disconnect wallet' : 'Sign out',
-          () => run(() => wallet.signOut()),
+          signOut,
           true,
         ),
       )
@@ -1330,6 +1337,14 @@ export function mountWalletUI(
       provisioningSubmitting.delete(id)
       render()
     }
+  }
+
+  function signOut(): Promise<void> {
+    return run(async () => {
+      signOutPending = true
+      await wallet.signOut()
+      signOutPending = false
+    })
   }
 
   async function run(

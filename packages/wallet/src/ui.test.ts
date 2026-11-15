@@ -362,6 +362,65 @@ describe('mountWalletUI', () => {
     unmount()
   })
 
+  it('keeps sign-out retry available across failures and disables it during cleanup', async () => {
+    let state: WalletState = {
+      status: 'connected', session: { user: { id: 'signout-user' } },
+      address: 'wallet-address', protection: 'device-local', custody: 'embedded',
+      externalProviderId: null, externalChain: null,
+    }
+    let listener: ((event: WalletEvent) => void) | undefined
+    let finishSignOut: (() => void) | undefined
+    const signOut = vi.fn(async () => {
+      state = {
+        status: 'disconnected', session: null, address: null, protection: null,
+        custody: null, externalProviderId: null, externalChain: null,
+      }
+      listener?.({ type: 'state', state })
+      if (signOut.mock.calls.length < 3) throw new Error('Revocation unavailable.')
+      await new Promise<void>((resolve) => { finishSignOut = resolve })
+    })
+    const wallet = {
+      get state() { return state },
+      externalWalletProviders: [],
+      restoreSession: () => Promise.resolve(state),
+      onEvent: (handler: (event: WalletEvent) => void) => {
+        listener = handler
+        return () => { listener = undefined }
+      },
+      signOut,
+    } as unknown as AltudeWallet
+    const container = document.createElement('div')
+    document.body.append(container)
+    const unmount = mountWalletUI(container, wallet, { presentation: 'inline' })
+    const click = (label: string) => {
+      const control = [...container.querySelectorAll('button')].find(
+        (candidate) => candidate.textContent === label,
+      )
+      if (!control) throw new Error(`Missing ${label} action.`)
+      control.click()
+      return control
+    }
+    click('Sign out')
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await vi.waitFor(() => {
+        expect(container.querySelector('[role="alert"]')?.textContent).toBe('Revocation unavailable.')
+        expect(signOut).toHaveBeenCalledTimes(attempt)
+      })
+      expect(container.textContent).not.toContain('Sign in to Altude')
+      expect(container.textContent).not.toContain('Try again')
+      click('Retry sign-out')
+    }
+    expect(container.querySelector('button')?.disabled).toBe(true)
+    expect(signOut).toHaveBeenCalledTimes(3)
+    finishSignOut?.()
+    await vi.waitFor(() => {
+      expect(container.querySelector('h2')?.textContent).toBe('Sign in to Altude')
+    })
+    expect(container.textContent).not.toContain('Retry sign-out')
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    unmount()
+  })
+
   it('shows the embedded account summary after a successful sign-in', () => {
     const state: WalletState = {
       status: 'connected',

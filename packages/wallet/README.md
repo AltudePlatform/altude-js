@@ -143,6 +143,10 @@ limits, unsupported MFA/bot challenges, unavailable broker deployments, and
 origin failures surface as explicit errors. There is no direct-Auth0 or hosted
 OTP fallback. Session restoration and sign-out continue through
 `/api/EmbeddedWallet/session` and `/api/EmbeddedWallet/signout`.
+If sign-out fails, the managed UI keeps a **Retry sign-out** action until cleanup
+succeeds, before offering sign-in or another custody mode. Local keys lock and
+pending approvals are cancelled even when server revocation fails; the session
+token is retained only to retry cleanup.
 
 ### Optional direct Auth0 SPA adapter
 
