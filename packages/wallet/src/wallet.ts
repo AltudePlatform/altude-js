@@ -94,6 +94,7 @@ export class AltudeWallet {
   readonly #usedBrowserTickets = new Set<string>()
   #active: ActiveWallet | null = null
   #lifecycleGeneration = 0
+  #lockGeneration = 0
   #sessionTokenQueue: Promise<void> = Promise.resolve()
 
   constructor(config: AltudeWalletConfig) {
@@ -974,7 +975,10 @@ export class AltudeWallet {
   ): Promise<WalletTransactionResult> {
     const active = this.#requireActive()
     const generation = this.#lifecycleGeneration
+    const lockGeneration = this.#lockGeneration
     const network = await this.#approvedNetwork()
+    if (active.mode === 'embedded' && lockGeneration !== this.#lockGeneration)
+      throw new AltudeWalletError('WALLET_LOCKED', 'Wallet locked before transaction confirmation.')
     if (generation !== this.#lifecycleGeneration || active !== this.#active)
       throw new AltudeWalletError('SESSION', 'The wallet changed before transaction confirmation.')
     if (snapshot.network && snapshot.network !== network)
@@ -1113,6 +1117,7 @@ export class AltudeWallet {
   async createAccount(tokens: string[] = [], signal?: AbortSignal) {
     const active = this.#requireEmbeddedActive()
     const generation = this.#lifecycleGeneration
+    const lockGeneration = this.#lockGeneration
     const assertNotAborted = () => {
       if (signal?.aborted)
         throw new AltudeWalletError('TRANSACTION', 'Account provisioning was cancelled.')
@@ -1123,6 +1128,8 @@ export class AltudeWallet {
     await this.#vault.getSigner(active.identityKey)
     const network = await this.#approvedNetwork()
     assertNotAborted()
+    if (lockGeneration !== this.#lockGeneration)
+      throw new AltudeWalletError('WALLET_LOCKED', 'Wallet locked before provisioning confirmation.')
     if (generation !== this.#lifecycleGeneration || active !== this.#active)
       throw new AltudeWalletError('SESSION', 'The wallet changed before provisioning confirmation.')
     const id = this.#newId()
@@ -1283,7 +1290,11 @@ export class AltudeWallet {
   }
 
   lock(): void {
-    if (this.#active?.mode === 'embedded') this.#vault.lock(this.#active.identityKey)
+    if (this.#active?.mode === 'embedded') {
+      this.#lockGeneration++
+      this.#vault.lock(this.#active.identityKey)
+      this.#cancelPendingTransactions('Wallet locked before transaction completion.', 'WALLET_LOCKED')
+    }
     this.#emit({ type: 'state', state: this.state })
   }
 
@@ -1322,14 +1333,17 @@ export class AltudeWallet {
     this.#active = next
   }
 
-  #cancelPendingTransactions(message: string): void {
+  #cancelPendingTransactions(
+    message: string,
+    code: 'SESSION' | 'WALLET_LOCKED' = 'SESSION',
+  ): void {
     for (const [id, pending] of this.#pendingProvisioning) {
-      pending.cancelled = new AltudeWalletError('SESSION', message)
+      pending.cancelled = new AltudeWalletError(code, message)
       pending.reject(pending.cancelled)
       this.#pendingProvisioning.delete(id)
     }
     for (const [id, pending] of this.#pendingTransactions) {
-      pending.cancelled = new AltudeWalletError('SESSION', message)
+      pending.cancelled = new AltudeWalletError(code, message)
       pending.reject(pending.cancelled)
       this.#pendingTransactions.delete(id)
     }
@@ -1337,6 +1351,11 @@ export class AltudeWallet {
 
   #assertNotCancelled(pending: PendingTransaction): void {
     if (pending.cancelled) throw pending.cancelled
+    if (
+      pending.walletMode === 'embedded' &&
+      (!pending.identityKey || !this.#vault.isUnlocked(pending.identityKey))
+    )
+      throw new AltudeWalletError('WALLET_LOCKED', 'Unlock the wallet before submitting a transaction.')
   }
 
   #networkFromConfig(environment: string): NonNullable<AltudeWalletConfig['network']> {

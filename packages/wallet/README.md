@@ -351,11 +351,15 @@ closed rather than falling back to a public RPC or guessed cluster.
 
 Approval claims the request immediately; concurrent `approveTransaction(id)`
 calls reject with a `TRANSACTION` error rather than submit another transfer.
-Requests stay cancellable while submitting. Changing identity, signing out, or
-rejecting the request cancels its pending result, prevents HTTP submission or
-retry after cancellation (including during a final config refresh), and prevents
-a late relay response from reporting completion. Cancellation cannot retract a transfer
+Requests stay cancellable while submitting. Locking an embedded wallet, changing
+identity, signing out, or rejecting the request cancels its pending result,
+prevents HTTP submission or retry after cancellation (including during a final
+config refresh), and prevents a late relay response from reporting completion.
+Cancellation cannot retract a transfer
 already sent to the relay; check its status before requesting another transfer.
+Embedded-wallet lock also invalidates transfer/provisioning preparation before
+confirmation; unlocking again does not revive cancelled work. External-wallet
+`lock()` remains a no-op and does not cancel external transfers.
 
 `createAccount(tokens?, signal?)` now **requests** provisioning; it does not immediately
 submit. Headless consumers must handle `provisioning:confirmation`, display
@@ -363,9 +367,9 @@ its frozen token list and network, then call `approveProvisioning(id)` or
 `rejectProvisioning(id)`. The returned promise settles only after that decision
 and execution. Do not await it inside a UI busy wrapper that disables the
 confirmation controls. Duplicate approvals cannot submit twice; rejection,
-identity change and sign-out cancel pending work. A successful existing-account
-no-op returns `Status: 'Success'`, `Message: 'Account already exists'`, and an
-empty `Signature`, with no new relay submission.
+embedded-wallet lock, identity change and sign-out cancel pending work. A successful
+existing-account no-op returns `Status: 'Success'`,
+`Message: 'Account already exists'`, and an empty `Signature`, with no new relay submission.
 An optional `AbortSignal` also cancels preparation before a confirmation exists.
 The managed UI aborts that preparation on teardown and rejects unsubmitted
 confirmations, while leaving already submitting operations alone.

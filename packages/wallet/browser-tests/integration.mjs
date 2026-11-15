@@ -796,6 +796,7 @@ async function runCompletenessAcceptance(browser, origin) {
   await testStaleRestore(page)
   await testConnectBeforeRestore(page)
   await testRealRelayCancellation(page)
+  await testRealRelayLock(page)
   await testRealRelayNetworkChange(page)
   await testIframeSources(page, origin)
   await testLegacySocialOutcomes(page)
@@ -997,6 +998,123 @@ async function testRealRelayCancellation(page) {
     releaseRefresh()
     await page.unroute('https://relay-acceptance.example.test/**')
     await page.unroute('https://rpc-acceptance.example.test/**')
+  }
+}
+
+async function testRealRelayLock(page) {
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' }
+  for (const operation of ['transfer', 'provision']) {
+    for (const phase of ['dispatch', 'retry']) {
+      let relayCount = 0
+      let reachedRefresh
+      let releaseRefresh
+      const refreshReached = new Promise((resolve) => { reachedRefresh = resolve })
+      const refreshRelease = new Promise((resolve) => { releaseRefresh = resolve })
+      const base = `https://lock-${operation}-${phase}.example.test`
+      const rpc = `https://rpc-lock-${operation}-${phase}.example.test`
+      await page.evaluate(() => { window.lockRelaySigned = false })
+      await page.route(`${base}/**`, async (route) => {
+        const request = route.request()
+        if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+        const path = new URL(request.url()).pathname.toLowerCase()
+        if (path === '/api/transaction/config') {
+          if (await page.evaluate(() => window.lockRelaySigned) && relayCount === (phase === 'dispatch' ? 0 : 1)) {
+            reachedRefresh()
+            await refreshRelease
+          }
+          return route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({
+            FeePayer: 'ALTn7gyjm29WthZGgs4z6WVAK2PK5U6w4FAtPg3TPY71',
+            RpcUrl: rpc, Token: 'synthetic-lock-token', TokenExpiration: null, RpcEnvironment: 'devnet',
+          }) })
+        }
+        assert.equal(path, operation === 'transfer' ? '/api/transaction/send' : '/api/account/create')
+        assert.equal(request.method(), 'POST')
+        relayCount++
+        return route.fulfill({ status: 401, headers: cors, body: 'synthetic expired authorization' })
+      })
+      await page.route(`${rpc}/**`, async (route) => {
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors })
+        const body = route.request().postDataJSON()
+        assert.ok(['getLatestBlockhash', 'getAccountInfo'].includes(body.method))
+        return route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({
+          jsonrpc: '2.0', id: body.id, result: { context: { slot: 1 }, value: body.method === 'getAccountInfo'
+            ? null : { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 100 } },
+        }) })
+      })
+      try {
+        await page.evaluate(async ({ operation, base }) => {
+          const sdk = window.AltudeWalletSDK
+          const gs = new sdk.AltudeGasStation({ apiKey: 'lock-relay-test', baseUrl: base, network: 'devnet' })
+          // Observe the completed wallet signer, without replacing the real facade or HTTP client.
+          const method = operation === 'transfer' ? 'send' : 'createAccount'
+          const signerProperty = operation === 'transfer' ? 'sourceSigner' : 'signer'
+          const execute = gs[method].bind(gs)
+          gs[method] = (options) => {
+            const signer = options[signerProperty]
+            return execute({
+              ...options,
+              [signerProperty]: {
+                ...signer,
+                signTransactionMessage: async (bytes) => {
+                  const signature = await signer.signTransactionMessage(bytes)
+                  window.lockRelaySigned = true
+                  return signature
+                },
+              },
+            })
+          }
+          const wallet = new sdk.AltudeWallet({
+            apiKey: 'lock-relay-test', apiBaseUrl: 'https://api.example.test', network: 'devnet', auth: {}, gasStation: gs,
+            fetch: async (url, request) => {
+              if (!url.endsWith('/auth0')) throw new Error(`Unexpected identity request ${url}`)
+              return new Response(JSON.stringify({
+                Success: true, SessionToken: 'lock-session',
+                User: { Id: base, WalletAddress: JSON.parse(request.body).walletAddress },
+              }))
+            },
+          })
+          await wallet.connect({ identityKey: base, accessToken: 'synthetic' })
+          window.lockRelayWallet = wallet
+          window.lockRelayError = null
+          const outcome = (promise) => promise.then(() => 'submitted', (error) => {
+            window.lockRelayError = error.message
+            return error.code
+          })
+          wallet.onEvent((event) => {
+            if (event.type === 'transaction:confirmation' || event.type === 'provisioning:confirmation') {
+              window.lockRelayApproval = outcome(event.type === 'transaction:confirmation'
+                ? wallet.approveTransaction(event.id) : wallet.approveProvisioning(event.id))
+            }
+          })
+          window.lockRelayOutcome = outcome(operation === 'transfer'
+            ? wallet.requestTransaction({ kind: 'sol-transfer', recipient: 'Vote111111111111111111111111111111111111111', amount: 1 })
+            : wallet.createAccount(['So11111111111111111111111111111111111111112']))
+        }, { operation, base })
+        await Promise.race([
+          refreshReached,
+          page.waitForFunction(() => window.lockRelayError, null, { timeout: 15_000 }).then(async () => {
+            throw new Error(`Lock regression failed before refresh: ${await page.evaluate(() => window.lockRelayError)}`)
+          }),
+        ])
+        const priorPosts = phase === 'dispatch' ? 0 : 1
+        assert.equal(relayCount, priorPosts, `${operation}: exact pre-lock relay count`)
+        assert.equal(await page.evaluate(() => window.lockRelaySigned), true)
+        assert.equal(await page.evaluate(() => {
+          window.lockRelayWallet.lock()
+          return window.lockRelayWallet.state.status
+        }), 'locked')
+        await page.waitForFunction(() => window.lockRelayError !== null, null, { timeout: 5_000 })
+        assert.equal(await page.evaluate(() => window.lockRelayOutcome), 'WALLET_LOCKED')
+        releaseRefresh()
+        assert.equal(await page.evaluate(() => window.lockRelayApproval), 'WALLET_LOCKED')
+        assert.equal(relayCount, priorPosts, `${operation}: lock must prevent ${phase}`)
+        assert.equal(await page.evaluate(() => window.lockRelayWallet.state.status), 'locked')
+      } finally {
+        releaseRefresh()
+        await page.unroute(`${base}/**`)
+        await page.unroute(`${rpc}/**`)
+      }
+    }
   }
 }
 

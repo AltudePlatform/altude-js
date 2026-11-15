@@ -1531,9 +1531,13 @@ describe('AltudeWallet', () => {
   it.each([
     ['transfer', 'reject'],
     ['transfer', 'signout'],
+    ['transfer', 'lock'],
+    ['transfer', 'lock-unlock'],
     ['provisioning', 'reject'],
     ['provisioning', 'signout'],
     ['provisioning', 'abort'],
+    ['provisioning', 'lock'],
+    ['provisioning', 'lock-unlock'],
   ] as const)(
     'prevents the actual HTTP relay when %s is cancelled by %s during final config refresh',
     async (operation, cancellation) => {
@@ -1671,13 +1675,19 @@ describe('AltudeWallet', () => {
       await configEntered.promise
       expect(relayCalls).toBe(0)
       if (cancellation === 'signout') await wallet.signOut()
-      else if (cancellation === 'abort') controller.abort()
+      else if (cancellation === 'lock' || cancellation === 'lock-unlock') {
+        wallet.lock()
+        expect(wallet.state.status).toBe('locked')
+        expect(await result).toMatchObject({ code: 'WALLET_LOCKED' })
+        if (cancellation === 'lock-unlock') await wallet.unlock()
+      } else if (cancellation === 'abort') controller.abort()
       else if (operation === 'transfer') wallet.rejectTransaction(id)
       else wallet.rejectProvisioning(id)
       configRelease.resolve(true)
       expect(await result).toBeInstanceOf(AltudeWalletError)
       expect(await approved).toBeInstanceOf(AltudeWalletError)
       expect(relayCalls).toBe(0)
+      if (cancellation === 'lock') expect(wallet.state.status).toBe('locked')
     },
   )
 
@@ -1726,6 +1736,7 @@ describe('AltudeWallet', () => {
       accessToken: 'provider-token',
       identityKey: 'auth0|locked-wallet-user',
     })
+    wallet.lock()
     let confirmationId = ''
     wallet.onEvent((event) => {
       if (event.type === 'transaction:confirmation') confirmationId = event.id
@@ -1736,8 +1747,6 @@ describe('AltudeWallet', () => {
       amount: 1_000,
       network: 'devnet',
     })
-    wallet.lock()
-
     await vi.waitFor(() => {
       expect(confirmationId).not.toBe('')
     })
@@ -1756,6 +1765,90 @@ describe('AltudeWallet', () => {
     })
     expect((await wallet.unlock()).status).toBe('connected')
     expect(stateEvents).toEqual(['connected'])
+  })
+
+  it.each(['transfer', 'provisioning'] as const)(
+    'invalidates %s preparation on lock even after unlocking again',
+    async (operation) => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({
+          Success: true,
+          SessionToken: 'session-token',
+          User: { Id: 'lock-preparation-user' },
+        }),
+      )
+      const wallet = createWallet()
+      await wallet.connect({ accessToken: 'provider-token', identityKey: 'lock-preparation-user' })
+      const entered = deferred<boolean>()
+      const release = deferred<boolean>()
+      gasStation.getConfig.mockImplementation(async () => {
+        entered.resolve(true)
+        await release.promise
+        return { RpcEnvironment: 'devnet' }
+      })
+      const confirmation = vi.fn()
+      wallet.onEvent((event) => {
+        if (event.type === 'transaction:confirmation' || event.type === 'provisioning:confirmation') {
+          confirmation()
+          if (event.type === 'transaction:confirmation') wallet.rejectTransaction(event.id)
+          else wallet.rejectProvisioning(event.id)
+        }
+      })
+      const request =
+        operation === 'transfer'
+          ? wallet.requestTransaction({
+              kind: 'sol-transfer',
+              recipient: '11111111111111111111111111111111',
+              amount: 1_000,
+            })
+          : wallet.createAccount()
+      const rejected = expect(request).rejects.toMatchObject({ code: 'WALLET_LOCKED' })
+      await entered.promise
+      wallet.lock()
+      await wallet.unlock()
+      release.resolve(true)
+      await rejected
+      expect(confirmation).not.toHaveBeenCalled()
+      expect(gasStation.send).not.toHaveBeenCalled()
+      expect(gasStation.createAccount).not.toHaveBeenCalled()
+    },
+  )
+
+  it('leaves a pending external transfer unaffected by lock', async () => {
+    const signer = { address: '11111111111111111111111111111111', sign: vi.fn() }
+    const wallet = createWallet([
+      {
+        id: 'phantom',
+        label: 'Phantom',
+        connect: () => Promise.resolve({ address: signer.address, chain: 'solana', signer }),
+      },
+    ])
+    await wallet.connectExternalWallet('phantom')
+    const confirmation = deferred<string>()
+    wallet.onEvent((event) => {
+      if (event.type === 'transaction:confirmation') confirmation.resolve(event.id)
+    })
+    const request = wallet.requestTransaction({
+      kind: 'sol-transfer',
+      recipient: 'So11111111111111111111111111111111111111112',
+      amount: 1_000,
+    })
+    const id = await confirmation.promise
+    const entered = deferred<boolean>()
+    const release = deferred<boolean>()
+    gasStation.send.mockImplementation(async (options: SendOptions) => {
+      entered.resolve(true)
+      await release.promise
+      options.beforeDispatch?.()
+      return { Signature: 'external-signature', Status: 'Success' }
+    })
+    const approval = wallet.approveTransaction(id)
+    await entered.promise
+    wallet.lock()
+    expect(wallet.state.status).toBe('connected')
+    release.resolve(true)
+    await expect(request).resolves.toMatchObject({ signature: 'external-signature' })
+    await expect(approval).resolves.toMatchObject({ signature: 'external-signature' })
   })
 
   it.each([true, false])(
