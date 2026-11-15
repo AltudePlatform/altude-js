@@ -28,6 +28,60 @@ afterEach(() => {
 
 describe('real facade and HTTP relay dispatch constraints', () => {
   it.each(['transfer', 'provisioning'] as const)(
+    'does not resubmit an accepted %s when its response is lost',
+    async (operation) => {
+      const client = new AltudeHttpClient('dispatch-test', 'https://api.example.test')
+      let accepted = false
+      let relayPosts = 0
+      const beforeDispatch = vi.fn()
+      const fetch = vi.fn((url: string, init?: RequestInit): Promise<Response> => {
+        if (url.endsWith('/api/transaction/config')) {
+          return Promise.resolve(response({
+            FeePayer: signerAddress,
+            RpcUrl: 'https://rpc.example.test',
+            Token: 'synthetic-token',
+            RpcEnvironment: 'devnet',
+            TokenExpiration: '2099-01-01T00:00:00Z',
+          }))
+        }
+        if (init?.method === 'POST') {
+          accepted = true
+          relayPosts += 1
+          return Promise.reject(new Error('Synthetic response loss after relay acceptance'))
+        }
+        return Promise.reject(new Error(`Unexpected HTTP request: ${url}`))
+      })
+      vi.stubGlobal('fetch', fetch)
+      const pending =
+        operation === 'transfer'
+          ? client.sendTransaction({
+              transaction: 'synthetic-base64',
+              beforeDispatch,
+              expectedNetwork: 'devnet',
+            })
+          : client.createAccount({
+              signedTransaction: 'synthetic-base64',
+              beforeDispatch,
+              expectedNetwork: 'devnet',
+            })
+
+      const error = await pending.then(
+        () => {
+          throw new Error('Expected the lost relay response to be reported')
+        },
+        (reason: unknown) => reason,
+      )
+      expect(error).toBeInstanceOf(AltudeError)
+      if (!(error instanceof AltudeError)) throw error
+      expect(error.code).toBe('RELAY_SUBMISSION_UNCERTAIN')
+      expect(error.remediation).toContain('Check the transaction status')
+      expect(accepted).toBe(true)
+      expect(relayPosts).toBe(1)
+      expect(beforeDispatch).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(['transfer', 'provisioning'] as const)(
     'never retries a %s guard error even when its code is RELAY_ERROR',
     async (operation) => {
       const client = new AltudeHttpClient('dispatch-test', 'https://api.example.test')
@@ -183,8 +237,14 @@ describe('real facade and HTTP relay dispatch constraints', () => {
         release.resolve()
       }
       const error = await outcome
-      if (interleaving === 'network-refresh' || interleaving === 'network-fallback')
+      if (interleaving === 'network-refresh')
         expect(error).toMatchObject({ code: 'RPC_ERROR' })
+      else if (
+        interleaving === 'network-fallback' ||
+        interleaving === 'cancel-fallback' ||
+        interleaving === 'cancel-network-retry'
+      )
+        expect(error).toMatchObject({ code: 'RELAY_SUBMISSION_UNCERTAIN' })
       else expect(error).toBe(failure)
       expect(relays).toEqual(interleaving === 'cancel-post-sign' ? [] : ['devnet'])
       expect(sign).toHaveBeenCalledOnce()

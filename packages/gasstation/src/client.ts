@@ -404,7 +404,6 @@ export class AltudeHttpClient {
     return this.#dispatchTransaction<SendTransactionResponse>(
       '/api/Transaction/send',
       { SignedTransaction: options.transaction },
-      { transaction: options.transaction },
       options,
     )
   }
@@ -444,7 +443,6 @@ export class AltudeHttpClient {
     return this.#dispatchTransaction<CreateAccountResponse>(
       '/api/Account/create',
       { signedTransaction: options.signedTransaction },
-      { SignedTransaction: options.signedTransaction },
       options,
     )
   }
@@ -452,31 +450,10 @@ export class AltudeHttpClient {
   async #dispatchTransaction<T extends SendTransactionResponse>(
     path: string,
     body: unknown,
-    fallbackBody: unknown,
     constraints: RelayDispatchConstraints,
   ): Promise<T> {
-    const guard = { failed: false }
-    const guarded: RelayDispatchConstraints = {
-      ...constraints,
-      beforeDispatch: () => {
-        try {
-          constraints.beforeDispatch?.()
-        } catch (error) {
-          guard.failed = true
-          throw error
-        }
-      },
-    }
-    try {
-      const response = await this.#post<T>(path, body, 3, guarded)
-      return this.#normalizeTransactionResponse(response)
-    } catch (err) {
-      if (guard.failed || !(err instanceof AltudeError) || err.code !== 'RELAY_ERROR') {
-        throw err
-      }
-      const fallback = await this.#post<T>(path, fallbackBody, 3, guarded)
-      return this.#normalizeTransactionResponse(fallback)
-    }
+    const response = await this.#post<T>(path, body, 1, constraints)
+    return this.#normalizeTransactionResponse(response)
   }
 
   async closeAccount(options: CloseAccountOptions): Promise<SendTransactionResponse> {
@@ -1050,8 +1027,9 @@ export class AltudeHttpClient {
 
     let lastError: unknown
     let hasRefreshedConfigAfterAuthError = false
+    let attemptLimit = retries
     const isConfigEndpoint = path.startsWith('/api/transaction/config')
-    for (let attempt = 0; attempt < retries; attempt++) {
+    for (let attempt = 0; attempt < attemptLimit; attempt++) {
       if (constraints?.expectedNetwork) {
         const config = await this.getConfig()
         const actual = config.RpcEnvironment.toLowerCase()
@@ -1077,12 +1055,22 @@ export class AltudeHttpClient {
           if (!this.isMockMode && !isConfigEndpoint && isAuthError && !hasRefreshedConfigAfterAuthError) {
             hasRefreshedConfigAfterAuthError = true
             await this.getConfig(true)
+            if (constraints) attemptLimit += 1
             continue
           }
 
+          const uncertainSubmission = constraints !== undefined && !isAuthError
           throw new AltudeError({
-            code: 'RELAY_ERROR',
-            message: `Altude relay returned ${response.status.toString()}: ${text}`,
+            code: uncertainSubmission ? 'RELAY_SUBMISSION_UNCERTAIN' : 'RELAY_ERROR',
+            message: uncertainSubmission
+              ? `Altude relay returned ${response.status.toString()} for ${path}; the transaction submission outcome is uncertain: ${text}`
+              : `Altude relay returned ${response.status.toString()}: ${text}`,
+            ...(uncertainSubmission
+              ? {
+                  remediation:
+                    'Check the transaction status on the selected network before asking the user to explicitly submit again.',
+                }
+              : {}),
           })
         }
 
@@ -1098,8 +1086,16 @@ export class AltudeHttpClient {
     }
 
     throw new AltudeError({
-      code: 'RELAY_ERROR',
-      message: `Request to ${path} failed after ${retries.toString()} attempts`,
+      code: constraints ? 'RELAY_SUBMISSION_UNCERTAIN' : 'RELAY_ERROR',
+      message: constraints
+        ? `The relay response for ${path} was lost; the transaction submission outcome is uncertain.`
+        : `Request to ${path} failed after ${retries.toString()} attempts`,
+      ...(constraints
+        ? {
+            remediation:
+              'Check the transaction status on the selected network before asking the user to explicitly submit again.',
+          }
+        : {}),
       cause: lastError,
     })
   }
