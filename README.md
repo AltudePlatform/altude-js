@@ -19,7 +19,9 @@ browser wallet primitives, API session integration, and a managed UI. It is
 not published or part of the supported production package set.
 
 The [`wallet-infrastructure-demo`](./examples/wallet-infrastructure-demo)
-example shows how to mount the experimental wallet package's managed modal UI.
+SDK integration and browser-test harness shows how to mount the experimental
+wallet package's managed modal UI. It complements, rather than replaces, the
+[standalone Embedded Wallet Demo](https://github.com/AltudePlatform/Embedded-wallet-demo).
 Run it with `pnpm --filter wallet-infrastructure-demo dev`. Its simulated mode
 is the default; live mode defaults to the Altude browser broker included in
 `@altude/wallet`, using a publishable API key and an operator-enrolled exact

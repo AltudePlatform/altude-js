@@ -315,8 +315,8 @@ root.innerHTML = `
           <span class="network-badge"><i></i> Devnet demo</span>
         </div>
         <p class="description">
-          Try the simulated flow, or connect a client-safe API key and Auth0 SPA app to exercise
-          the live wallet session API.
+          Try the simulated flow, or use a client-safe API key to exercise the live
+          wallet session API through the browser broker.
         </p>
         <label class="api-key-field" for="connection-mode">
           <span>Connection mode</span>

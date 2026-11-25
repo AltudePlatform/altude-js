@@ -3,6 +3,15 @@
 A minimal Vite app showing how to open the `@altude/wallet` managed UI as a
 modal with `mountWalletUI`.
 
+This is an SDK integration and browser-test harness for the workspace package,
+including offline simulation and live broker setup. It is not a replacement for
+the standalone [Embedded Wallet Demo](https://github.com/AltudePlatform/Embedded-wallet-demo),
+an Angular reference application with its own wallet implementation and
+deployment flow. The harness shares that demo's Altude color and typography
+tokens; its plain CSS avoids adding Angular/PrimeNG to this framework-neutral
+SDK example. It uses locally available Manrope, DM Mono, and Montserrat fonts
+with system fallbacks, without font downloads in simulated mode.
+
 ## Run
 
 From the repository root:

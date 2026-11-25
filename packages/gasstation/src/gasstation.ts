@@ -162,6 +162,7 @@ export interface CloseAccountOptions {
 const TOKEN_PROGRAM_ADDRESS = address('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 const WRAPPED_SOL_MINT_ADDRESS = 'So11111111111111111111111111111111111111112'
 
+// Bind transaction preparation and signing to the network the user approved.
 function assertExpectedNetwork(config: ConfigResponse, expected?: SolanaNetwork): void {
   if (!expected) return
   const actual = config.RpcEnvironment.toLowerCase()
