@@ -67,4 +67,21 @@ describe('WalletEmbedProvider', () => {
     await expect(provider.init()).rejects.toMatchObject({ code: 'SESSION' })
     provider.destroy()
   })
+
+  it('rejects requests after destroy without sending them', async () => {
+    vi.stubGlobal('location', { origin: 'https://app.example.test' })
+    const send = vi.fn()
+    const provider = new WalletEmbedProvider({
+      walletUrl: 'https://wallet.example.test',
+      transport: {
+        send,
+        onMessage: () => () => {},
+      },
+    })
+
+    provider.destroy()
+
+    await expect(provider.init()).rejects.toMatchObject({ code: 'SESSION' })
+    expect(send).not.toHaveBeenCalled()
+  })
 })

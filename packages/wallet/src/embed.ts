@@ -83,6 +83,7 @@ export class WalletEmbedProvider {
   readonly #pending = new Map<string, PendingRequest>()
   readonly #listeners = new Map<WalletEmbedEvent['type'], Set<(event: WalletEmbedEvent) => void>>()
   readonly #unsubscribe: () => void
+  #closed = false
 
   constructor(options: WalletEmbedProviderOptions) {
     let walletUrl: URL
@@ -156,6 +157,7 @@ export class WalletEmbedProvider {
   }
 
   destroy(): void {
+    this.#closed = true
     this.#unsubscribe()
     for (const [id, pending] of this.#pending) {
       clearTimeout(pending.timeout)
@@ -170,6 +172,11 @@ export class WalletEmbedProvider {
     payload: unknown,
     expectedType: PendingRequest['expectedType'],
   ): Promise<unknown> {
+    if (this.#closed) {
+      return Promise.reject(
+        new AltudeWalletError('SESSION', 'The embedded wallet connection was closed.'),
+      )
+    }
     const id = this.#crypto.randomUUID()
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
