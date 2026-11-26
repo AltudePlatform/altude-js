@@ -1144,6 +1144,61 @@ describe('mountWalletUI', () => {
     resend.click()
     await vi.waitFor(() => { expect(mocks.startOtp).toHaveBeenCalledTimes(2); })
     expect(mocks.startOtp).toHaveBeenLastCalledWith('sms', '+12025550123')
+    expect(requireInput(container, '.sms-consent input').checked).toBe(true)
+    unmount()
+  })
+
+  it('clears SMS sign-in details and requires fresh consent after successful sign-out', async () => {
+    const { wallet, mocks, container, setState } = createUiHarness()
+    mocks.signOut.mockImplementation(() => {
+      setState({
+        status: 'disconnected', session: null, address: null, protection: null,
+        custody: null, externalProviderId: null, externalChain: null,
+      })
+      return Promise.resolve()
+    })
+    const unmount = mountWalletUI(container, wallet, {
+      authMethods: { smsOtp: true },
+      legal: { smsConsentText: 'I agree to receive a sign-in code by SMS.' },
+    })
+
+    const phone = requireInput(container, '.magic input')
+    phone.value = '+12025550123'
+    phone.dispatchEvent(new Event('input'))
+    const consent = requireInput(container, '.sms-consent input')
+    consent.checked = true
+    consent.dispatchEvent(new Event('change'))
+    requireElement(container, '.magic').dispatchEvent(new Event('submit', { cancelable: true }))
+    await vi.waitFor(() => { expect(container.querySelector('.otp-fields')).not.toBeNull(); })
+    const firstDigit = requireInput(container, '.otp-fields input')
+    firstDigit.value = '4'
+    firstDigit.dispatchEvent(new Event('input'))
+
+    setState(connectedUiState())
+    clickControl(container, 'Sign out')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.otp-fields')).toBeNull()
+      expect(requireInput(container, '.magic input').value).toBe('')
+      expect(requireInput(container, '.sms-consent input').checked).toBe(false)
+    })
+
+    const nextPhone = requireInput(container, '.magic input')
+    nextPhone.value = '+12025550123'
+    nextPhone.dispatchEvent(new Event('input'))
+    const nextForm = requireElement(container, '.magic')
+    expect(findControl(nextForm, 'Send code').disabled).toBe(true)
+    nextForm.dispatchEvent(new Event('submit', { cancelable: true }))
+    expect(mocks.startOtp).toHaveBeenCalledTimes(1)
+    const nextConsent = requireInput(container, '.sms-consent input')
+    nextConsent.checked = true
+    nextConsent.dispatchEvent(new Event('change'))
+    nextForm.dispatchEvent(new Event('submit', { cancelable: true }))
+    await vi.waitFor(() => {
+      expect(mocks.startOtp).toHaveBeenCalledTimes(2)
+      expect(container.querySelector('.otp-fields')).not.toBeNull()
+    })
+    expect([...container.querySelectorAll<HTMLInputElement>('.otp-fields input')].map((input) => input.value))
+      .toEqual(['', '', '', '', '', ''])
     unmount()
   })
 

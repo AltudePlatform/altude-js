@@ -1344,6 +1344,10 @@ export function mountWalletUI(
       signOutPending = true
       await wallet.signOut()
       signOutPending = false
+      otpIdentifier = ''
+      otpDigits = Array<string>(6).fill('')
+      otpStarted = false
+      smsConsent = false
     })
   }
 
