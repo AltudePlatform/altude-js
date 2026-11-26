@@ -1440,6 +1440,60 @@ describe('AltudeWallet', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('keeps failed external-provider cleanup retryable without leaving the provider active', async () => {
+    const signer = {
+      address: '11111111111111111111111111111111',
+      sign: vi.fn(),
+    }
+    const connect = vi.fn().mockResolvedValue({
+      address: signer.address,
+      chain: 'solana',
+      signer,
+    })
+    const disconnect = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Provider disconnect failed.'))
+      .mockResolvedValueOnce(undefined)
+    const provider: ExternalWalletProvider = {
+      id: 'phantom',
+      label: 'Phantom',
+      connect,
+      disconnect,
+    }
+    const wallet = createWallet([provider])
+    await wallet.connectExternalWallet('phantom')
+
+    await expect(wallet.signOut()).rejects.toThrow('Provider disconnect failed.')
+
+    expect(wallet.state.status).toBe('disconnected')
+    expect(() => wallet.address).toThrow(AltudeWalletError)
+    expect(() =>
+      wallet.requestTransaction({
+        kind: 'sol-transfer',
+        recipient: 'Vote111111111111111111111111111111111111111',
+        amount: 500,
+      }),
+    ).toThrow(AltudeWalletError)
+    await expect(wallet.connectExternalWallet('phantom')).rejects.toMatchObject({
+      code: 'SESSION',
+      message: 'Retry sign-out to finish disconnecting the external wallet before reconnecting it.',
+    })
+    expect(disconnect).toHaveBeenCalledOnce()
+    expect(connect).toHaveBeenCalledOnce()
+    expect(signer.sign).not.toHaveBeenCalled()
+    expect(gasStation.send).not.toHaveBeenCalled()
+
+    await wallet.signOut()
+
+    expect(disconnect).toHaveBeenCalledTimes(2)
+    expect(wallet.state.status).toBe('disconnected')
+    await expect(wallet.connectExternalWallet('phantom')).resolves.toMatchObject({
+      status: 'connected',
+      externalProviderId: 'phantom',
+    })
+    expect(connect).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects external connections while an API session token remains', async () => {
     sessionTokens.token = 'active-api-session'
     const connect = vi.fn()

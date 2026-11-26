@@ -89,6 +89,7 @@ export class AltudeWallet {
   readonly #pendingProvisioning = new Map<string, PendingProvisioning>()
   readonly #listeners = new Set<(event: WalletEvent) => void>()
   readonly #pendingTransactions = new Map<string, PendingTransaction>()
+  readonly #pendingExternalCleanup = new Set<ExternalWalletProvider>()
   readonly #pendingExternalConnections = new Set<ExternalWalletProviderId>()
   readonly #browserKeyGenerations = new Map<string, number>()
   readonly #usedBrowserTickets = new Set<string>()
@@ -725,6 +726,12 @@ export class AltudeWallet {
         'Sign out or disconnect the current wallet before connecting an external wallet.',
       )
     }
+    if (this.#pendingExternalCleanup.has(provider)) {
+      throw new AltudeWalletError(
+        'SESSION',
+        'Retry sign-out to finish disconnecting the external wallet before reconnecting it.',
+      )
+    }
     if (this.#pendingExternalConnections.has(providerId)) {
       throw new AltudeWalletError(
         'SESSION',
@@ -929,6 +936,10 @@ export class AltudeWallet {
     const generation = ++this.#lifecycleGeneration
     const active = this.#active
     const identityKey = active?.mode === 'embedded' ? active.identityKey : undefined
+    if (active?.mode === 'external') {
+      this.#pendingExternalCleanup.add(active.provider)
+      this.#active = null
+    }
     this.#vault.lock()
     if (identityKey) this.#vault.lock(identityKey)
     this.#cancelPendingTransactions('Wallet signed out before transaction approval.')
@@ -944,9 +955,10 @@ export class AltudeWallet {
       failed = true
       failure = error
     }
-    if (active?.mode === 'external') {
+    for (const provider of this.#pendingExternalCleanup) {
       try {
-        await active.provider.disconnect?.()
+        await provider.disconnect?.()
+        this.#pendingExternalCleanup.delete(provider)
       } catch (error) {
         if (!failed) {
           failed = true
